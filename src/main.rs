@@ -1,3 +1,8 @@
+mod jitter;
+
+use jitter::JitStrict;
+
 fn main() {
-    println!("Hello, world!");
+    let j = jitter::CodeJitter{};
+    j.jit();
 }
