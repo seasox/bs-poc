@@ -1,48 +1,72 @@
-use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi};
+use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi, ExecutableBuffer, AssemblyOffset};
 
-use std::{io, slice, mem};
-use std::io::Write;
+use std::{mem};
 
-pub trait JitStrict {
-    fn jit(&self);
+
+pub trait Jitter {
+    fn jit(num_aggressors_for_sync: usize, aggressor_pairs: &[usize]) -> Self;
+    fn call(&self) -> bool;
 }
 
-pub struct CodeJitter ();
+pub struct Program {
+    code: ExecutableBuffer,
+    start: AssemblyOffset
+}
 
-impl JitStrict for CodeJitter {
-    fn jit(&self) {
+impl Jitter for Program {
+    fn jit(num_aggressors_for_sync: usize, aggressor_pairs: &[usize]) -> Program {
         let mut ops = dynasmrt::x64::Assembler::new().unwrap();
-        let string = "hello world";
 
-        dynasm!(op
-            ; .arch x64
-            ; ->hello:
-            ; .bytes string.as_bytes()
-        );
-
-        let hello = ops.offset();
         dynasm!(ops
             ; .arch x64
-            ; lea rcx, [->hello]
-            ; xor edx, edx
-            ; mov dl, BYTE string.len() as _
-            ; mov rax, QWORD print as _
-            ; sub rsp, BYTE 0x28
-            ; call rax
-            ; add rsp, BYTE 0x28
-            ; ret
+            ; ->start:);
+
+        let start = ops.offset();
+
+        let num_timed_accesses: usize = num_aggressors_for_sync;
+
+        // warmup
+        for idx in 0..num_timed_accesses {
+            dynasm!(ops
+                ; .arch x64
+                ; mov rax, QWORD aggressor_pairs[idx] as _
+                ; mov rbx, [rax]);
+        }
+
+        dynasm!(ops
+                ; .arch x64
+                ; ->while1:
         );
+
+        for idx in 0..num_timed_accesses {
+            dynasm!(ops
+                ; .arch x64
+                ; mov rax, QWORD aggressor_pairs[idx] as _
+                ; clflush [rax]);  // TODO ˝˝clflushopt not implemented: https://github.com/CensoredUsername/dynasm-rs/blob/cd35e34800ea801e510c627b7d72f45c7c0d7b35/plugin/src/arch/x64/gen_opmap.rs#L257
+        }
+
+        // fence memory activations, retrieve timestamp
+        dynasm!(ops
+            ; .arch x64
+            ; mfence
+            ; rdtsc
+            ; lfence
+            ; mov ebx, eax);
+
+        dynasm!(ops
+            ; .arch x64
+            ; ret);
 
         let buf = ops.finalize().unwrap();
 
-        let hello_fn: extern "win64" fn() -> bool = unsafe { mem::transmute(buf.ptr(hello)) };
-
-        assert!(hello_fn());
+        return Program {
+            code: buf,
+            start: start
+        }
     }
-}
 
-pub extern "win64" fn print(buffer: *const u8, length: u64) -> bool {
-    io::stdout()
-        .write_all(unsafe { slice::from_raw_parts(buffer, length as usize) })
-        .is_ok()
+    fn call(&self) -> bool {
+            let attacker_fn: extern "win64" fn() -> bool = unsafe { mem::transmute(self.code.ptr(self.start)) };
+            attacker_fn()
+    }
 }
