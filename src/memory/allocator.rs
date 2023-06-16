@@ -9,7 +9,6 @@ use std::{
     ptr::null_mut,
 };
 
-
 // https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
 //
 // The output of "cat /proc/meminfo" will include lines like:

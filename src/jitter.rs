@@ -1,7 +1,6 @@
-use dynasmrt::{dynasm, DynasmApi, DynasmLabelApi, ExecutableBuffer, AssemblyOffset};
+use dynasmrt::{dynasm, AssemblyOffset, DynasmApi, DynasmLabelApi, ExecutableBuffer};
 
-use std::{mem};
-
+use std::mem;
 
 pub trait Jitter {
     fn jit(num_aggressors_for_sync: usize, aggressor_pairs: &[usize]) -> Self;
@@ -10,7 +9,7 @@ pub trait Jitter {
 
 pub struct Program {
     code: ExecutableBuffer,
-    start: AssemblyOffset
+    start: AssemblyOffset,
 }
 
 impl Jitter for Program {
@@ -42,7 +41,7 @@ impl Jitter for Program {
             dynasm!(ops
                 ; .arch x64
                 ; mov rax, QWORD aggressor_pairs[idx] as _
-                ; clflush [rax]);  // TODO ˝˝clflushopt not implemented: https://github.com/CensoredUsername/dynasm-rs/blob/cd35e34800ea801e510c627b7d72f45c7c0d7b35/plugin/src/arch/x64/gen_opmap.rs#L257
+                ; clflush [rax]); // TODO ˝˝clflushopt not implemented: https://github.com/CensoredUsername/dynasm-rs/blob/cd35e34800ea801e510c627b7d72f45c7c0d7b35/plugin/src/arch/x64/gen_opmap.rs#L257
         }
 
         // fence memory activations, retrieve timestamp
@@ -61,12 +60,13 @@ impl Jitter for Program {
 
         return Program {
             code: buf,
-            start: start
-        }
+            start: start,
+        };
     }
 
     fn call(&self) -> bool {
-            let attacker_fn: extern "win64" fn() -> bool = unsafe { mem::transmute(self.code.ptr(self.start)) };
-            attacker_fn()
+        let attacker_fn: extern "win64" fn() -> bool =
+            unsafe { mem::transmute(self.code.ptr(self.start)) };
+        attacker_fn()
     }
 }
