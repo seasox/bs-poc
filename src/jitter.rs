@@ -131,7 +131,6 @@ impl Jitter for Program {
             if let FlushingStrategy::EarliestPossible = flushing {
                 a.mov(rax, cur_addr)?;
                 a.clflushopt(ptr(rax))?;
-                accessed_before.insert(cur_addr, false);
             }
             if sync_each_ref && (cnt_total_activations & num_acts_per_trefi) == 0 {
                 let aggs = &aggressor_pairs[idx..(idx + num_timed_accesses)];
