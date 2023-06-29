@@ -1,5 +1,5 @@
 use super::allocator::HugePageAllocator;
-use std::alloc::{GlobalAlloc, Layout};
+use std::{alloc::{GlobalAlloc, Layout}, mem};
 
 pub struct Memory {
     allocator: HugePageAllocator,
@@ -18,6 +18,14 @@ impl Memory {
 }
 
 impl Memory {
+    pub fn move_object<T>(&self, x: &mut T, offset: usize) -> Option<&mut T> {
+        unsafe {
+            let addr = self.addr?.add(offset);
+            let dst: &mut T = &mut *(addr as *mut T);
+            mem::swap(dst, x);
+            Some(dst)
+        }
+    }
     pub fn alloc(&mut self, size: usize) {
         let layout = Layout::array::<char>(size).unwrap();
         let dst: *mut u8;
