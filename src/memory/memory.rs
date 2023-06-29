@@ -1,5 +1,8 @@
 use super::allocator::HugePageAllocator;
-use std::{alloc::{GlobalAlloc, Layout}, mem};
+use std::{
+    alloc::{GlobalAlloc, Layout},
+    mem,
+};
 
 pub struct Memory {
     allocator: HugePageAllocator,

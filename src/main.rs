@@ -4,7 +4,6 @@ mod victim;
 
 use jitter::{FencingStrategy, FlushingStrategy, Jitter, Program};
 use memory::Memory;
-use rand::rngs::ThreadRng;
 use victim::RsaCrt;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
