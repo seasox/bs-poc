@@ -6,7 +6,7 @@ use std::{collections::HashMap, error::Error, fs::File, io::BufReader};
 
 use crate::jitter::{CodeJitter, FencingStrategy, FlushingStrategy, Jitter};
 use crate::memory::DRAMAddr;
-use crate::util::{MemConfiguration, Range};
+use crate::util::MemConfiguration;
 
 pub struct Hammerer {}
 

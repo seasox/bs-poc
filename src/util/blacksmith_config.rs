@@ -2,11 +2,8 @@
 // Created by rowhammer on 27.02.23.
 //
 
-use anyhow::Context;
 use nalgebra::SMatrix;
-use serde::de::{self, SeqAccess, Visitor};
 use serde::Deserialize;
-use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -23,16 +20,16 @@ pub const MTX_SIZE: usize = 30;
 
 #[derive(Deserialize)]
 pub struct BlacksmithConfig {
-    name: String,
-    channels: u64,
-    dimms: u64,
-    ranks: u64,
-    total_banks: u64,
-    max_rows: u64,
-    threshold: u64,
-    hammer_rounds: usize,
-    drama_rounds: usize,
-    acts_per_trefi: u64,
+    //name: String,
+    //channels: u64,
+    //dimms: u64,
+    //ranks: u64,
+    //total_banks: u64,
+    //max_rows: u64,
+    //threshold: u64,
+    //hammer_rounds: usize,
+    //drama_rounds: usize,
+    //acts_per_trefi: u64,
     row_bits: Vec<BitDef>,
     col_bits: Vec<BitDef>,
     bank_bits: Vec<BitDef>,

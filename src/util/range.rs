@@ -1,4 +1,4 @@
-use rand::distributions::uniform::SampleUniform;
+/*use rand::distributions::uniform::SampleUniform;
 use rand::Rng;
 use std::ops::{Div, Mul, Rem};
 
@@ -19,7 +19,7 @@ impl<
             + Mul<Output = T>,
     > Range<T>
 {
-    pub fn new(min: T, max: T) -> Self {
+    /*pub fn new(min: T, max: T) -> Self {
         let step = T::from(1);
         let dist = rand::distributions::Uniform::new(min, max);
         Self {
@@ -28,7 +28,7 @@ impl<
             step,
             dist,
         }
-    }
+    }*/
     /*
         pub fn new_with_step(min: T, max: T, step: T) -> Self {
             if min % step != T::from(0) || max % step != T::from(0) {
@@ -68,3 +68,4 @@ impl<
         number
     }*/
 }
+*/
