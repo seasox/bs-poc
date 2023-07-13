@@ -3,30 +3,69 @@ use iced_x86::{
     NasmFormatter,
 };
 use memmap2::{Mmap, MmapMut};
+use serde::Deserialize;
+use serde_with::DeserializeFromStr;
 
-use std::{collections::HashMap, error::Error, io::Write, mem, ops::DerefMut};
+use std::{collections::HashMap, error::Error, io::Write, mem, ops::DerefMut, str::FromStr};
 
+#[derive(DeserializeFromStr, Debug, Clone)]
 pub enum FlushingStrategy {
     LatestPossible,
     EarliestPossible,
 }
 
+impl FromStr for FlushingStrategy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<FlushingStrategy, Self::Err> {
+        match s {
+            "LATEST_POSSIBLE" => Ok(FlushingStrategy::LatestPossible),
+            "EARLIEST_POSSIBLE" => Ok(FlushingStrategy::EarliestPossible),
+            _ => Err(format!("unknown strategy {}", s).into()),
+        }
+    }
+}
+
+#[derive(DeserializeFromStr, Debug, Clone)]
 pub enum FencingStrategy {
     LatestPossible,
     EarliestPossible,
 }
 
+impl FromStr for FencingStrategy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<FencingStrategy, Self::Err> {
+        match s {
+            "LATEST_POSSIBLE" => Ok(FencingStrategy::LatestPossible),
+            "EARLIEST_POSSIBLE" => Ok(FencingStrategy::EarliestPossible),
+            _ => Err(format!("unknown strategy {}", s).into()),
+        }
+    }
+}
+
 pub trait Jitter {
     fn jit(
+        &self,
         num_acts_per_trefi: u64,
-        flushing: FlushingStrategy,
-        fencing: FencingStrategy,
-        aggressor_pairs: &[u64],
-        sync_each_ref: bool,
-        num_aggressors_for_sync: usize,
-        total_num_activations: i64,
+        aggressor_pairs: &[*const libc::c_void],
     ) -> Result<Program, Box<dyn Error>>;
-    fn call(&self) -> u32;
+}
+
+/*
+"code_jitter":{
+    "fencing_strategy":"LATEST_POSSIBLE",
+    "flushing_strategy":"EARLIEST_POSSIBLE",
+    "num_aggs_for_sync":2,
+    "pattern_sync_each_ref":false,
+    "total_activations":5000000
+},
+*/
+#[derive(Deserialize, Debug, Clone)]
+pub struct CodeJitter {
+    fencing_strategy: FencingStrategy,
+    flushing_strategy: FlushingStrategy,
+    num_aggs_for_sync: usize,
+    pattern_sync_each_ref: bool,
+    pub total_activations: i64,
 }
 
 pub struct Program {
@@ -34,15 +73,19 @@ pub struct Program {
     start: u64,
 }
 
-impl Jitter for Program {
+impl Program {
+    pub fn call(&self) -> u32 {
+        let attacker_fn: extern "win64" fn() -> u32 =
+            unsafe { mem::transmute(self.code.as_ptr().offset(self.start as isize)) };
+        attacker_fn()
+    }
+}
+
+impl Jitter for CodeJitter {
     fn jit(
+        &self,
         num_acts_per_trefi: u64,
-        flushing: FlushingStrategy,
-        fencing: FencingStrategy,
-        aggressor_pairs: &[u64],
-        sync_each_ref: bool,
-        num_aggressors_for_sync: usize,
-        total_num_activations: i64,
+        aggressor_pairs: &[*const libc::c_void],
     ) -> Result<Program, Box<dyn Error>> {
         let mut a = CodeAssembler::new(64)?;
 
@@ -54,19 +97,19 @@ impl Jitter for Program {
 
         a.set_label(&mut start)?;
 
-        let num_timed_accesses: usize = num_aggressors_for_sync;
+        let num_timed_accesses: usize = self.num_aggs_for_sync;
 
         // part 1: synchronize with the beginning of an interval
         // warmup
         for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx])?;
+            a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.mov(rbx, ptr(rax))?;
         }
 
         a.set_label(&mut while1_begin)?;
 
         for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx])?;
+            a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.clflushopt(ptr(rax))?;
         }
 
@@ -78,7 +121,7 @@ impl Jitter for Program {
 
         // use first NUM_TIMED_ACCESSES addresses for sync
         for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx])?;
+            a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.mov(rcx, ptr(rax))?;
         }
         // if ((after - before) > 1000) break;
@@ -92,7 +135,7 @@ impl Jitter for Program {
 
         // part 2: perform hammering
         // initialize variables
-        a.mov(rsi, total_num_activations)?;
+        a.mov(rsi, self.total_activations)?;
         a.mov(edx, 0)?;
 
         a.set_label(&mut for_begin)?;
@@ -106,16 +149,16 @@ impl Jitter for Program {
 
         let offset = aggressor_pairs.len() - num_timed_accesses;
         for idx in num_timed_accesses..offset {
-            let cur_addr = aggressor_pairs[idx];
+            let cur_addr = aggressor_pairs[idx] as u64;
             if *accessed_before.entry(cur_addr).or_insert(false) {
                 // flush
-                if let FlushingStrategy::LatestPossible = flushing {
+                if let FlushingStrategy::LatestPossible = self.flushing_strategy {
                     a.mov(rax, cur_addr)?;
                     a.clflushopt(ptr(rax))?;
                     accessed_before.insert(cur_addr, false);
                 }
                 // fence to ensure flushing finished and defined order of aggressors is guaranteed
-                if let FencingStrategy::LatestPossible = fencing {
+                if let FencingStrategy::LatestPossible = self.fencing_strategy {
                     a.mfence()?;
                     accessed_before.insert(cur_addr, false);
                 }
@@ -128,11 +171,11 @@ impl Jitter for Program {
             cnt_total_activations += 1;
 
             // flush
-            if let FlushingStrategy::EarliestPossible = flushing {
+            if let FlushingStrategy::EarliestPossible = self.flushing_strategy {
                 a.mov(rax, cur_addr)?;
                 a.clflushopt(ptr(rax))?;
             }
-            if sync_each_ref && (cnt_total_activations & num_acts_per_trefi) == 0 {
+            if self.pattern_sync_each_ref && (cnt_total_activations & num_acts_per_trefi) == 0 {
                 let aggs = &aggressor_pairs[idx..(idx + num_timed_accesses)];
                 sync_ref(aggs, &mut a)?;
             }
@@ -166,15 +209,9 @@ impl Jitter for Program {
             start: result.label_ip(&start)?,
         })
     }
-
-    fn call(&self) -> u32 {
-        let attacker_fn: extern "win64" fn() -> u32 =
-            unsafe { mem::transmute(self.code.as_ptr().offset(self.start as isize)) };
-        attacker_fn()
-    }
 }
 
-fn sync_ref(aggs: &[u64], a: &mut CodeAssembler) -> Result<(), IcedError> {
+fn sync_ref(aggs: &[*const libc::c_void], a: &mut CodeAssembler) -> Result<(), IcedError> {
     let mut wbegin = a.create_label();
     let mut wend = a.create_label();
     a.set_label(&mut wbegin)?;
@@ -186,13 +223,13 @@ fn sync_ref(aggs: &[u64], a: &mut CodeAssembler) -> Result<(), IcedError> {
     a.lfence()?;
     a.pop(rdx)?;
 
-    for agg in aggs {
+    for &agg in aggs {
         // flush
-        a.mov(rax, *agg)?;
+        a.mov(rax, agg as u64)?;
         a.clflushopt(ptr(rax))?;
-        a.mov(rax, *agg)?;
+        a.mov(rax, agg as u64)?;
         // access
-        a.mov(rax, *agg)?;
+        a.mov(rax, agg as u64)?;
         a.mov(rcx, ptr(rax))?;
 
         // we do not deduct the sync aggressors from the total number of activations because the number of sync activations
