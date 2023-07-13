@@ -38,8 +38,10 @@ impl Memory {
         self.addr = Some(dst);
         self.layout = Some(layout);
     }
+}
 
-    pub fn dealloc(&mut self) {
+impl Drop for Memory {
+    fn drop(&mut self) {
         if let (Some(addr), Some(layout)) = (self.addr, self.layout) {
             unsafe {
                 self.allocator.dealloc(addr, layout);
