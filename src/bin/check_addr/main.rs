@@ -2,9 +2,7 @@ use anyhow::Result;
 use bs_poc::memory::construct_memory_tuple_timer;
 use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
-use iced_x86::OpCodeOperandKind::mem;
 use libc::c_void;
-use std::ptr;
 
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 

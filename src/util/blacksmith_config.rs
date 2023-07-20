@@ -3,9 +3,8 @@
 //
 
 use anyhow::Result;
-use nalgebra::{Const, OMatrix, SMatrix, Scalar};
+use nalgebra::SMatrix;
 use serde::Deserialize;
-use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
