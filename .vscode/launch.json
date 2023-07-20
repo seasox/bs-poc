@@ -29,6 +29,26 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "Debug executable 'check_addr'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=check_addr",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "check_addr",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug unit tests",
             "cargo": {
                 "args": [
