@@ -2,8 +2,10 @@
 // Created by rowhammer on 27.02.23.
 //
 
-use nalgebra::SMatrix;
+use anyhow::Result;
+use nalgebra::{Const, OMatrix, SMatrix, Scalar};
 use serde::Deserialize;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -14,6 +16,23 @@ use std::vec::Vec;
 pub enum BitDef {
     Single(u64),
     Multi(Vec<u64>),
+}
+
+impl BitDef {
+    fn to_bitstr(&self) -> usize {
+        let mut res: usize = 0;
+        match self {
+            BitDef::Single(bit) => {
+                res |= 1 << bit;
+            }
+            BitDef::Multi(bits) => {
+                bits.iter().for_each(|bit| {
+                    res |= 1 << bit;
+                });
+            }
+        }
+        res
+    }
 }
 
 pub const MTX_SIZE: usize = 30;
@@ -30,48 +49,41 @@ pub struct BlacksmithConfig {
     //hammer_rounds: usize,
     //drama_rounds: usize,
     //acts_per_trefi: u64,
-    row_bits: Vec<BitDef>,
-    col_bits: Vec<BitDef>,
-    bank_bits: Vec<BitDef>,
+    pub row_bits: Vec<BitDef>,
+    pub col_bits: Vec<BitDef>,
+    pub bank_bits: Vec<BitDef>,
 }
 
-impl BlacksmithConfig {
-    pub fn from_jsonfile(filepath: &str) -> Result<BlacksmithConfig, Box<dyn std::error::Error>> {
-        let mut file = File::open(Path::new(filepath))?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
-        let config: BlacksmithConfig = serde_json::from_str(&contents)?;
-        Ok(config)
-    }
-
-    pub fn to_memconfig(&self) -> MemConfiguration {
+impl MemConfiguration {
+    pub fn from_bitdefs(
+        bank_bits: Vec<BitDef>,
+        row_bits: Vec<BitDef>,
+        col_bits: Vec<BitDef>,
+    ) -> Self {
         let mut out = MemConfiguration::default();
         let mut i = 0;
 
-        assert_eq!(
-            MTX_SIZE,
-            self.bank_bits.len() + self.col_bits.len() + self.row_bits.len()
-        );
+        assert_eq!(MTX_SIZE, bank_bits.len() + col_bits.len() + row_bits.len());
 
-        out.bk_shift = MTX_SIZE - self.bank_bits.len();
-        out.bk_mask = (1 << self.bank_bits.len()) - 1;
-        out.col_shift = MTX_SIZE - self.bank_bits.len() - self.col_bits.len();
-        out.col_mask = (1 << self.col_bits.len()) - 1;
-        out.row_shift = MTX_SIZE - self.bank_bits.len() - self.col_bits.len() - self.row_bits.len();
-        out.row_mask = (1 << self.row_bits.len()) - 1;
+        out.bk_shift = MTX_SIZE - bank_bits.len();
+        out.bk_mask = (1 << bank_bits.len()) - 1;
+        out.col_shift = MTX_SIZE - bank_bits.len() - col_bits.len();
+        out.col_mask = (1 << col_bits.len()) - 1;
+        out.row_shift = MTX_SIZE - bank_bits.len() - col_bits.len() - row_bits.len();
+        out.row_mask = (1 << row_bits.len()) - 1;
 
         // construct dram matrix
         let mut dram_mtx: [usize; MTX_SIZE] = [0; MTX_SIZE];
         let mut update_dram_mtx = |def: &BitDef| {
-            dram_mtx[i] = bitdef_to_bitstr(def);
+            dram_mtx[i] = def.to_bitstr();
             i += 1;
         };
         // bank
-        self.bank_bits.iter().for_each(&mut update_dram_mtx);
+        bank_bits.iter().for_each(&mut update_dram_mtx);
         // col
-        self.col_bits.iter().for_each(&mut update_dram_mtx);
+        col_bits.iter().for_each(&mut update_dram_mtx);
         // row
-        self.row_bits.iter().for_each(&mut update_dram_mtx);
+        row_bits.iter().for_each(&mut update_dram_mtx);
         out.dram_mtx = dram_mtx;
 
         // construct addr matrix
@@ -84,15 +96,23 @@ impl BlacksmithConfig {
             }
         }
         // invert dram matrix, assign addr matrix
-        let matrix_decomp = matrix
+        let matrix_inv = matrix
             .cast::<f64>()
             .try_inverse()
             .expect("The matrix defined in the config file is not invertible.")
-            .try_cast::<u8>()
-            .expect("inverse cast to u8 failed");
+            .try_cast::<i8>()
+            .expect("inverse cast to i8 failed")
+            .map(|e| e.abs() as u8);
+
         for row in 0..MTX_SIZE {
             for col in 0..MTX_SIZE {
-                addr_mtx[row] |= (matrix_decomp[(row, col)] as usize) << (MTX_SIZE - col - 1);
+                if matrix_inv[(row, col)] != 0 && matrix_inv[(row, col)] != 1 {
+                    panic!(
+                        "expected element to be 0 or 1, got {}",
+                        matrix_inv[(row, col)]
+                    );
+                }
+                addr_mtx[row] |= (matrix_inv[(row, col)] as usize) << (MTX_SIZE - col - 1);
             }
         }
         out.addr_mtx = addr_mtx;
@@ -100,19 +120,14 @@ impl BlacksmithConfig {
     }
 }
 
-pub fn bitdef_to_bitstr(def: &BitDef) -> usize {
-    let mut res = 0;
-    match def {
-        BitDef::Single(bit) => {
-            res |= 1 << bit;
-        }
-        BitDef::Multi(bits) => {
-            bits.iter().for_each(|bit| {
-                res |= 1 << bit;
-            });
-        }
+impl BlacksmithConfig {
+    pub fn from_jsonfile(filepath: &str) -> Result<BlacksmithConfig> {
+        let mut file = File::open(Path::new(filepath))?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        let config: BlacksmithConfig = serde_json::from_str(&contents)?;
+        Ok(config)
     }
-    res
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, Default)]
@@ -126,13 +141,12 @@ pub struct MemConfiguration {
     pub(crate) dram_mtx: [usize; MTX_SIZE],
     pub(crate) addr_mtx: [usize; MTX_SIZE],
 }
-/*
+
 impl MemConfiguration {
-    fn get_bank_count(&self) -> usize {
+    pub fn get_bank_count(&self) -> usize {
         (1 << self.bk_mask.count_ones()) as usize
     }
     pub fn get_row_count(&self) -> usize {
         1_usize << (self.row_mask.count_ones() as usize)
     }
 }
-*/

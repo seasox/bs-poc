@@ -6,7 +6,7 @@ use libc::c_void;
 
 use bs_poc::forge::Hammerer;
 
-use bs_poc::util::BlacksmithConfig;
+use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
@@ -34,6 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // check memory.start phys addr
 
     let config = BlacksmithConfig::from_jsonfile(&args.config)?;
+    let mem_config =
+        MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let hammerer = Hammerer {};
 
     //RSA-CRT
@@ -46,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut check = memory.check(0)?;
     while check {
         hammerer.hammer_pattern(
-            config.to_memconfig(),
+            mem_config,
             args.load_json.clone(),
             args.pattern.clone(),
             memory.addr.expect("no address") as *mut c_void,
