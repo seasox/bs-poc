@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'bs-poc'",
+            "name": "Debug executable 'bs_poc'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=bs-poc",
-                    "--package=bs-poc"
+                    "--bin=bs_poc",
+                    "--package=bs_poc"
                 ],
                 "filter": {
-                    "name": "bs-poc",
+                    "name": "bs_poc",
                     "kind": "bin"
                 }
             },
@@ -36,7 +36,7 @@
                     "--no-run",
                 ],
                 "filter": {
-                    "name": "bs-poc",
+                    "name": "bs_poc",
                     "kind": "bin"
                 }
             },
