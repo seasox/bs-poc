@@ -49,3 +49,13 @@ impl Default for DRAMAddr {
         }
     }
 }
+
+impl DRAMAddr {
+    pub fn add(&self, bank: usize, row: usize, col: usize) -> DRAMAddr {
+        DRAMAddr {
+            bank: self.bank + bank,
+            row: self.row + row,
+            col: self.col + col,
+        }
+    }
+}
