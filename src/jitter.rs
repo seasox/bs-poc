@@ -99,6 +99,8 @@ impl Jitter for CodeJitter {
 
         let num_timed_accesses: usize = self.num_aggs_for_sync;
 
+        // TODO log accesses, expected patterns, aggressors, etc.
+
         // part 1: synchronize with the beginning of an interval
         // warmup
         for idx in 0..num_timed_accesses {
