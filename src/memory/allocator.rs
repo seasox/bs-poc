@@ -1,4 +1,5 @@
 use lazy_static::lazy_static;
+#[cfg(target_arch = "x86_64")]
 use libc::{
     self, c_void, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_PRIVATE, PROT_READ, PROT_WRITE,
 };
@@ -60,8 +61,10 @@ fn align_to(size: usize, align: usize) -> usize {
 }
 
 // hugepage allocator.
+#[cfg(target_arch = "x86_64")]
 pub(crate) struct HugePageAllocator;
 
+#[cfg(target_arch = "x86_64")]
 unsafe impl GlobalAlloc for HugePageAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
@@ -86,6 +89,7 @@ unsafe impl GlobalAlloc for HugePageAllocator {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[cfg(test)]
 pub mod tests {
     use super::*;
