@@ -45,22 +45,22 @@ impl Memory {
         let layout = self.layout.with_context(|| "layout not initialized")?;
         let addr = self.addr.with_context(|| "addr not initialized")?;
         let mut rng = R::from_seed(seed);
-        const page_size: usize = 4096; // TODO get from sysconf?
+        const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
 
-        let num_pages = layout.size() / page_size;
+        let num_pages = layout.size() / PAGE_SIZE;
         if layout.size() % 8 != 0 {
             panic!("layout size must be divisble by 8");
         }
 
         debug!("initialize {} pages with pseudo-random values", num_pages);
 
-        for offset in (0..layout.size()).step_by(page_size) {
-            let mut value: [u8; 4096] = [0u8; page_size];
-            for i in 0..page_size {
+        for offset in (0..layout.size()).step_by(PAGE_SIZE) {
+            let mut value: [u8; 4096] = [0u8; PAGE_SIZE];
+            for i in 0..PAGE_SIZE {
                 value[i] = rng.gen();
             }
             unsafe {
-                std::ptr::write_volatile(addr.add(offset) as *mut [u8; page_size], value);
+                std::ptr::write_volatile(addr.add(offset) as *mut [u8; PAGE_SIZE], value);
             }
             debug!(
                 "{} ({}/{}) done",
