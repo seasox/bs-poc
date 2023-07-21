@@ -1,12 +1,17 @@
+use anyhow::Result;
 use iced_x86::{
     code_asm::*, BlockEncoderOptions, Decoder, DecoderOptions, Formatter, Instruction,
     NasmFormatter,
 };
+use libc::c_void;
 use memmap2::{Mmap, MmapMut};
 use serde::Deserialize;
 use serde_with::DeserializeFromStr;
 
-use std::{collections::HashMap, error::Error, io::Write, mem, ops::DerefMut, str::FromStr};
+use core::slice;
+use std::{collections::HashMap, io::Write, mem, ops::DerefMut, str::FromStr};
+
+use crate::{memory::DRAMAddr, util::MemConfiguration};
 
 #[derive(DeserializeFromStr, Debug, Clone)]
 pub enum FlushingStrategy {
@@ -42,12 +47,15 @@ impl FromStr for FencingStrategy {
     }
 }
 
+pub type JitAggressor = *mut u8;
+
 pub trait Jitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: &[*const libc::c_void],
-    ) -> Result<Program, Box<dyn Error>>;
+        aggressor_pairs: Vec<JitAggressor>,
+        log_cb: &dyn Fn(&str, JitAggressor) -> (),
+    ) -> Result<Program>;
 }
 
 /*
@@ -73,11 +81,17 @@ pub struct Program {
     start: u64,
 }
 
+pub type JitFunction = unsafe extern "C" fn() -> u64;
+
 impl Program {
-    pub fn call(&self) -> u32 {
-        let attacker_fn: extern "win64" fn() -> u32 =
-            unsafe { mem::transmute(self.code.as_ptr().offset(self.start as isize)) };
-        attacker_fn()
+    pub unsafe fn call(&self) -> u64 {
+        let jit_function_ptr = self.code.as_ptr().offset(self.start as isize);
+        let function_size_bytes = self.code.len() - self.start as usize;
+        let jit_function_bytes =
+            unsafe { slice::from_raw_parts(jit_function_ptr, function_size_bytes) };
+        let jit_function: JitFunction = unsafe { mem::transmute(jit_function_bytes.as_ptr()) };
+        let result = unsafe { jit_function() };
+        return result;
     }
 }
 
@@ -85,8 +99,9 @@ impl Jitter for CodeJitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: &[*const libc::c_void],
-    ) -> Result<Program, Box<dyn Error>> {
+        aggressor_pairs: Vec<JitAggressor>,
+        log_cb: &dyn Fn(&str, JitAggressor) -> (),
+    ) -> Result<Program> {
         let mut a = CodeAssembler::new(64)?;
 
         let mut start = a.create_label();
@@ -95,17 +110,22 @@ impl Jitter for CodeJitter {
         let mut for_begin = a.create_label();
         let mut for_end = a.create_label();
 
+        debug!("start");
+
         a.set_label(&mut start)?;
 
         let num_timed_accesses: usize = self.num_aggs_for_sync;
 
+        info!("num_timed_accesses={}", num_timed_accesses);
         // TODO log accesses, expected patterns, aggressors, etc.
 
         // part 1: synchronize with the beginning of an interval
         // warmup
         for idx in 0..num_timed_accesses {
+            println!("{}", aggressor_pairs[idx] as u64);
             a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.mov(rbx, ptr(rax))?;
+            log_cb("ACCESS", aggressor_pairs[idx]);
         }
 
         a.set_label(&mut while1_begin)?;
@@ -113,6 +133,7 @@ impl Jitter for CodeJitter {
         for idx in 0..num_timed_accesses {
             a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.clflushopt(ptr(rax))?;
+            log_cb("FLUSH", aggressor_pairs[idx]);
         }
 
         // fence memory activations, retrieve timestamp
@@ -125,6 +146,7 @@ impl Jitter for CodeJitter {
         for idx in 0..num_timed_accesses {
             a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.mov(rcx, ptr(rax))?;
+            log_cb("ACCESS", aggressor_pairs[idx]);
         }
         // if ((after - before) > 1000) break;
         a.rdtscp()?;
@@ -137,6 +159,7 @@ impl Jitter for CodeJitter {
 
         // part 2: perform hammering
         // initialize variables
+        info!("start hammering");
         a.mov(rsi, self.total_activations)?;
         a.mov(edx, 0)?;
 
@@ -158,6 +181,7 @@ impl Jitter for CodeJitter {
                     a.mov(rax, cur_addr)?;
                     a.clflushopt(ptr(rax))?;
                     accessed_before.insert(cur_addr, false);
+                    log_cb("FLUSH", aggressor_pairs[idx]);
                 }
                 // fence to ensure flushing finished and defined order of aggressors is guaranteed
                 if let FencingStrategy::LatestPossible = self.fencing_strategy {
@@ -168,6 +192,7 @@ impl Jitter for CodeJitter {
             // hammer
             a.mov(rax, cur_addr)?;
             a.mov(rcx, ptr(rax))?;
+            log_cb("ACCESS", aggressor_pairs[idx]);
             a.dec(rsi)?;
             accessed_before.insert(cur_addr, true);
             cnt_total_activations += 1;
@@ -176,8 +201,9 @@ impl Jitter for CodeJitter {
             if let FlushingStrategy::EarliestPossible = self.flushing_strategy {
                 a.mov(rax, cur_addr)?;
                 a.clflushopt(ptr(rax))?;
+                log_cb("FLUSH", aggressor_pairs[idx]);
             }
-            if self.pattern_sync_each_ref && (cnt_total_activations & num_acts_per_trefi) == 0 {
+            if self.pattern_sync_each_ref && (cnt_total_activations % num_acts_per_trefi) == 0 {
                 let aggs = &aggressor_pairs[idx..(idx + num_timed_accesses)];
                 sync_ref(aggs, &mut a)?;
             }
@@ -192,16 +218,14 @@ impl Jitter for CodeJitter {
 
         a.jmp(for_begin)?;
         a.set_label(&mut for_end)?;
-        a.mov(rax, rdx)?;
+        a.mov(eax, edx)?;
         a.ret()?;
 
         let result = a.assemble_options(0, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
 
         let buf = &result.inner.code_buffer;
 
-        //disas(buf, 64, 0);
-
-        // move the assmbled code into an executable memory buffer
+        // move the assembled code into an executable memory buffer
         let mut mem = MmapMut::map_anon(buf.len())?;
 
         mem.deref_mut().write_all(buf)?;
@@ -213,7 +237,8 @@ impl Jitter for CodeJitter {
     }
 }
 
-fn sync_ref(aggs: &[*const libc::c_void], a: &mut CodeAssembler) -> Result<(), IcedError> {
+fn sync_ref(aggs: &[JitAggressor], a: &mut CodeAssembler) -> Result<(), IcedError> {
+    debug!("SYNC");
     let mut wbegin = a.create_label();
     let mut wend = a.create_label();
     a.set_label(&mut wbegin)?;
@@ -258,7 +283,7 @@ fn sync_ref(aggs: &[*const libc::c_void], a: &mut CodeAssembler) -> Result<(), I
 }
 
 #[allow(dead_code)]
-fn disas(bytes: &[u8], bitness: u32, ip: u64) {
+pub fn disas(bytes: &[u8], bitness: u32, ip: u64) {
     let mut decoder = Decoder::with_ip(bitness, bytes, ip, DecoderOptions::NONE);
 
     // Formatters: Masm*, Nasm*, Gas* (AT&T) and Intel* (XED).

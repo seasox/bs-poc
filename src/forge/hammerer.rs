@@ -1,10 +1,10 @@
-use anyhow::Context;
+use anyhow::{Context, Result};
 use mt19937::MT19937;
 use serde::Deserialize;
 use serde_with::serde_as;
-use std::{collections::HashMap, error::Error, fs::File, io::BufReader};
+use std::{collections::HashMap, fs::File, io::BufReader};
 
-use crate::jitter::{CodeJitter, FencingStrategy, FlushingStrategy, Jitter};
+use crate::jitter::{CodeJitter, FencingStrategy, FlushingStrategy, JitAggressor, Jitter};
 use crate::memory::DRAMAddr;
 use crate::util::MemConfiguration;
 
@@ -52,8 +52,8 @@ impl PatternAddressMapper {
         gen: &mut MT19937,
         row_upper_bound: usize,
         mem_cfg: MemConfiguration,
-        base_msb: *const libc::c_void,
-    ) -> Vec<*const std::ffi::c_void> {
+        base_msb: *const u8,
+    ) -> Vec<*const u8> {
         let mut addresses = vec![];
         for _ in 0..1024 {
             let row_no = Range::new(self.max_row, self.max_row + self.min_row)
@@ -66,10 +66,10 @@ impl PatternAddressMapper {
 
     fn get_hammering_addresses(
         &self,
-        aggressors: Vec<Aggressor>,
-        base_msb: *const libc::c_void,
+        aggressors: &Vec<Aggressor>,
+        base_msb: JitAggressor,
         mem_config: MemConfiguration,
-    ) -> Vec<*const libc::c_void> {
+    ) -> Vec<JitAggressor> {
         aggressors
             .iter()
             .map(|agg| self.aggressor_to_addr[agg].to_virt(base_msb, mem_config))
@@ -155,8 +155,8 @@ impl Hammerer {
         mem_config: MemConfiguration,
         json_filename: String,
         pattern_id: String,
-        base_msb: *mut libc::c_void,
-    ) -> Result<(), Box<dyn Error>> {
+        base_msb: JitAggressor,
+    ) -> Result<()> {
         // load patterns from JSON
         let mut pattern = load_pattern_from_json(json_filename, pattern_id)?;
 
@@ -174,16 +174,26 @@ impl Hammerer {
             base_msb,
         );*/
 
+        let hammer_log_cb = |action: &str, addr| {
+            debug!("{} ({})", action, DRAMAddr::from_virt(addr, &mem_config));
+        };
+
+        // --> Luca: why crash if not ref?
         let hammering_addrs =
-            mapping.get_hammering_addresses(pattern.access_ids, base_msb, mem_config);
+            mapping.get_hammering_addresses(&pattern.access_ids, base_msb, mem_config);
+        drop(pattern.access_ids);
 
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
 
-        let program = mapping
-            .code_jitter
-            .jit(acts_per_tref.into(), &hammering_addrs)?;
-        let result = program.call();
-        println!("{:?}", result);
+        let program =
+            mapping
+                .code_jitter
+                .jit(acts_per_tref as u64, hammering_addrs, &hammer_log_cb)?;
+        //disas(&program.code, 64, 0);
+        info!("call into jitted program");
+        let result = unsafe { program.call() };
+        info!("jit call done");
+        println!("{}", result);
 
         Ok(())
     }
@@ -199,10 +209,7 @@ impl HammeringPattern {
 }
 
 /// Load patterns from a file, filtering for given pattern_ids
-fn load_pattern_from_json(
-    json_filename: String,
-    pattern_id: String,
-) -> Result<HammeringPattern, Box<dyn Error>> {
+fn load_pattern_from_json(json_filename: String, pattern_id: String) -> Result<HammeringPattern> {
     let f = File::open(&json_filename)?;
     let reader = BufReader::new(f);
     let patterns: FuzzSummary = serde_json::from_reader(reader)?;
