@@ -3,15 +3,12 @@ use iced_x86::{
     code_asm::*, BlockEncoderOptions, Decoder, DecoderOptions, Formatter, Instruction,
     NasmFormatter,
 };
-use libc::c_void;
 use memmap2::{Mmap, MmapMut};
 use serde::Deserialize;
 use serde_with::DeserializeFromStr;
 
 use core::slice;
 use std::{collections::HashMap, io::Write, mem, ops::DerefMut, str::FromStr};
-
-use crate::{memory::DRAMAddr, util::MemConfiguration};
 
 #[derive(DeserializeFromStr, Debug, Clone)]
 pub enum FlushingStrategy {
@@ -47,14 +44,14 @@ impl FromStr for FencingStrategy {
     }
 }
 
-pub type JitAggressor = *mut u8;
+pub type MutAggPointer = *mut u8;
 
 pub trait Jitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: Vec<JitAggressor>,
-        log_cb: &dyn Fn(&str, JitAggressor) -> (),
+        aggressor_pairs: Vec<MutAggPointer>,
+        log_cb: &dyn Fn(&str, MutAggPointer) -> (),
     ) -> Result<Program>;
 }
 
@@ -99,8 +96,8 @@ impl Jitter for CodeJitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: Vec<JitAggressor>,
-        log_cb: &dyn Fn(&str, JitAggressor) -> (),
+        aggressor_pairs: Vec<MutAggPointer>,
+        log_cb: &dyn Fn(&str, MutAggPointer) -> (),
     ) -> Result<Program> {
         let mut a = CodeAssembler::new(64)?;
 
@@ -237,7 +234,7 @@ impl Jitter for CodeJitter {
     }
 }
 
-fn sync_ref(aggs: &[JitAggressor], a: &mut CodeAssembler) -> Result<(), IcedError> {
+fn sync_ref(aggs: &[MutAggPointer], a: &mut CodeAssembler) -> Result<(), IcedError> {
     debug!("SYNC");
     let mut wbegin = a.create_label();
     let mut wend = a.create_label();

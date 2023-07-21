@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_with::serde_as;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
-use crate::jitter::{CodeJitter, FencingStrategy, FlushingStrategy, JitAggressor, Jitter};
+use crate::jitter::{CodeJitter, FencingStrategy, FlushingStrategy, Jitter, MutAggPointer};
 use crate::memory::DRAMAddr;
 use crate::util::MemConfiguration;
 
@@ -67,9 +67,9 @@ impl PatternAddressMapper {
     fn get_hammering_addresses(
         &self,
         aggressors: &Vec<Aggressor>,
-        base_msb: JitAggressor,
+        base_msb: MutAggPointer,
         mem_config: MemConfiguration,
-    ) -> Vec<JitAggressor> {
+    ) -> Vec<MutAggPointer> {
         aggressors
             .iter()
             .map(|agg| self.aggressor_to_addr[agg].to_virt(base_msb, mem_config))
@@ -155,7 +155,7 @@ impl Hammerer {
         mem_config: MemConfiguration,
         json_filename: String,
         pattern_id: String,
-        base_msb: JitAggressor,
+        base_msb: MutAggPointer,
     ) -> Result<()> {
         // load patterns from JSON
         let mut pattern = load_pattern_from_json(json_filename, pattern_id)?;
