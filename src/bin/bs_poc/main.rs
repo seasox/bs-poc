@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         //check = rsa.verify(msg, &sig);
         check = memory.check::<StdRng>(seed)?;
-        info!("check: {}", check);
+        info!("attempt {}: {}", retries, check);
         retries += 1;
     }
     println!("Flipped after {} attempts with seed {:?}", retries, seed);
