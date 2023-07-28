@@ -5,7 +5,6 @@ use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
 
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use log::debug;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
