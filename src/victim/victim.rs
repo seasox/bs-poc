@@ -21,7 +21,7 @@ impl<'a> RsaCrt<'a> {
         let priv_key = RsaPrivateKey::new(rng, bits).expect("failed to generate a key");
         let mut sk = SigningKey::<Sha256>::new(priv_key);
         // move signing key to mem
-        let signing_key = mem.move_object(&mut sk, 0).expect("mem move failed");
+        let signing_key = mem.move_object(&mut sk, 0);
         let verifying_key: VerifyingKey<Sha256> = signing_key.verifying_key();
         Ok(RsaCrt {
             rng,

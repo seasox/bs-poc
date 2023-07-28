@@ -33,14 +33,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
-    let mut memory = Memory::new();
-    memory.alloc(MEM_SIZE)?;
+    let memory = Memory::new(MEM_SIZE)?;
 
     info!("allocated {} B of memory", MEM_SIZE);
 
     let mut resolver = LinuxPageMap::new()?;
-    let phys = resolver.get_phys(memory.addr.unwrap() as u64)?;
-    info!("phys base_msb: 0x{:02X}", phys);
+    let phys = resolver.get_phys(memory.addr as u64);
+    match phys {
+        Ok(phys) => info!("phys base_msb: 0x{:02X}", phys),
+        Err(err) => warn!("Failed to determine physical address: {}", err),
+    }
 
     // check memory.start phys addr
 
@@ -67,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             mem_config,
             args.load_json.clone(),
             args.pattern.clone(),
-            memory.addr.expect("no address"),
+            memory.addr,
         )?;
         //check = rsa.verify(msg, &sig);
         check = memory.check::<StdRng>(seed)?;

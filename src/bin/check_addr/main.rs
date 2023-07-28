@@ -23,11 +23,8 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    let mut memory = Memory::new();
-    memory.alloc(MEM_SIZE)?;
-    let base_msb = memory
-        .addr
-        .expect("no base address. Was allocation successful?") as AggressorPtr;
+    let memory = Memory::new(MEM_SIZE)?;
+    let base_msb = memory.addr as AggressorPtr;
     println!("base_msb: {:?}", base_msb);
 
     let start_addr = DRAMAddr::default();

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
 
 use crate::jitter::AggressorPtr;
@@ -10,12 +10,6 @@ use std::{
     arch::x86_64::_mm_clflush,
     fmt, mem,
 };
-
-pub struct Memory {
-    allocator: HugePageAllocator,
-    pub addr: Option<AggressorPtr>,
-    layout: Option<Layout>,
-}
 
 #[derive(Debug)]
 pub enum MemoryError {
@@ -34,20 +28,43 @@ impl fmt::Display for MemoryError {
     }
 }
 
+pub struct Memory {
+    allocator: HugePageAllocator,
+    pub addr: AggressorPtr,
+    layout: Layout,
+}
+
 impl Memory {
     const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
 
-    pub fn new() -> Self {
-        Memory {
-            allocator: HugePageAllocator {},
-            addr: None,
-            layout: None,
+    pub fn new(size: usize) -> Result<Self> {
+        let allocator = HugePageAllocator {};
+        let layout = Layout::from_size_align(size, 1)?;
+        if layout.size() == 0 {
+            return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
         }
+        let dst: *mut u8;
+        unsafe {
+            dst = allocator.alloc(layout);
+        }
+        if dst.is_null() {
+            return Err(anyhow::Error::new(MemoryError::AllocFailed));
+        }
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
+        let addr = dst as AggressorPtr;
+        let layout = layout;
+
+        Ok(Memory {
+            allocator,
+            addr,
+            layout,
+        })
     }
 
     pub fn initialize<R: RngCore + SeedableRng>(&self, seed: R::Seed) -> Result<()> {
-        let layout = self.layout.with_context(|| "layout not initialized")?;
-        let addr = self.addr.with_context(|| "addr not initialized")?;
+        let layout = self.layout;
+        let addr = self.addr;
         let mut rng = R::from_seed(seed);
 
         let num_pages = layout.size() / Self::PAGE_SIZE;
@@ -72,8 +89,8 @@ impl Memory {
     }
 
     pub fn check<R: RngCore + SeedableRng>(&self, seed: R::Seed) -> Result<bool> {
-        let layout = self.layout.with_context(|| "layout not initialized")?;
-        let addr = self.addr.with_context(|| "addr not initialized")?;
+        let layout = self.layout;
+        let addr = self.addr;
         let mut rng = R::from_seed(seed);
         unsafe {
             for offset in (0..layout.size()).step_by(Self::PAGE_SIZE) {
@@ -97,40 +114,20 @@ impl Memory {
 }
 
 impl Memory {
-    pub fn move_object<T>(&self, x: &mut T, offset: usize) -> Option<&mut T> {
+    pub fn move_object<T>(&self, x: &mut T, offset: usize) -> &mut T {
         unsafe {
-            let addr = self.addr?.add(offset);
+            let addr = self.addr.add(offset);
             let dst: &mut T = &mut *(addr as *mut T);
             mem::swap(dst, x);
-            Some(dst)
+            dst
         }
-    }
-    pub fn alloc(&mut self, size: usize) -> Result<()> {
-        let layout = Layout::from_size_align(size, 1)?;
-        if layout.size() == 0 {
-            return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
-        }
-        let dst: *mut u8;
-        unsafe {
-            dst = self.allocator.alloc(layout);
-        }
-        if dst.is_null() {
-            return Err(anyhow::Error::new(MemoryError::AllocFailed));
-        }
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
-        self.addr = Some(dst as AggressorPtr);
-        self.layout = Some(layout);
-        Ok(())
     }
 }
 
 impl Drop for Memory {
     fn drop(&mut self) {
-        if let (Some(addr), Some(layout)) = (self.addr, self.layout) {
-            unsafe {
-                self.allocator.dealloc(addr as *mut u8, layout);
-            }
-        };
+        unsafe {
+            self.allocator.dealloc(self.addr as *mut u8, self.layout);
+        }
     }
 }

@@ -183,7 +183,6 @@ impl Hammerer {
             );
         };
 
-        // --> Luca: why crash if not ref?
         let hammering_addrs =
             mapping.get_hammering_addresses(&pattern.access_ids, base_msb, mem_config);
         drop(pattern.access_ids);
@@ -194,7 +193,9 @@ impl Hammerer {
             mapping
                 .code_jitter
                 .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
-        program.write("hammer_jit.o")?;
+        program
+            .write("hammer_jit.o")
+            .with_context(|| "failed to write function to disk")?;
         //disas(&program.code, 64, 0);
         info!("call into jitted program");
         let result = unsafe { program.call() };
