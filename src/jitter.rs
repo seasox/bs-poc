@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_with::DeserializeFromStr;
 
 use core::slice;
-use std::{collections::HashMap, io::Write, mem, ops::DerefMut, str::FromStr};
+use std::{collections::HashMap, fs::File, io::Write, mem, ops::DerefMut, str::FromStr};
 
 #[derive(DeserializeFromStr, Debug, Clone)]
 pub enum FlushingStrategy {
@@ -44,14 +44,14 @@ impl FromStr for FencingStrategy {
     }
 }
 
-pub type MutAggPointer = *mut u8;
+pub type AggressorPtr = *const u8;
 
 pub trait Jitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: Vec<MutAggPointer>,
-        log_cb: &dyn Fn(&str, MutAggPointer) -> (),
+        aggressor_pairs: &[AggressorPtr],
+        log_cb: &dyn Fn(&str, AggressorPtr) -> (),
     ) -> Result<Program>;
 }
 
@@ -70,7 +70,7 @@ pub struct CodeJitter {
     flushing_strategy: FlushingStrategy,
     num_aggs_for_sync: usize,
     pattern_sync_each_ref: bool,
-    pub total_activations: i64,
+    total_activations: u32,
 }
 
 pub struct Program {
@@ -90,14 +90,20 @@ impl Program {
         let result = unsafe { jit_function() };
         return result;
     }
+
+    pub fn write(&self, filename: &str) -> Result<()> {
+        let mut file = File::create(filename)?;
+        file.write(self.code.as_ref())?;
+        Ok(())
+    }
 }
 
 impl Jitter for CodeJitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
-        aggressor_pairs: Vec<MutAggPointer>,
-        log_cb: &dyn Fn(&str, MutAggPointer) -> (),
+        aggressor_pairs: &[AggressorPtr],
+        log_cb: &dyn Fn(&str, AggressorPtr) -> (),
     ) -> Result<Program> {
         let mut a = CodeAssembler::new(64)?;
 
@@ -111,7 +117,10 @@ impl Jitter for CodeJitter {
 
         a.set_label(&mut start)?;
 
+        a.push(rbx)?;
+
         let num_timed_accesses: usize = self.num_aggs_for_sync;
+        let total_activations = self.total_activations;
 
         info!("num_timed_accesses={}", num_timed_accesses);
         // TODO log accesses, expected patterns, aggressors, etc.
@@ -119,7 +128,6 @@ impl Jitter for CodeJitter {
         // part 1: synchronize with the beginning of an interval
         // warmup
         for idx in 0..num_timed_accesses {
-            println!("{}", aggressor_pairs[idx] as u64);
             a.mov(rax, aggressor_pairs[idx] as u64)?;
             a.mov(rbx, ptr(rax))?;
             log_cb("ACCESS", aggressor_pairs[idx]);
@@ -149,19 +157,20 @@ impl Jitter for CodeJitter {
         a.rdtscp()?;
         a.sub(eax, ebx)?;
         a.cmp(eax, 1000)?;
+
+        // depending on the cmp's outcome, jump out of loop or to the loop's beginning
         a.jg(while1_end)?;
         a.jmp(while1_begin)?;
-
         a.set_label(&mut while1_end)?;
 
         // part 2: perform hammering
         // initialize variables
         info!("start hammering");
-        a.mov(rsi, self.total_activations)?;
+        a.mov(esi, total_activations)?;
         a.mov(edx, 0)?;
 
         a.set_label(&mut for_begin)?;
-        a.cmp(rsi, 0)?;
+        a.cmp(esi, 0)?;
         a.jle(for_end)?;
 
         // a map to keep track of aggressors that have been accessed before and need a fence before their next access
@@ -190,7 +199,7 @@ impl Jitter for CodeJitter {
             a.mov(rax, cur_addr)?;
             a.mov(rcx, ptr(rax))?;
             log_cb("ACCESS", aggressor_pairs[idx]);
-            a.dec(rsi)?;
+            a.dec(esi)?;
             accessed_before.insert(cur_addr, true);
             cnt_total_activations += 1;
 
@@ -216,6 +225,8 @@ impl Jitter for CodeJitter {
         a.jmp(for_begin)?;
         a.set_label(&mut for_end)?;
         a.mov(eax, edx)?;
+
+        a.pop(rbx)?;
         a.ret()?;
 
         let result = a.assemble_options(0, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
@@ -234,7 +245,7 @@ impl Jitter for CodeJitter {
     }
 }
 
-fn sync_ref(aggs: &[MutAggPointer], a: &mut CodeAssembler) -> Result<(), IcedError> {
+fn sync_ref(aggs: &[AggressorPtr], a: &mut CodeAssembler) -> Result<(), IcedError> {
     debug!("SYNC");
     let mut wbegin = a.create_label();
     let mut wend = a.create_label();
@@ -251,7 +262,6 @@ fn sync_ref(aggs: &[MutAggPointer], a: &mut CodeAssembler) -> Result<(), IcedErr
         // flush
         a.mov(rax, agg as u64)?;
         a.clflushopt(ptr(rax))?;
-        a.mov(rax, agg as u64)?;
         // access
         a.mov(rax, agg as u64)?;
         a.mov(rcx, ptr(rax))?;
@@ -259,21 +269,24 @@ fn sync_ref(aggs: &[MutAggPointer], a: &mut CodeAssembler) -> Result<(), IcedErr
         // we do not deduct the sync aggressors from the total number of activations because the number of sync activations
         // varies for different patterns; if we deduct it from the total number of activations, we cannot ensure anymore
         // that we are hammering long enough/as many times as needed to trigger bit flips
-        // assembler.dec(asmjit::x86::rsi);
+        // assembler.dec(asmjit::x86::esi);
 
         // update counter that counts the number of activation in the trailing synchronization
         a.inc(edx)?;
     }
 
     a.push(rdx)?;
-    a.rdtscp()?;
+    a.rdtscp()?; // result: edx:eax
     a.lfence()?;
     a.pop(rdx)?;
+
+    // if ((after - before) > 1000) break;
     a.sub(eax, ebx)?;
     a.cmp(eax, 1000)?;
-    a.jg(wend)?;
-    a.jmp(wbegin)?;
 
+    // depending on the cmp's outcome...
+    a.jg(wend)?; // ... jump out of the loop
+    a.jmp(wbegin)?; // ... or jump back to the loop's beginning
     a.set_label(&mut wend)?;
 
     Ok(())

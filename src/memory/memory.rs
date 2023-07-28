@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use rand::{Rng, RngCore, SeedableRng};
 
-use crate::jitter::MutAggPointer;
+use crate::jitter::AggressorPtr;
 
 use super::allocator::HugePageAllocator;
 use libc::{c_void, memcmp};
@@ -13,7 +13,7 @@ use std::{
 
 pub struct Memory {
     allocator: HugePageAllocator,
-    pub addr: Option<MutAggPointer>,
+    pub addr: Option<AggressorPtr>,
     layout: Option<Layout>,
 }
 
@@ -119,7 +119,7 @@ impl Memory {
         }
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
         unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
-        self.addr = Some(dst as MutAggPointer);
+        self.addr = Some(dst as AggressorPtr);
         self.layout = Some(layout);
         Ok(())
     }

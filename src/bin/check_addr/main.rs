@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bs_poc::jitter::MutAggPointer;
+use bs_poc::jitter::AggressorPtr;
 use bs_poc::memory::construct_memory_tuple_timer;
 use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     memory.alloc(MEM_SIZE)?;
     let base_msb = memory
         .addr
-        .expect("no base address. Was allocation successful?") as MutAggPointer;
+        .expect("no base address. Was allocation successful?") as AggressorPtr;
     println!("base_msb: {:?}", base_msb);
 
     let start_addr = DRAMAddr::default();
