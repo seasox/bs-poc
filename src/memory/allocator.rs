@@ -68,11 +68,12 @@ pub(crate) struct HugePageAllocator;
 unsafe impl GlobalAlloc for HugePageAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
-        let p = libc::mmap(
-            null_mut(),
+        let mut p = 0x2000000000 as *mut c_void;
+        p = libc::mmap(
+            p,
             len,
             PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+            MAP_SHARED | MAP_ANONYMOUS | MAP_HUGETLB | (30 << MAP_HUGE_SHIFT),
             -1,
             0,
         );
@@ -81,6 +82,7 @@ unsafe impl GlobalAlloc for HugePageAllocator {
             return null_mut();
         }
 
+        debug!("mmaped hugepage to 0x{:02X}", p as u64);
         p as *mut u8
     }
 
