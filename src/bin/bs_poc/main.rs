@@ -1,4 +1,6 @@
-use bs_poc::memory::{DRAMAddr, Memory};
+use bs_poc::memory::LinuxPageMap;
+use bs_poc::memory::Memory;
+use bs_poc::memory::VirtToPhysResolver;
 use clap::Parser;
 
 use bs_poc::forge::Hammerer;
@@ -35,6 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     memory.alloc(MEM_SIZE)?;
 
     info!("allocated {} B of memory", MEM_SIZE);
+
+    let mut resolver = LinuxPageMap::new()?;
+    let phys = resolver.get_phys(memory.addr.unwrap() as u64)?;
+    info!("phys base_msb: 0x{:02X}", phys);
 
     // check memory.start phys addr
 

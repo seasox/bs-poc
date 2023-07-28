@@ -110,6 +110,8 @@ impl Memory {
         if dst.is_null() {
             return Err(anyhow::Error::new(MemoryError::AllocFailed));
         }
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
         self.addr = Some(dst as MutAggPointer);
         self.layout = Some(layout);
         Ok(())
