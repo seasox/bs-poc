@@ -24,7 +24,10 @@
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
             ],
-            "cwd": "${workspaceFolder}"
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}",
         },
         {
             "type": "lldb",
@@ -47,6 +50,9 @@
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
             ],
+            "env": {
+                "RUST_LOG": "info"
+            },
             "cwd": "${workspaceFolder}"
         },
         {
@@ -67,6 +73,9 @@
             "args": [
                 "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
             ],
+            "env": {
+                "RUST_LOG": "debug"
+            },
             "cwd": "${workspaceFolder}"
         },
         {
@@ -88,6 +97,9 @@
             "args": [
                 "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
             ],
+            "env": {
+                "RUST_LOG": "info"
+            },
             "cwd": "${workspaceFolder}"
         },
         {
@@ -105,6 +117,9 @@
                 }
             },
             "args": [],
+            "env": {
+                "RUST_LOG": "debug"
+            },
             "cwd": "${workspaceFolder}"
         }
     ]
