@@ -5,6 +5,7 @@ use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
 
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
+use log::debug;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
@@ -37,6 +38,15 @@ fn main() -> Result<()> {
 
     const THRESH: u64 = 330;
 
+    struct Outliers {
+        fast: Vec<DRAMAddr>,
+        slow: Vec<DRAMAddr>,
+    }
+    let mut outliers = Outliers {
+        fast: vec![],
+        slow: vec![],
+    };
+
     for row in 1..mem_config.get_row_count() {
         let addr = start_addr.add(0, row, 0);
         let addr_virt = addr.to_virt(base_msb, mem_config);
@@ -48,7 +58,7 @@ fn main() -> Result<()> {
             )
         };
         if time < THRESH {
-            panic!("too fast!");
+            outliers.fast.push(addr.clone());
         }
         println!("{:?}, {:?}, {}", start_addr, addr, time);
     }
@@ -64,10 +74,12 @@ fn main() -> Result<()> {
             )
         };
         if time > THRESH {
-            panic!("too slow!");
+            outliers.slow.push(addr.clone());
         }
         println!("{:?}, {:?}, {}", start_addr, addr, time);
     }
 
+    println!("Too fast: {:?}", outliers.fast);
+    println!("Too slow: {:?}", outliers.slow);
     Ok(())
 }
