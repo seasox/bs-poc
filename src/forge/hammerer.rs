@@ -175,7 +175,12 @@ impl Hammerer {
         );*/
 
         let hammer_log_cb = |action: &str, addr| {
-            debug!("{} ({})", action, DRAMAddr::from_virt(addr, &mem_config));
+            debug!(
+                "{} 0x{:016X} ({})",
+                action,
+                addr as usize,
+                DRAMAddr::from_virt(addr, &mem_config)
+            );
         };
 
         // --> Luca: why crash if not ref?
@@ -188,12 +193,12 @@ impl Hammerer {
         let program =
             mapping
                 .code_jitter
-                .jit(acts_per_tref as u64, hammering_addrs, &hammer_log_cb)?;
+                .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
+        program.write("hammer_jit.o")?;
         //disas(&program.code, 64, 0);
         info!("call into jitted program");
         let result = unsafe { program.call() };
-        info!("jit call done");
-        println!("{}", result);
+        info!("jit call done: 0x{:02X}", result);
 
         Ok(())
     }

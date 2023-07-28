@@ -4,8 +4,10 @@ use rand::{Rng, RngCore, SeedableRng};
 use crate::jitter::MutAggPointer;
 
 use super::allocator::HugePageAllocator;
+use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
+    arch::x86_64::_mm_clflush,
     fmt, mem,
 };
 
@@ -33,6 +35,8 @@ impl fmt::Display for MemoryError {
 }
 
 impl Memory {
+    const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
+
     pub fn new() -> Self {
         Memory {
             allocator: HugePageAllocator {},
@@ -45,31 +49,25 @@ impl Memory {
         let layout = self.layout.with_context(|| "layout not initialized")?;
         let addr = self.addr.with_context(|| "addr not initialized")?;
         let mut rng = R::from_seed(seed);
-        const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
 
-        let num_pages = layout.size() / PAGE_SIZE;
-        if layout.size() % 8 != 0 {
-            panic!("layout size must be divisble by 8");
+        let num_pages = layout.size() / Self::PAGE_SIZE;
+        let len = layout.size();
+        if len % 8 != 0 {
+            panic!("layout size must be divisible by 8");
         }
 
         debug!("initialize {} pages with pseudo-random values", num_pages);
 
-        for offset in (0..layout.size()).step_by(PAGE_SIZE) {
-            let mut value: [u8; 4096] = [0u8; PAGE_SIZE];
-            for i in 0..PAGE_SIZE {
+        for offset in (0..len).step_by(Self::PAGE_SIZE) {
+            let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+            for i in 0..Self::PAGE_SIZE {
                 value[i] = rng.gen();
             }
             unsafe {
-                std::ptr::write_volatile(addr.add(offset) as *mut [u8; PAGE_SIZE], value);
+                std::ptr::write_volatile(addr.add(offset) as *mut [u8; Self::PAGE_SIZE], value);
             }
-            debug!(
-                "{} ({}/{}) done",
-                offset as f64 / layout.size() as f64,
-                offset,
-                layout.size()
-            );
         }
-        debug!("done");
+        debug!("memory init done");
         Ok(())
     }
 
@@ -78,9 +76,18 @@ impl Memory {
         let addr = self.addr.with_context(|| "addr not initialized")?;
         let mut rng = R::from_seed(seed);
         unsafe {
-            for offset in 0..layout.size() {
-                let expected = rng.gen::<u8>();
-                if *(addr.add(offset) as *const u8) != expected {
+            for offset in (0..layout.size()).step_by(Self::PAGE_SIZE) {
+                let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+                for i in 0..Self::PAGE_SIZE {
+                    expected[i] = rng.gen();
+                }
+                _mm_clflush(addr.add(offset));
+                let cmp = memcmp(
+                    addr.add(offset) as *const c_void,
+                    expected.as_ptr() as *const c_void,
+                    Self::PAGE_SIZE,
+                );
+                if cmp != 0 {
                     return Ok(false);
                 }
             }
