@@ -49,7 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = BlacksmithConfig::from_jsonfile(&args.config)?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-    let hammerer = Hammerer {};
+    let hammerer = Hammerer::new(
+        mem_config,
+        args.load_json.clone(),
+        args.pattern.clone(),
+        memory.addr.clone(),
+    )?;
     info!("initialized hammerer");
 
     //RSA-CRT
@@ -58,24 +63,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //let msg = b"hello world";
     //let sig = rsa.sign(msg);
     //let mut check = rsa.verify(msg, &sig);
-    let mut check = true;
-    let mut retries = 0;
-    let mut seed: [u8; 32] = [0; 32];
     info!("start hammering");
-    while check {
-        seed = rand::random();
-        memory.initialize::<StdRng>(seed)?;
-        hammerer.hammer_pattern(
-            mem_config,
-            args.load_json.clone(),
-            args.pattern.clone(),
-            memory.addr,
-        )?;
-        //check = rsa.verify(msg, &sig);
-        check = memory.check::<StdRng>(seed)?;
-        info!("attempt {}: {}", retries, check);
-        retries += 1;
-    }
-    println!("Flipped after {} attempts with seed {:?}", retries, seed);
+    let init = |_| {
+        let seed = rand::random();
+        memory.initialize::<StdRng>(seed);
+        seed
+    };
+    let check = |seed| memory.check::<StdRng>(mem_config, seed);
+
+    let result = hammerer.hammer(init, check)?;
+    println!(
+        "Flipped at run {} after {} attempts with seed {:?} at {:?}",
+        result.run, result.attempt, result.state, result.result,
+    );
     Ok(())
 }

@@ -1,13 +1,13 @@
 use anyhow::Result;
 use rand::{Rng, RngCore, SeedableRng};
 
-use crate::jitter::AggressorPtr;
+use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
 
 use super::allocator::HugePageAllocator;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
-    arch::x86_64::_mm_clflush,
+    arch::x86_64::{_mm_clflush, _mm_mfence},
     fmt, mem,
 };
 
@@ -62,7 +62,7 @@ impl Memory {
         })
     }
 
-    pub fn initialize<R: RngCore + SeedableRng>(&self, seed: R::Seed) -> Result<()> {
+    pub fn initialize<R: RngCore + SeedableRng>(&self, seed: R::Seed) {
         let layout = self.layout;
         let addr = self.addr;
         let mut rng = R::from_seed(seed);
@@ -85,31 +85,51 @@ impl Memory {
             }
         }
         debug!("memory init done");
-        Ok(())
     }
 
-    pub fn check<R: RngCore + SeedableRng>(&self, seed: R::Seed) -> Result<bool> {
-        let layout = self.layout;
-        let addr = self.addr;
+    pub fn check<R: RngCore + SeedableRng>(
+        &self,
+        mem_config: MemConfiguration,
+        seed: R::Seed,
+    ) -> Option<Vec<BitFlip>> {
         let mut rng = R::from_seed(seed);
         unsafe {
-            for offset in (0..layout.size()).step_by(Self::PAGE_SIZE) {
+            for page_no in (0..self.layout.size()).step_by(Self::PAGE_SIZE) {
                 let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
                 for i in 0..Self::PAGE_SIZE {
                     expected[i] = rng.gen();
                 }
-                _mm_clflush(addr.add(offset));
+                _mm_clflush(self.addr.add(page_no));
+                _mm_mfence();
                 let cmp = memcmp(
-                    addr.add(offset) as *const c_void,
+                    self.addr.add(page_no) as *const c_void,
                     expected.as_ptr() as *const c_void,
                     Self::PAGE_SIZE,
                 );
-                if cmp != 0 {
-                    return Ok(false);
+                if cmp == 0 {
+                    continue;
                 }
+                debug!(
+                    "Found bitflip in page {}. Determining exact flip position",
+                    page_no
+                );
+                let mut ret = vec![];
+                for i in 0..expected.len() {
+                    let addr = self.addr.add(page_no + i);
+                    _mm_clflush(addr);
+                    _mm_mfence();
+                    if *addr != expected[i] {
+                        ret.push(BitFlip::new(
+                            DRAMAddr::from_virt(addr, &mem_config),
+                            *addr ^ expected[i],
+                            expected[i],
+                        ));
+                    }
+                }
+                return Some(ret);
             }
         }
-        Ok(true)
+        None
     }
 }
 
@@ -128,6 +148,23 @@ impl Drop for Memory {
     fn drop(&mut self) {
         unsafe {
             self.allocator.dealloc(self.addr as *mut u8, self.layout);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct BitFlip {
+    pub dram_addr: DRAMAddr,
+    pub flips: u8,
+    pub expected: u8,
+}
+
+impl BitFlip {
+    fn new(dram_addr: DRAMAddr, flips: u8, expected: u8) -> Self {
+        BitFlip {
+            dram_addr,
+            flips,
+            expected,
         }
     }
 }
