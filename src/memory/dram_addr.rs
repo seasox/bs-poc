@@ -17,6 +17,9 @@ impl Display for DRAMAddr {
 }
 
 impl DRAMAddr {
+    pub fn new(bank: usize, row: usize, col: usize) -> Self {
+        DRAMAddr { bank, row, col }
+    }
     pub fn from_virt(addr: AggressorPtr, mem_config: &MemConfiguration) -> DRAMAddr {
         let p = addr as usize;
         let mut res = 0;
