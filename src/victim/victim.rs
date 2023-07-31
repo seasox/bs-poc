@@ -30,8 +30,8 @@ impl<'a> RsaCrt<'a> {
         })
     }
 
-    pub fn sign(&mut self, msg: &[u8]) -> Signature {
-        self.signing_key.sign_with_rng(self.rng, msg)
+    pub fn sign(&mut self, msg: &[u8]) -> Result<Signature, rsa::signature::Error> {
+        self.signing_key.try_sign_with_rng(self.rng, msg)
     }
 
     pub fn verify(&mut self, msg: &[u8], sig: &Signature) -> bool {
