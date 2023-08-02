@@ -20,7 +20,7 @@ impl RsaCrt {
         mut rng: ThreadRng,
         mem: &Memory,
         offset: usize,
-    ) -> Result<Pin<&mut RsaCrt>, Box<dyn std::error::Error>> {
+    ) -> Result<Pin<&mut RsaCrt>, rsa::Error> {
         let bits = 2048;
         let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
         let signing_key = SigningKey::<Sha256>::new(priv_key);
