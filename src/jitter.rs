@@ -122,7 +122,7 @@ impl Jitter for CodeJitter {
         let num_timed_accesses: usize = self.num_aggs_for_sync;
         let total_activations = self.total_activations;
 
-        info!("num_timed_accesses={}", num_timed_accesses);
+        debug!("num_timed_accesses={}", num_timed_accesses);
         // TODO log accesses, expected patterns, aggressors, etc.
 
         // part 1: synchronize with the beginning of an interval
@@ -165,7 +165,7 @@ impl Jitter for CodeJitter {
 
         // part 2: perform hammering
         // initialize variables
-        info!("start hammering");
+        debug!("start hammering");
         a.mov(esi, total_activations)?;
         a.mov(edx, 0)?;
 
