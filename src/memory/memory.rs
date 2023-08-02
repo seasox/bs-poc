@@ -1,4 +1,5 @@
 use anyhow::Result;
+use lazy_static::__Deref;
 use rand::{Rng, RngCore, SeedableRng};
 
 use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
@@ -8,7 +9,8 @@ use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
     arch::x86_64::{_mm_clflush, _mm_mfence},
-    fmt, mem,
+    fmt,
+    pin::Pin,
 };
 
 #[derive(Debug)]
@@ -134,13 +136,15 @@ impl Memory {
 }
 
 impl Memory {
-    pub fn move_object<T>(&self, x: &mut T, offset: usize) -> &mut T {
-        unsafe {
-            let addr = self.addr.add(offset);
-            let dst: &mut T = &mut *(addr as *mut T);
-            mem::swap(dst, x);
-            dst
-        }
+    /// Move an instance of T into the allocated memory region at `offset', overwriting
+    /// anything that might reside at `offset', returning a pinned reference to the moved
+    /// object. This is an unsafe operation, as it relies on direct pointer operations.
+    pub unsafe fn move_object<T>(&self, x: T, offset: usize) -> Pin<&mut T> {
+        let addr = self.addr.add(offset) as *mut T;
+        core::ptr::write(addr, x);
+        let pinned = Pin::new_unchecked(&mut *addr);
+        assert_eq!((pinned.deref() as *const T) as usize, addr as usize);
+        pinned
     }
 }
 

