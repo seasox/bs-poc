@@ -30,6 +30,7 @@ impl fmt::Display for MemoryError {
     }
 }
 
+#[derive(Debug)]
 pub struct Memory {
     allocator: HugePageAllocator,
     pub addr: AggressorPtr,
@@ -93,7 +94,7 @@ impl Memory {
         &self,
         mem_config: MemConfiguration,
         seed: R::Seed,
-    ) -> Option<Vec<BitFlip>> {
+    ) -> Vec<BitFlip> {
         let mut rng = R::from_seed(seed);
         unsafe {
             for page_no in (0..self.layout.size()).step_by(Self::PAGE_SIZE) {
@@ -128,10 +129,10 @@ impl Memory {
                         ));
                     }
                 }
-                return Some(ret);
+                return ret;
             }
         }
-        None
+        vec![]
     }
 }
 
@@ -139,10 +140,10 @@ impl Memory {
     /// Move an instance of T into the allocated memory region at `offset', overwriting
     /// anything that might reside at `offset', returning a pinned reference to the moved
     /// object. This is an unsafe operation, as it relies on direct pointer operations.
-    pub unsafe fn move_object<T>(&self, x: T, offset: usize) -> Pin<&mut T> {
+    pub unsafe fn move_object<T: Unpin>(&self, x: T, offset: usize) -> Pin<&mut T> {
         let addr = self.addr.add(offset) as *mut T;
         core::ptr::write(addr, x);
-        let pinned = Pin::new_unchecked(&mut *addr);
+        let pinned = Pin::new(&mut *addr);
         assert_eq!((pinned.deref() as *const T) as usize, addr as usize);
         pinned
     }

@@ -62,6 +62,7 @@ fn align_to(size: usize, align: usize) -> usize {
 
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
+#[derive(Debug)]
 pub(crate) struct HugePageAllocator;
 
 #[cfg(target_arch = "x86_64")]

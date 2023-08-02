@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
+use std::fmt::Debug;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
@@ -148,30 +149,25 @@ impl FuzzingParameterSet {
 }
 */
 
-pub struct HammerResult<S, R> {
+pub struct HammerResult {
     pub run: u64,
     pub attempt: u64,
-    pub state: S,
-    pub result: R,
+}
+
+pub trait HammerVictim: Debug {
+    fn init(&mut self);
+    fn check(&mut self) -> bool;
 }
 
 impl Hammerer {
-    pub fn hammer<FnInit, FnCheck, S: Copy, R>(
-        &self,
-        init: FnInit,
-        check: FnCheck,
-    ) -> Result<HammerResult<S, R>>
-    where
-        FnInit: Fn(Option<S>) -> S,
-        FnCheck: Fn(S) -> Option<R>,
-    {
+    pub fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
         let num_retries = 100;
+        let num_runs = u64::MAX;
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8;
 
-        let mut run = 0;
-        let mut state = init(None);
-        loop {
+        for run in 0..num_runs {
+            victim.init();
             info!("Hammering run {}", run);
             for attempt in 0..num_retries {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
@@ -191,19 +187,13 @@ impl Hammerer {
                     "jit call done: 0x{:02X} (attempt {}:{})",
                     result, run, attempt
                 );
-                let result = check(state);
-                if let Some(result) = result {
-                    return Ok(HammerResult {
-                        run,
-                        attempt,
-                        state,
-                        result,
-                    });
+                let result = victim.check();
+                if result {
+                    return Ok(HammerResult { run, attempt });
                 }
             }
-            run += 1;
-            state = init(Some(state));
         }
+        bail!("No success")
     }
 
     pub fn new(
