@@ -7,7 +7,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'bs_poc'",
+            "name": "Debug bs_poc MemCheck",
             "cargo": {
                 "args": [
                     "build",
@@ -33,7 +33,33 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Run executable 'bs_poc'",
+            "name": "Debug bs_poc MemCheck",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=bs_poc",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "bs_poc",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--load-json=fuzz-summary.json",
+                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
+                "--hammer-mode=rsa",
+            ],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Run bs_poc MemCheck",
             "cargo": {
                 "args": [
                     "build",
@@ -51,6 +77,33 @@
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=mem-check",
+            ],
+            "env": {
+                "RUST_LOG": "info"
+            },
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Run bs_poc RSA",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--profile=release-with-debug",
+                    "--bin=bs_poc",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "bs_poc",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--load-json=fuzz-summary.json",
+                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
+                "--hammer-mode=rsa",
             ],
             "env": {
                 "RUST_LOG": "info"
