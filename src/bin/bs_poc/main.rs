@@ -1,16 +1,11 @@
-use std::ops::DerefMut;
-
-use bs_poc::memory::LinuxPageMap;
-use bs_poc::memory::Memory;
-use bs_poc::memory::VirtToPhysResolver;
+use anyhow::{bail, Result};
+use bs_poc::forge::Hammerer;
+use bs_poc::memory::{LinuxPageMap, Memory, VirtToPhysResolver};
+use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::RsaCrt;
 use clap::Parser;
-
-use bs_poc::forge::Hammerer;
-
-use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use lazy_static::__Deref;
 use rand::rngs::StdRng;
+use std::ops::DerefMut;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -27,6 +22,9 @@ struct CliArgs {
     /// The hammering mode to use. Set to memcheck for bit flip check or rsa for RSA-CRT attack
     #[clap(long = "hammer-mode")]
     hammer_mode: HammerMode,
+    /// The hammering mode to use. Set to memcheck for bit flip check or rsa for RSA-CRT attack
+    #[clap(long = "elevated-priority", action)]
+    elevated_priority: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -38,11 +36,18 @@ enum HammerMode {
 #[macro_use]
 extern crate log;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     env_logger::init();
     info!("startup");
     let args = CliArgs::parse();
     info!("args: {:?}", args);
+
+    if args.elevated_priority {
+        let ret = unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, -20) };
+        if ret < 0 {
+            bail!("setpriority failed. Are we root?");
+        }
+    }
 
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
