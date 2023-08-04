@@ -86,7 +86,6 @@ impl<'a> HammerVictimRsa<'a> {
 }
 
 impl<'a> HammerVictim for HammerVictimRsa<'a> {
-    fn init(&mut self) {}
     fn check(&mut self) -> bool {
         let msg = b"hello world";
         return match self.rsa.sign(msg) {

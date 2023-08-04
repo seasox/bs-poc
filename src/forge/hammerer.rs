@@ -155,7 +155,7 @@ pub struct HammerResult {
 }
 
 pub trait HammerVictim: Debug {
-    fn init(&mut self);
+    fn init(&mut self) {}
     fn check(&mut self) -> bool;
 }
 
