@@ -67,6 +67,16 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         );
         !self.flips.is_empty()
     }
+
+    fn log_report(&self) {
+        let virt_addrs: Vec<String> = self
+            .flips
+            .iter()
+            .map(|bf| bf.dram_addr.to_virt(self.memory.addr, self.mem_config))
+            .map(|addr| format!("0x{:02X}", addr as usize))
+            .collect();
+        info!("Addresses with flips: {:?}", virt_addrs);
+    }
 }
 
 #[derive(Debug)]
@@ -142,28 +152,9 @@ fn main() -> Result<()> {
     loop {
         let result = hammerer.hammer(victim.as_mut())?;
         println!(
-            "Successful at run {} after {} attempts with victim {:?}",
-            result.run, result.attempt, victim,
+            "Successful at run {} after {} attempts",
+            result.run, result.attempt,
         );
-        /*
-        match args.hammer_mode {
-            HammerMode::MemCheck => {
-                /*
-                let virt_addrs: Vec<String> = victim
-                    .flips
-                    .iter()
-                    .map(|bf| bf.dram_addr.to_virt(memory.addr, mem_config))
-                    .map(|addr| format!("0x{:02X}", addr as usize))
-                    .collect();
-                println!("Addresses with flips: {:?}", virt_addrs);
-                */
-                let mut victim = HammerModeMemCheck::new(mem_config, &memory);
-            }
-            HammerMode::Rsa => {
-                let mut victim = HammerModeRsa::new(&memory);
-                let result = hammerer.hammer(&mut victim)?;
-            }
-        };
-        */
+        victim.log_report();
     }
 }
