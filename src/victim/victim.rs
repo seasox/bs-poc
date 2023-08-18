@@ -1,48 +1,53 @@
-use std::pin::Pin;
+use anyhow::bail;
 
-use rand::rngs::ThreadRng;
-use rsa::pkcs1v15::{Signature, SigningKey, VerifyingKey};
-use rsa::sha2::Sha256;
-use rsa::signature::{Keypair, RandomizedSigner, Verifier};
-use rsa::RsaPrivateKey;
-
-use crate::memory::Memory;
+use crate::{
+    forge::HammerVictim, memory::Memory, RSACRT_ctx_t, RSACRT_init, RSACRT_sign, RSACRT_verify,
+};
 
 #[derive(Debug)]
-pub struct RsaCrt {
-    rng: ThreadRng,
-    signing_key: SigningKey<Sha256>,
-    verifying_key: VerifyingKey<Sha256>,
+pub struct HammerVictimRsa {
+    ctx: *mut RSACRT_ctx_t,
 }
 
-impl RsaCrt {
-    pub fn new(
-        mut rng: ThreadRng,
-        mem: &Memory,
-        offset: usize,
-    ) -> Result<Pin<&mut RsaCrt>, rsa::Error> {
-        let bits = 2048;
-        let priv_key = RsaPrivateKey::new(&mut rng, bits).expect("failed to generate a key");
-        let signing_key = SigningKey::<Sha256>::new(priv_key);
-        let verifying_key = signing_key.verifying_key();
-        let rsa = RsaCrt {
-            rng,
-            signing_key,
-            verifying_key,
+impl<'a> HammerVictimRsa {
+    pub fn new(memory: &'a Memory) -> anyhow::Result<Self> {
+        let (ctx, ret) = unsafe {
+            let ctx = memory.addr.add(1337) as *mut RSACRT_ctx_t;
+            (ctx, RSACRT_init(ctx))
         };
-        // move RSA struct to mem
-        let rsa_p = unsafe { mem.move_object(rsa, offset) };
-        Ok(rsa_p)
-    }
-
-    pub fn sign(&mut self, msg: &[u8]) -> Result<Signature, rsa::signature::Error> {
-        self.signing_key.try_sign_with_rng(&mut self.rng, msg)
-    }
-
-    pub fn verify(&mut self, msg: &[u8], sig: &Signature) -> bool {
-        match self.verifying_key.verify(msg, sig) {
-            Ok(_) => true,
-            Err(_) => false,
+        if ret != 0 {
+            bail!("RSACRT_init");
         }
+        Ok(HammerVictimRsa { ctx })
+    }
+}
+
+impl HammerVictim for HammerVictimRsa {
+    fn check(&mut self) -> bool {
+        let msg = "hello world";
+        let mut sig = std::mem::MaybeUninit::uninit();
+        let mut siglen = std::mem::MaybeUninit::uninit();
+        let ret = unsafe {
+            RSACRT_sign(
+                self.ctx,
+                msg.as_ptr(),
+                msg.len(),
+                sig.as_mut_ptr(),
+                siglen.as_mut_ptr(),
+            )
+        };
+        if ret != 0 {
+            return true;
+        }
+        let ret = unsafe {
+            RSACRT_verify(
+                self.ctx,
+                msg.as_ptr(),
+                msg.len(),
+                sig.assume_init() as *const u8,
+                siglen.assume_init() as usize,
+            )
+        };
+        ret != 1
     }
 }

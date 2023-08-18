@@ -2,11 +2,13 @@ use anyhow::{bail, Context, Result};
 use bs_poc::forge::{HammerVictim, Hammerer};
 use bs_poc::memory::{BitFlip, LinuxPageMap, Memory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use bs_poc::victim::RsaCrt;
+use bs_poc::victim::HammerVictimRsa;
 use clap::Parser;
 use rand::rngs::StdRng;
 use std::fmt::Debug;
-use std::pin::Pin;
+
+#[macro_use]
+extern crate log;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -79,35 +81,6 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
     }
 }
 
-#[derive(Debug)]
-struct HammerVictimRsa<'a> {
-    rsa: Pin<&'a mut RsaCrt>,
-}
-
-impl<'a> HammerVictimRsa<'a> {
-    fn new(memory: &'a Memory) -> Self {
-        let rng = rand::thread_rng();
-        let victim_offset = 1337;
-        let rsa = RsaCrt::new(rng, memory, victim_offset)
-            .with_context(|| "RsaCrt::new failed")
-            .unwrap();
-        HammerVictimRsa { rsa }
-    }
-}
-
-impl<'a> HammerVictim for HammerVictimRsa<'a> {
-    fn check(&mut self) -> bool {
-        let msg = b"hello world";
-        return match self.rsa.sign(msg) {
-            Ok(_) => false,
-            Err(_) => true,
-        };
-    }
-}
-
-#[macro_use]
-extern crate log;
-
 fn main() -> Result<()> {
     env_logger::init();
     info!("startup");
@@ -145,7 +118,7 @@ fn main() -> Result<()> {
     )?;
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
-        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory)),
+        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory)?),
     };
     info!("initialized hammerer");
     info!("start hammering");

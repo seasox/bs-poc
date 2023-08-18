@@ -156,6 +156,7 @@ pub struct HammerResult {
 
 pub trait HammerVictim: Debug {
     fn init(&mut self) {}
+    /// returns true if flip was successful
     fn check(&mut self) -> bool;
     fn log_report(&self) {}
 }
