@@ -23,7 +23,7 @@
                 "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=memcheck",
+                "--hammer-mode=mem-check",
             ],
             "env": {
                 "RUST_LOG": "debug"
@@ -33,7 +33,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug bs_poc MemCheck",
+            "name": "Debug bs_poc RSA",
             "cargo": {
                 "args": [
                     "build",
