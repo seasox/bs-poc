@@ -21,10 +21,11 @@ mod tests {
     #[test]
     fn rsa_crt_sign_verify() {
         unsafe {
+            let ctx = libc::malloc(16 * std::mem::size_of::<BN_ULONG>()) as *mut BN_ULONG;
             let ctx = libc::malloc(std::mem::size_of::<RSACRT_ctx_t>()) as *mut RSACRT_ctx_t;
             let ret = RSACRT_init(ctx);
             assert_eq!(ret, 0);
-            assert_ne!((*ctx).keypair, std::ptr::null_mut());
+            assert_ne!((*ctx).sk, std::ptr::null_mut());
             let msg = "hello world".to_string();
             let mut sig = std::mem::MaybeUninit::uninit();
             let mut siglen = std::mem::MaybeUninit::uninit();
