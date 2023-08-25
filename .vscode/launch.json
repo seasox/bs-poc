@@ -63,7 +63,7 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--profile=release-with-debug",
+                    "--release",
                     "--bin=bs_poc",
                     "--package=bs_poc"
                 ],
@@ -90,7 +90,7 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--profile=release-with-debug",
+                    "--release",
                     "--bin=bs_poc",
                     "--package=bs_poc"
                 ],
