@@ -118,7 +118,10 @@ fn main() -> Result<()> {
     )?;
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
-        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory)?),
+        HammerMode::Rsa => {
+            let offset = 0x24C30667;
+            Box::new(HammerVictimRsa::new(&memory, offset)?)
+        }
     };
     info!("initialized hammerer");
     info!("start hammering");
