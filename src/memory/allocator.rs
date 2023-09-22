@@ -88,7 +88,8 @@ unsafe impl GlobalAlloc for HugePageAllocator {
     }
 
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        libc::munmap(p as *mut c_void, layout.size());
+        let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
+        libc::munmap(p as *mut c_void, len);
     }
 }
 
@@ -123,7 +124,7 @@ pub mod tests {
         unsafe {
             let layout = Layout::new::<u16>();
             let p = hugepage_alloc.alloc(layout);
-            assert_ne!(p, null_mut());
+            assert_eq!(p.is_null(), false);
             *p = 20;
             assert_eq!(*p, 20);
             hugepage_alloc.dealloc(p, layout);
@@ -133,7 +134,7 @@ pub mod tests {
         unsafe {
             let layout = Layout::array::<char>(2048).unwrap();
             let dst = hugepage_alloc.alloc(layout);
-            assert_ne!(dst, null_mut());
+            assert_eq!(dst.is_null(), false);
 
             let src = String::from("hello rust");
             let len = src.len();
