@@ -99,7 +99,7 @@ fn main() -> Result<()> {
 
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
-    let memory = Memory::new(MEM_SIZE)?;
+    let memory = Memory::new(MEM_SIZE, true)?;
 
     info!("allocated {} B of memory", MEM_SIZE);
 

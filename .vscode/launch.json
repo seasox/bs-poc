@@ -127,6 +127,7 @@
             },
             "args": [
                 "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--use-hugepage"
             ],
             "env": {
                 "RUST_LOG": "debug"
@@ -151,6 +152,7 @@
             },
             "args": [
                 "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--use-hugepage"
             ],
             "env": {
                 "RUST_LOG": "info"

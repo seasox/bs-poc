@@ -12,6 +12,8 @@ struct CliArgs {
     /// The JSON file containing the memory config
     #[clap(long = "config", default_value = "config.json")]
     config: String,
+    #[clap(long = "use-hugepage", action)]
+    use_hugepage: bool,
 }
 
 fn main() -> Result<()> {
@@ -23,11 +25,11 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    let memory = Memory::new(MEM_SIZE)?;
+    let memory = Memory::new(MEM_SIZE, args.use_hugepage)?;
     let base_msb = memory.addr as AggressorPtr;
     println!("base_msb: {:?}", base_msb);
 
-    let start_addr = DRAMAddr::default();
+    let start_addr = DRAMAddr::from_virt(base_msb, &mem_config);
     let start_addr_virt = start_addr.to_virt(base_msb, mem_config);
 
     let timer = construct_memory_tuple_timer()?;
@@ -53,10 +55,12 @@ fn main() -> Result<()> {
                 1000,
             )
         };
+        print!("{:?}, {:?}, {}", start_addr, addr, time);
         if time < THRESH {
+            print!(" [FAST]");
             outliers.fast.push(addr.clone());
         }
-        println!("{:?}, {:?}, {}", start_addr, addr, time);
+        println!("");
     }
 
     for bank in 0..mem_config.get_bank_count() {
@@ -69,10 +73,12 @@ fn main() -> Result<()> {
                 1000,
             )
         };
+        print!("{:?}, {:?}, {}", start_addr, addr, time);
         if time > THRESH {
+            print!(" [SLOW]");
             outliers.slow.push(addr.clone());
         }
-        println!("{:?}, {:?}, {}", start_addr, addr, time);
+        println!("");
     }
 
     println!("Too fast: {:?}", outliers.fast);
