@@ -33,7 +33,6 @@ int RSACRT_alloc(RSACRT_ctx_t **out) {
 }
 
 int RSACRT_check_openssl_version(void) {
-  // TODO check for FIPS?
   return OPENSSL_VERSION_MAJOR == 3
          && OPENSSL_VERSION_MINOR == 0
          && OPENSSL_VERSION_PATCH == 2;
@@ -97,7 +96,21 @@ int RSACRT_sign(const RSACRT_ctx_t *ctx, const unsigned char *msg, const size_t 
   return res;
 }
 
-int RSACRT_verify(const RSACRT_ctx_t *ctx, const unsigned char *msg, const size_t msg_len, const unsigned char *sig, size_t siglen) {
+void RSACRT_get_dmp1(const RSACRT_ctx_t *ctx, BIGNUM **dp_out) {
+  const BIGNUM *dp = NULL;
+  *dp_out = BN_new();
+  RSA_get0_crt_params(ctx->sk, &dp, NULL, NULL);
+  BN_copy(*dp_out, dp);
+}
+
+int RSACRT_check_dmp1(const RSACRT_ctx_t *ctx, const BIGNUM *exp) {
+  const BIGNUM *dp = NULL;
+  RSA_get0_crt_params(ctx->sk, &dp, NULL, NULL);
+  int ret = BN_cmp(dp, exp);
+  return ret != 0;
+}
+
+int RSACRT_verify(const RSACRT_ctx_t *ctx, const unsigned char *msg, const size_t msg_len, const unsigned char *sig, unsigned int siglen) {
   unsigned char hash[SHA256_DIGEST_LENGTH];
   SHA256(msg, msg_len, hash);
 
