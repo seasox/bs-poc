@@ -21,9 +21,9 @@ mod tests {
     #[test]
     fn rsa_crt_sign_verify() {
         unsafe {
-            let ctx = libc::malloc(16 * std::mem::size_of::<BN_ULONG>()) as *mut BN_ULONG;
+            let dmp_mem = libc::malloc(16 * std::mem::size_of::<libc::c_ulong>());
             let ctx = libc::malloc(std::mem::size_of::<RSACRT_ctx_t>()) as *mut RSACRT_ctx_t;
-            let ret = RSACRT_init(ctx);
+            let ret = RSACRT_init(dmp_mem as *mut libc::c_ulong, ctx);
             assert_eq!(ret, 0);
             assert_ne!((*ctx).sk, std::ptr::null_mut());
             let msg = "hello world".to_string();
@@ -36,22 +36,16 @@ mod tests {
                 sig.as_mut_ptr(),
                 siglen.as_mut_ptr(),
             );
-            assert_eq!(ret, 0);
-            assert_ne!(siglen.assume_init(), 0);
-            let sig = Vec::from_raw_parts(
-                sig.assume_init(),
-                siglen.assume_init(),
-                siglen.assume_init(),
-            );
-            assert!(!sig.is_empty());
+            assert_eq!(ret, 1, "sign");
+            assert_ne!(siglen.assume_init(), 0, "siglen");
             let ret = RSACRT_verify(
                 ctx,
                 msg.as_ptr(),
                 msg.len(),
-                sig.as_ptr(),
+                sig.assume_init(),
                 siglen.assume_init(),
             );
-            assert_eq!(ret, 1);
+            assert_eq!(ret, 1, "verify");
         }
     }
 }
