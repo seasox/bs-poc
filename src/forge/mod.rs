@@ -2,4 +2,4 @@
 
 mod hammerer;
 
-pub use self::hammerer::{HammerResult, HammerVictim, Hammerer};
+pub use self::hammerer::{DummyHammerer, HammerResult, HammerVictim, Hammerer, Hammering};

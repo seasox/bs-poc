@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
+use std::arch::x86_64::_mm_clflush;
 use std::fmt::Debug;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
@@ -10,11 +11,8 @@ use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::DRAMAddr;
 use crate::util::MemConfiguration;
 
-pub struct Hammerer {
-    base_msb: *const u8,
-    mem_config: MemConfiguration,
-    mapping: PatternAddressMapper,
-    program: Program,
+pub trait Hammering {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult>;
 }
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone)]
@@ -96,58 +94,14 @@ struct HammeringPattern {
     //code_jitter: CodeJitter,
 }
 
-/*
-struct FuzzingParameterSet {
-    gen: MT19937,
-    //num_refresh_intervals: i32,
-    //num_aggressors: i32,
-    //agg_intra_distance: i32,
-    //agg_inter_distance: i32,
-    //num_activations_per_trefi: i32,
-    //hammering_total_num_activations: i64,
-    //base_period: i32,
-    max_row_no: u8,
-    //total_acts_pattern: i32,
-    //start_row: Range<i32>,
-    //num_aggressors_for_sync: Range<i32>,
-    //bank_no: Range<i32>,
-    //use_sequential_aggressors: Range<i32>,
-    //amplitude: Range<i32>,
-    //n_sided: Range<i32>,
-    //sync_each_ref: Range<i32>,
-    //wait_until_start_hammering_refs: Range<i32>,
-    //    N_sided_probabilities: Distribution<i32>,
-    fencing_strategy: FencingStrategy,
-    flushing_strategy: FlushingStrategy,
-}
-impl FuzzingParameterSet {
-    fn new(pattern: &HammeringPattern, measured_num_acts_per_ref: i32) -> Self {
-        let mut gen = MT19937::new_with_slice_seed(&[12345]); // TODO random seed
-        return FuzzingParameterSet {
-            gen: gen,
-            //num_refresh_intervals: 2_i32.pow(Range::new(0, 4).get_random_number(&mut gen)),
-            //num_aggressors: Range::new(8, 96).get_random_number(&mut gen),
-            //agg_intra_distance: Range::new(1, 24).get_random_number(&mut gen),
-            //agg_inter_distance: (),
-            //num_activations_per_trefi: (measured_num_acts_per_ref / 2) * 2, // make sure that num_acts is even
-            //hammering_total_num_activations: pattern.code_jitter.total_activations,
-            //base_period: (),
-            //max_row_no: (),
-            //total_acts_pattern: pattern.total_activations,
-            //start_row: (),
-            //num_aggressors_for_sync: (),
-            //bank_no: (),
-            //use_sequential_aggressors: (),
-            //amplitude: (),
-            //n_sided: Range::new(1, 2),
-            //sync_each_ref: (),
-            //wait_until_start_hammering_refs: (),
-            fencing_strategy: FencingStrategy::LatestPossible,
-            flushing_strategy: FlushingStrategy::EarliestPossible,
-        };
+impl HammeringPattern {
+    fn determine_most_effective_mapping(&mut self) -> Option<PatternAddressMapper> {
+        self.address_mappings
+            .iter_mut()
+            .max_by_key(|m| m.bit_flips.len())
+            .cloned()
     }
 }
-*/
 
 pub struct HammerResult {
     pub run: u64,
@@ -161,43 +115,48 @@ pub trait HammerVictim: Debug {
     fn log_report(&self) {}
 }
 
-impl Hammerer {
-    pub fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
-        let num_retries = 100;
-        let num_runs = u64::MAX;
-        let mut rng = rand::thread_rng();
-        const REF_INTERVAL_LEN_US: f32 = 7.8;
+pub struct DummyHammerer {
+    base_msb: *mut u8,
+    flip_offset: usize,
+}
 
-        for run in 0..num_runs {
-            victim.init();
-            info!("Hammering run {}", run);
-            for attempt in 0..num_retries {
-                let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
-                let wait_until_start_hammering_us =
-                    wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
-                let random_rows = self
-                    .mapping
-                    .get_random_nonaccessed_rows(self.base_msb, self.mem_config);
-                debug!(
-                    "do random memory accesses for {} us before running jitted code",
-                    wait_until_start_hammering_us as u128
-                );
-                self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
-                debug!("call into jitted program");
-                let result = unsafe { self.program.call() };
-                debug!(
-                    "jit call done: 0x{:02X} (attempt {}:{})",
-                    result, run, attempt
-                );
-                let result = victim.check();
-                if result {
-                    return Ok(HammerResult { run, attempt });
-                }
-            }
+impl DummyHammerer {
+    pub fn new(base_msb: *mut u8, flip_offset: usize) -> Self {
+        DummyHammerer {
+            base_msb,
+            flip_offset,
+        }
+    }
+}
+
+impl Hammering for DummyHammerer {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
+        victim.init();
+        unsafe {
+            let flipped_byte = self.base_msb.add(self.flip_offset);
+            debug!(
+                "Flip 0x{:02X} from {} to {} at offset {}",
+                flipped_byte as usize, *flipped_byte, !*flipped_byte, self.flip_offset
+            );
+            *flipped_byte = !*flipped_byte;
+            _mm_clflush(flipped_byte);
+        }
+        let result = victim.check();
+        if result {
+            return Ok(HammerResult { run: 0, attempt: 0 });
         }
         bail!("No success")
     }
+}
 
+pub struct Hammerer {
+    base_msb: *const u8,
+    mem_config: MemConfiguration,
+    mapping: PatternAddressMapper,
+    program: Program,
+}
+
+impl Hammerer {
     pub fn new(
         mem_config: MemConfiguration,
         json_filename: String,
@@ -249,6 +208,7 @@ impl Hammerer {
             mapping: mapping.clone(),
         });
     }
+
     fn do_random_accesses(
         &self,
         rows: &[AggressorPtr],
@@ -269,12 +229,41 @@ impl Hammerer {
     }
 }
 
-impl HammeringPattern {
-    fn determine_most_effective_mapping(&mut self) -> Option<PatternAddressMapper> {
-        self.address_mappings
-            .iter_mut()
-            .max_by_key(|m| m.bit_flips.len())
-            .cloned()
+impl Hammering for Hammerer {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
+        let num_retries = 100;
+        let num_runs = u64::MAX;
+        let mut rng = rand::thread_rng();
+        const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
+
+        for run in 0..num_runs {
+            victim.init();
+            info!("Hammering run {}", run);
+            for attempt in 0..num_retries {
+                let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
+                let wait_until_start_hammering_us =
+                    wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
+                let random_rows = self
+                    .mapping
+                    .get_random_nonaccessed_rows(self.base_msb, self.mem_config);
+                debug!(
+                    "do random memory accesses for {} us before running jitted code",
+                    wait_until_start_hammering_us as u128
+                );
+                self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
+                debug!("call into jitted program");
+                let result = unsafe { self.program.call() };
+                debug!(
+                    "jit call done: 0x{:02X} (attempt {}:{})",
+                    result, run, attempt
+                );
+                let result = victim.check();
+                if result {
+                    return Ok(HammerResult { run, attempt });
+                }
+            }
+        }
+        bail!("No success")
     }
 }
 
