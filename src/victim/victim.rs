@@ -5,7 +5,7 @@ use anyhow::bail;
 use crate::{
     forge::HammerVictim, memory::Memory, RSACRT_alloc, RSACRT_check_dmp1,
     RSACRT_check_openssl_version, RSACRT_ctx_t, RSACRT_free_ctx, RSACRT_get_dmp1, RSACRT_init,
-    RSACRT_sign, RSACRT_verify, BIGNUM,
+    BIGNUM,
 };
 
 #[derive(Debug)]
