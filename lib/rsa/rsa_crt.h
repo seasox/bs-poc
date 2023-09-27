@@ -6,20 +6,15 @@
 #define RSA_CRT_SIGNATURE_RSA_CRT_H
 
 #include <stddef.h>
-#include <openssl/rsa.h>
 
-/// WARNING! OpenSSL defines evp_pkey_st as an opaque type. Since we need to know the struct's offset, we
-
-typedef struct RSACRT_ctx {
-  RSA *sk;
-  RSA *pk;
-} RSACRT_ctx_t;
+typedef struct bignum_st BIGNUM;
+typedef struct RSACRT_ctx RSACRT_ctx_t;
 
 extern int RSACRT_check_openssl_version(void);
 
 extern int RSACRT_alloc(RSACRT_ctx_t **out);
 
-extern int RSACRT_init(BN_ULONG *vuln_mem, RSACRT_ctx_t *out);
+extern int RSACRT_init(unsigned long *vuln_mem, RSACRT_ctx_t *out);
 
 /**
  * Returns 1 on success and 0 for failure

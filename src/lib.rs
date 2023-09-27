@@ -25,7 +25,6 @@ mod tests {
             let ctx = libc::malloc(std::mem::size_of::<RSACRT_ctx_t>()) as *mut RSACRT_ctx_t;
             let ret = RSACRT_init(dmp_mem as *mut libc::c_ulong, ctx);
             assert_eq!(ret, 0);
-            assert_ne!((*ctx).sk, std::ptr::null_mut());
             let msg = "hello world".to_string();
             let mut sig = std::mem::MaybeUninit::uninit();
             let mut siglen = std::mem::MaybeUninit::uninit();

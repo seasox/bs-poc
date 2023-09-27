@@ -24,6 +24,11 @@ struct __attribute__((unused)) bignum_st {
   int flags;
 };
 
+struct RSACRT_ctx {
+  RSA *sk;
+  RSA *pk;
+};
+
 int RSACRT_alloc(RSACRT_ctx_t **out) {
   *out = malloc(sizeof(RSACRT_ctx_t));
   if (*out == NULL) {
@@ -38,7 +43,7 @@ int RSACRT_check_openssl_version(void) {
          && OPENSSL_VERSION_PATCH == 2;
 }
 
-int RSACRT_init(BN_ULONG *vuln_mem, RSACRT_ctx_t *out) {
+int RSACRT_init(unsigned long *vuln_mem, RSACRT_ctx_t *out) {
   // Initialize the OpenSSL library
   OpenSSL_add_all_algorithms();
 
