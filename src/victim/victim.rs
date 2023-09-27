@@ -59,6 +59,7 @@ impl HammerVictim for HammerVictimRsa {
         //check dmp1 correct
         let ret = unsafe { RSACRT_check_dmp1(self.ctx, self.exp_dmp1.unwrap()) };
         return ret != 0;
+        /*
         let msg = "hello world";
         let mut sig = std::mem::MaybeUninit::uninit();
         let mut siglen = std::mem::MaybeUninit::uninit();
@@ -84,6 +85,7 @@ impl HammerVictim for HammerVictimRsa {
             )
         };
         ret != 1
+        */
     }
 }
 
