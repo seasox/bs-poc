@@ -81,6 +81,25 @@ pub struct Program {
 pub type JitFunction = unsafe extern "C" fn() -> u64;
 
 impl Program {
+    pub fn from_asm(mut asm: CodeAssembler, start_label: &CodeLabel) -> Result<Self> {
+        let result =
+            asm.assemble_options(0, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
+
+        let buf = &result.inner.code_buffer;
+
+        // move the assembled code into an executable memory buffer
+        let mut mem = MmapMut::map_anon(buf.len())?;
+
+        mem.deref_mut().write_all(buf)?;
+
+        Ok(Program {
+            code: mem.make_exec()?,
+            start: result.label_ip(start_label)?,
+        })
+    }
+}
+
+impl Program {
     pub unsafe fn call(&self) -> u64 {
         let jit_function_ptr = self.code.as_ptr().offset(self.start as isize);
         let function_size_bytes = self.code.len() - self.start as usize;
@@ -229,19 +248,7 @@ impl Jitter for CodeJitter {
         a.pop(rbx)?;
         a.ret()?;
 
-        let result = a.assemble_options(0, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
-
-        let buf = &result.inner.code_buffer;
-
-        // move the assembled code into an executable memory buffer
-        let mut mem = MmapMut::map_anon(buf.len())?;
-
-        mem.deref_mut().write_all(buf)?;
-
-        Ok(Program {
-            code: mem.make_exec()?,
-            start: result.label_ip(&start)?,
-        })
+        Program::from_asm(a, &start)
     }
 }
 
