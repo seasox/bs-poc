@@ -63,27 +63,32 @@ fn align_to(size: usize, align: usize) -> usize {
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
 #[derive(Debug)]
-pub(crate) struct HugePageAllocator;
+pub(crate) struct MmapAllocator {
+    use_hugepage: bool,
+}
+
+impl MmapAllocator {
+    pub fn new(use_hugepage: bool) -> Self {
+        MmapAllocator { use_hugepage }
+    }
+}
 
 #[cfg(target_arch = "x86_64")]
-unsafe impl GlobalAlloc for HugePageAllocator {
+unsafe impl GlobalAlloc for MmapAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
         let mut p = 0x2000000000 as *mut c_void;
-        p = libc::mmap(
-            p,
-            len,
-            PROT_READ | PROT_WRITE,
-            MAP_SHARED | MAP_ANONYMOUS | MAP_HUGETLB | (30 << MAP_HUGE_SHIFT),
-            -1,
-            0,
-        );
+        let mut mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
+        if self.use_hugepage {
+            mmap_flags |= MAP_HUGETLB | (30 << MAP_HUGE_SHIFT);
+        }
+        p = libc::mmap(p, len, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
 
         if p == MAP_FAILED {
             return null_mut();
         }
 
-        debug!("mmaped hugepage to 0x{:02X}", p as u64);
+        debug!("mmaped to 0x{:02X}", p as u64);
         p as *mut u8
     }
 
@@ -118,7 +123,7 @@ pub mod tests {
 
     #[test]
     fn test_allocator() {
-        let hugepage_alloc = HugePageAllocator;
+        let hugepage_alloc = MmapAllocator { use_hugepage: true };
 
         // u16.
         unsafe {

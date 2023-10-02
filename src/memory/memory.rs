@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
 
-use super::allocator::HugePageAllocator;
+use super::allocator::MmapAllocator;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -31,39 +31,9 @@ impl fmt::Display for MemoryError {
     }
 }
 
-enum Allocator {
-    HugePage(HugePageAllocator),
-    Standard,
-}
-
-unsafe impl GlobalAlloc for Allocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        match self {
-            Self::HugePage(allocator) => allocator.alloc(layout),
-            Self::Standard => std::alloc::alloc(layout),
-        }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        match self {
-            Self::HugePage(allocator) => allocator.dealloc(ptr, layout),
-            Self::Standard => std::alloc::dealloc(ptr, layout),
-        }
-    }
-}
-
-impl std::fmt::Debug for Allocator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::HugePage(_) => write!(f, "HugePage"),
-            Self::Standard => write!(f, "Standard"),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Memory {
-    allocator: Allocator,
+    allocator: MmapAllocator,
     pub addr: AggressorPtr,
     layout: Layout,
 }
@@ -72,11 +42,7 @@ impl Memory {
     const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
 
     pub fn new(size: usize, use_hugepage: bool) -> Result<Self> {
-        let allocator = if use_hugepage {
-            Allocator::HugePage(HugePageAllocator)
-        } else {
-            Allocator::Standard
-        };
+        let allocator = MmapAllocator::new(use_hugepage);
         let layout = Layout::from_size_align(size, 1)?;
         if layout.size() == 0 {
             return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
