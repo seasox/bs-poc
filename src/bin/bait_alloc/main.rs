@@ -117,9 +117,6 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
 
 // entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
 unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
-    libc::mallopt(M_ARENA_MAX, 1);
-    libc::mallopt(M_MMAP_THRESHOLD, 1);
-
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
     let waiting_sigh = waiting.clone();
@@ -127,9 +124,6 @@ unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
         waiting_sigh.store(false, Ordering::SeqCst);
     })
     .expect("ctrlc setup failed");
-
-    libc::mallopt(M_ARENA_MAX, 1);
-    libc::mallopt(M_MMAP_THRESHOLD, 0);
 
     // wait for signal
     while waiting.load(Ordering::SeqCst) {
