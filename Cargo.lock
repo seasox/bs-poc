@@ -187,11 +187,13 @@ dependencies = [
  "mt19937",
  "nalgebra",
  "pagemap",
+ "proc_getter",
  "rand",
  "serde",
  "serde-enum-str",
  "serde_json",
  "serde_with",
+ "sys-info",
 ]
 
 [[package]]
@@ -810,6 +812,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc_getter"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b95059bdc1c45e60fafb8c8dffe4c3879b59e0b27adb5e3ab006b58ea45f128"
+
+[[package]]
 name = "quote"
 version = "1.0.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1058,6 +1066,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sys-info"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b3a0d0aba8bf96a0e1ddfdc352fc53b3df7f39318c71854910c3c4b024ae52c"
+dependencies = [
+ "cc",
+ "libc",
 ]
 
 [[package]]
