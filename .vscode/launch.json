@@ -7,6 +7,54 @@
         {
             "type": "lldb",
             "request": "launch",
+            "name": "Debug bait_alloc",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=bait_alloc",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "bait_alloc",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+            ],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug bs_poc RSA",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=bs_poc",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "bs_poc",
+                    "kind": "bin"
+                }
+            },
+            "args": [
+                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--load-json=fuzz-summary.json",
+                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
+                "--hammer-mode=rsa",
+            ],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
             "name": "Debug bs_poc MemCheck",
             "cargo": {
                 "args": [
