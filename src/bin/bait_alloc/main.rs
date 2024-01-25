@@ -314,28 +314,6 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
                     v as u64
                 );
                 first_block_bytes >= 1 * MB
-                /*
-                if first_block_bytes >= 1 * MB {
-                    true
-                } else {
-                    let ranges = consecs
-                        .iter()
-                        .map(|x| String::from(&format!("{:x}", x)))
-                        .collect::<Vec<String>>()
-                        .join(",");
-                    info!("{}", ranges);
-                    //let mut ranges = String::new();
-                    /*for i in (1..consecs.len()).step_by(2) {
-                        ranges += &format!(
-                            "| 0x{:x} -- +{} -- 0x{:x} |",
-                            consecs[i - 1],
-                            (consecs[i] - consecs[i - 1]) as u64,
-                            consecs[i]
-                        );
-                        ranges += &format!("{:x},{:x}", consecs[i-1], consecs[i])
-                    }*/
-                    false
-                }*/
             }
             Err(e) => {
                 error!("PFN check failed: {:?}", e);
@@ -360,72 +338,7 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
     Ok(())
 }
 
-// allocate 4K pages until no more memory is available
-/*
-loop {
-    println!("{}", buddyinfo()?);
-    return Ok(());
-    let avail = get_mappable_memory()?;
-    if avail <= 256 * KB {
-        break;
-    }
-    let len = avail as usize;
-    println!("Will mmap {} bytes", len);
-    let v = libc::mmap(
-        null_mut(),
-        len,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE,
-        -1,
-        0,
-    );
-    //assert_eq!(libc::mlock(v, len), 0);
-    libc::memset(v, 0x11, len);
-    println!("memset done");
-    for offset in 0..len {
-        assert_eq!(*(v.add(offset) as *const u8), 0x11);
-    }
-    //let p = resolver.get_phys(v as u64).expect("get_phys");
-    //virt.push(v as u64);
-    //phys.push(p);
-}
-
-for _ in 0..10 {
-    println!("{}", read_meminfo()?);
-    let mem_info = sys_info::mem_info()?;
-    println!("{:?}", mem_info);
-    thread::sleep(std::time::Duration::from_secs(10));
-}
-
-/*
-    // compare allocated pages
-    let bait: Vec<String> = bait_phys
-        .iter()
-        .map(|p| format!("{}", p).to_string())
-        .collect();
-    let prey: Vec<String> = String::from_utf8(output.stdout)?
-        .lines()
-        .map(|s| s.to_string())
-        .collect();
-
-    let mut hit = 0;
-
-    for line in &prey {
-        if bait.contains(line) {
-            hit += 1;
-        }
-    }
-
-    println!(
-        "{}/{}: {:.03}",
-        hit,
-        prey.len(),
-        hit as f32 / prey.len() as f32
-    );
-*/
-Ok(())*/
-
-// entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
+// TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
 unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
