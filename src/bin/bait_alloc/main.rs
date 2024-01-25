@@ -1,8 +1,7 @@
 use std::{
-    cmp::min,
     env,
     io::Read,
-    process::{Command, Stdio},
+    process::Command,
     ptr::null_mut,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,9 +14,10 @@ use anyhow::{bail, Context};
 use bs_poc::memory::{LinuxPageMap, VirtToPhysResolver};
 use clap::Parser;
 use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-
 use log::{debug, error, info};
 use proc_getter::buddyinfo::*;
+use std::fs::File;
+use std::io::Write;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -34,8 +34,8 @@ enum BaitMode {
     Prey,
 }
 
-const PAGE_COUNT: usize = 1000;
-const RELEASE_COUNT: usize = 500;
+//const PAGE_COUNT: usize = 1000;
+//const RELEASE_COUNT: usize = 500;
 const PREY_PAGE_COUNT: usize = 500;
 const PAGE_LEN: usize = 4 * KB;
 
@@ -43,6 +43,7 @@ fn prog() -> Option<String> {
     env::args().next().as_ref().cloned()
 }
 
+/// Send a signal `sig` to the process `pid`
 fn signal(sig: &str, pid: u32) -> anyhow::Result<()> {
     let mut kill = Command::new("kill")
         .args(["-s", sig, &pid.to_string()])
@@ -54,30 +55,20 @@ fn signal(sig: &str, pid: u32) -> anyhow::Result<()> {
 const KB: usize = 1 << 10;
 const MB: usize = 1 << 20;
 
-fn read_meminfo() -> anyhow::Result<String> {
+/// Read /proc/pagetypeinfo to string
+fn read_pagetypeinfo() -> anyhow::Result<String> {
     let mut s = String::new();
-    let mut f = std::fs::File::open("/proc/meminfo")?;
+    let mut f = std::fs::File::open("/proc/pagetypeinfo")?;
     f.read_to_string(&mut s)?;
     Ok(s)
 }
 
-fn read_pagetypeinfo() -> String {
-    let mut s = String::new();
-    match std::fs::File::open("/proc/pagetypeinfo") {
-        Ok(mut f) => {
-            return match f.read_to_string(&mut s) {
-                Ok(_) => s,
-                Err(e) => e.to_string(),
-            }
-        }
-        Err(e) => e.to_string(),
-    }
-}
-
+/// Log /proc/pagetypeinfo to debug log
 fn log_pagetypeinfo() {
-    debug!("{}", read_pagetypeinfo());
+    debug!("{:?}", read_pagetypeinfo());
 }
 
+/// A small wrapper around buddyinfo() from proc_getter, which is not convertible to anyhow::Result
 fn get_buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
     match buddyinfo() {
         Ok(b) => Ok(b),
@@ -219,6 +210,10 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
     let hugeblock_len = 1024 * MB;
     log_pagetypeinfo();
     debug!("will alloc 1 GB block");
+    // Open the file in write mode, creating it if it doesn't exist or truncating it if it does.
+    let mut file = File::create("dmesg.log")?;
+    // Write an empty string to the file.
+    write!(file, "")?;
     let v = mmap_block(hugeblock_len);
     debug!("1 GB allocated");
     let mut pages = [null_mut(); 50000];
@@ -255,44 +250,28 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
     v1.context("Block allocation failed")
 }
 
-unsafe fn check_consecutive_2mb_block(
+unsafe fn get_consec_pfns(
     resolver: &mut LinuxPageMap,
     v: *const libc::c_void,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<u64>> {
     if (v as u64) & 0xFFF != 0 {
         bail!("Address is not page-aligned: 0x{:x}", v as u64);
     }
-    debug!("Check v1 has consecutive PFNs");
-    let mut phys_prev = resolver.get_phys(v as u64)? - PAGE_LEN as u64;
-    let mut success = true;
+    debug!("Get consecutive PFNs for vaddr 0x{:x}", v as u64);
+    let mut phys_prev = resolver.get_phys(v as u64)?;
     let mut consecs = vec![phys_prev];
-    for offset in (0..2 * MB).step_by(PAGE_LEN) {
+    for offset in (PAGE_LEN..2 * MB).step_by(PAGE_LEN) {
         let virt = (v as *const u8).add(offset);
         let phys = resolver.get_phys(virt as u64)?;
         if phys != phys_prev + PAGE_LEN as u64 {
             consecs.push(phys_prev);
             consecs.push(phys);
-            //error!("{}: {}, {}", offset, phys_prev, phys);
-            success = false;
         }
         phys_prev = phys;
     }
+    consecs.push(phys_prev);
     debug!("PFN check done");
-    if success {
-        Ok(())
-    } else {
-        consecs.push(phys_prev);
-        let mut ranges = String::new();
-        for i in (1..consecs.len()).step_by(2) {
-            ranges += &format!(
-                "| 0x{:x} -- +{} -- 0x{:x} |",
-                consecs[i - 1],
-                (consecs[i] - consecs[i - 1]) as u64,
-                consecs[i]
-            );
-        }
-        bail!("{:?}", ranges)
-    }
+    Ok(consecs)
 }
 
 unsafe fn mode_monitor_buddyinfo() -> anyhow::Result<()> {
@@ -324,16 +303,42 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
             .args(["--mode", "prey"])
             .spawn()?;*/
         let v = mmap_consecutive_2mb_block()?;
-        let success = match check_consecutive_2mb_block(&mut resolver, v) {
-            Ok(_) => {
+        let consecs = get_consec_pfns(&mut resolver, v);
+        let success = match &consecs {
+            Ok(consecs) => {
+                info!("PFNs {:?}", consecs);
+                let first_block_bytes = (consecs[1] - consecs[0]) as usize;
                 info!(
-                    "Successfully allocated a consecutive 2MB block at 0x{:x}",
+                    "Allocated a consecutive {} KB block at 0x{:x}",
+                    first_block_bytes / 1024,
                     v as u64
                 );
-                true
+                first_block_bytes >= 1 * MB
+                /*
+                if first_block_bytes >= 1 * MB {
+                    true
+                } else {
+                    let ranges = consecs
+                        .iter()
+                        .map(|x| String::from(&format!("{:x}", x)))
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    info!("{}", ranges);
+                    //let mut ranges = String::new();
+                    /*for i in (1..consecs.len()).step_by(2) {
+                        ranges += &format!(
+                            "| 0x{:x} -- +{} -- 0x{:x} |",
+                            consecs[i - 1],
+                            (consecs[i] - consecs[i - 1]) as u64,
+                            consecs[i]
+                        );
+                        ranges += &format!("{:x},{:x}", consecs[i-1], consecs[i])
+                    }*/
+                    false
+                }*/
             }
             Err(e) => {
-                error!("{:?}", e);
+                error!("PFN check failed: {:?}", e);
                 false
             }
         };
@@ -342,7 +347,7 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
             successes += 1;
         }
         info!(
-            "Success rate: {}/{}: {:.02}",
+            "Success rate (>= 1 MB): {}/{}: {:.02}",
             successes,
             retries + 1,
             successes as f32 / (retries + 1) as f32,
