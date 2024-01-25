@@ -34,8 +34,8 @@ enum BaitMode {
     Prey,
 }
 
-//const PAGE_COUNT: usize = 1000;
-//const RELEASE_COUNT: usize = 500;
+const PAGE_COUNT: usize = 1000;
+const RELEASE_COUNT: usize = 500;
 const PREY_PAGE_COUNT: usize = 500;
 const PAGE_LEN: usize = 4 * KB;
 
@@ -264,12 +264,12 @@ unsafe fn get_consec_pfns(
         let virt = (v as *const u8).add(offset);
         let phys = resolver.get_phys(virt as u64)?;
         if phys != phys_prev + PAGE_LEN as u64 {
-            consecs.push(phys_prev);
+            consecs.push(phys_prev + PAGE_LEN as u64);
             consecs.push(phys);
         }
         phys_prev = phys;
     }
-    consecs.push(phys_prev);
+    consecs.push(phys_prev + PAGE_LEN as u64);
     debug!("PFN check done");
     Ok(consecs)
 }
