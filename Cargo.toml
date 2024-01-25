@@ -40,3 +40,5 @@ features = ["code_asm"]
 
 [build-dependencies]
 bindgen = "0.66.1"
+cc = "1.0"
+

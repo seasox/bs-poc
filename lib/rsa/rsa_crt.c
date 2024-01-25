@@ -10,8 +10,8 @@
 #include <openssl/sha.h>
 #include <assert.h>
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+//#pragma clang diagnostic push
+//#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 
 struct __attribute__((unused)) bignum_st {
@@ -134,4 +134,4 @@ void RSACRT_free_ctx(RSACRT_ctx_t *ctx) {
   RSA_free(ctx->pk);
 }
 
-#pragma clang diagnostic pop
+//#pragma clang diagnostic pop

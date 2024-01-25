@@ -2,18 +2,32 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    // Tell cargo to look for shared libraries in the specified directory
-    println!("cargo:rustc-link-search=native=lib/rsa");
-
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
+    // Tell cargo to tell rustc to link the rsa_crt and crypto libraries
     println!("cargo:rustc-link-lib=rsa_crt");
     println!("cargo:rustc-link-lib=crypto");
 
-    // Tell cargo to invalidate the built crate whenever the wrapper changes
+    // Tell cargo to invalidate the built crate whenever the RSA lib or OpenSSL changes
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-changed=lib/rsa/rsa_crt.c");
+    println!("cargo:rerun-if-changed=rsa_crt.h");
+    println!("cargo:rerun-if-env-changed=OPENSSL_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=OPENSSL_INCLUDE_DIR");
 
-    println!("cargo:rustc-link-arg=-Wl,-rpath,/home/rowhammer/rowhammer-jb/bs-poc/lib/rsa");
+    cc::Build::new()
+        .file("lib/rsa/rsa_crt.c")
+        .include("/usr/include")
+        .flag("-Wno-deprecated-declarations")
+        .compile("librsa_crt.a");
+
+    // Link with OpenSSL library
+
+    if let Ok(lib_dir) = std::env::var("OPENSSL_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={}", lib_dir);
+    }
+
+    if let Ok(include_dir) = std::env::var("OPENSSL_INCLUDE_DIR") {
+        println!("cargo:include={}", include_dir);
+    }
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
