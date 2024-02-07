@@ -14,17 +14,19 @@ use anyhow::{bail, Context};
 use bs_poc::memory::{LinuxPageMap, VirtToPhysResolver};
 use clap::Parser;
 use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use log::{debug, error, info};
+use log::{debug, info};
 use proc_getter::buddyinfo::*;
 use std::fs::File;
 use std::io::Write;
 
-/// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
 struct CliArgs {
     ///The bait-alloc mode.
     #[clap(long = "mode", default_value = "bait")]
     mode: BaitMode,
+    /// The consecutive check mode.
+    #[clap(long = "check-mode", default_value = "pfn")]
+    check_mode: CheckConsecutiveMode,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -32,6 +34,12 @@ enum BaitMode {
     Bait,
     MonitorBuddyInfo,
     Prey,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum CheckConsecutiveMode {
+    Pfn,
+    None,
 }
 
 const PAGE_COUNT: usize = 1000;
@@ -250,28 +258,58 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
     v1.context("Block allocation failed")
 }
 
-unsafe fn get_consec_pfns(
-    resolver: &mut LinuxPageMap,
-    v: *const libc::c_void,
-) -> anyhow::Result<Vec<u64>> {
-    if (v as u64) & 0xFFF != 0 {
-        bail!("Address is not page-aligned: 0x{:x}", v as u64);
+trait CheckConsecutiveBlock {
+    unsafe fn check_consecutive_block(
+        &self,
+        v: *const libc::c_void,
+        min_size: usize,
+    ) -> anyhow::Result<bool>;
+}
+
+impl CheckConsecutiveBlock for CheckConsecutiveMode {
+    unsafe fn check_consecutive_block(
+        &self,
+        v: *const libc::c_void,
+        min_size: usize,
+    ) -> anyhow::Result<bool> {
+        return match self {
+            Self::Pfn => {
+                /// get the first block of consecutive PFNs of a given allocation (requires root)
+                unsafe fn get_consec_pfns(v: *const libc::c_void) -> anyhow::Result<Vec<u64>> {
+                    let mut resolver = LinuxPageMap::new()?;
+                    if (v as u64) & 0xFFF != 0 {
+                        bail!("Address is not page-aligned: 0x{:x}", v as u64);
+                    }
+                    debug!("Get consecutive PFNs for vaddr 0x{:x}", v as u64);
+                    let mut phys_prev = resolver.get_phys(v as u64)?;
+                    let mut consecs = vec![phys_prev];
+                    for offset in (PAGE_LEN..2 * MB).step_by(PAGE_LEN) {
+                        let virt = (v as *const u8).add(offset);
+                        let phys = resolver.get_phys(virt as u64)?;
+                        if phys != phys_prev + PAGE_LEN as u64 {
+                            consecs.push(phys_prev + PAGE_LEN as u64);
+                            consecs.push(phys);
+                        }
+                        phys_prev = phys;
+                    }
+                    consecs.push(phys_prev + PAGE_LEN as u64);
+                    debug!("PFN check done");
+                    Ok(consecs)
+                }
+
+                let consecs = get_consec_pfns(v)?;
+                info!("PFNs {:?}", consecs);
+                let first_block_bytes = (consecs[1] - consecs[0]) as usize;
+                info!(
+                    "Allocated a consecutive {} KB block at 0x{:x}",
+                    first_block_bytes / 1024,
+                    v as u64
+                );
+                Ok(first_block_bytes >= min_size)
+            }
+            Self::None => Ok(true),
+        };
     }
-    debug!("Get consecutive PFNs for vaddr 0x{:x}", v as u64);
-    let mut phys_prev = resolver.get_phys(v as u64)?;
-    let mut consecs = vec![phys_prev];
-    for offset in (PAGE_LEN..2 * MB).step_by(PAGE_LEN) {
-        let virt = (v as *const u8).add(offset);
-        let phys = resolver.get_phys(virt as u64)?;
-        if phys != phys_prev + PAGE_LEN as u64 {
-            consecs.push(phys_prev + PAGE_LEN as u64);
-            consecs.push(phys);
-        }
-        phys_prev = phys;
-    }
-    consecs.push(phys_prev + PAGE_LEN as u64);
-    debug!("PFN check done");
-    Ok(consecs)
 }
 
 unsafe fn mode_monitor_buddyinfo() -> anyhow::Result<()> {
@@ -287,7 +325,7 @@ unsafe fn mode_monitor_buddyinfo() -> anyhow::Result<()> {
 }
 
 // next: spezifischen speicherbereich unterschieben
-unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
+unsafe fn mode_bait(checker: CheckConsecutiveMode) -> anyhow::Result<()> {
     //let mut virt = vec![0_u64; 1 << 30];
     //let mut phys = vec![0_u64; 1 << 30];
 
@@ -303,23 +341,7 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
             .args(["--mode", "prey"])
             .spawn()?;*/
         let v = mmap_consecutive_2mb_block()?;
-        let consecs = get_consec_pfns(&mut resolver, v);
-        let success = match &consecs {
-            Ok(consecs) => {
-                info!("PFNs {:?}", consecs);
-                let first_block_bytes = (consecs[1] - consecs[0]) as usize;
-                info!(
-                    "Allocated a consecutive {} KB block at 0x{:x}",
-                    first_block_bytes / 1024,
-                    v as u64
-                );
-                first_block_bytes >= 1 * MB
-            }
-            Err(e) => {
-                error!("PFN check failed: {:?}", e);
-                false
-            }
-        };
+        let success = checker.check_consecutive_block(v, 1 * MB)?;
         libc::munmap(v, 2 * MB);
         if success {
             successes += 1;
@@ -338,7 +360,6 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
     Ok(())
 }
 
-// TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
 unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
@@ -395,7 +416,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     let resolver = LinuxPageMap::new()?;
 
     match args.mode {
-        BaitMode::Bait => mode_bait(resolver),
+        BaitMode::Bait => mode_bait(args.check_mode),
         BaitMode::Prey => mode_prey(resolver),
         BaitMode::MonitorBuddyInfo => mode_monitor_buddyinfo(),
     }
