@@ -20,7 +20,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=config/fuzz-summary_small.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
             ],
@@ -45,7 +45,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=rsa",
@@ -71,7 +71,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=config/fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=mem-check",
@@ -97,7 +97,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=rsa",
@@ -124,7 +124,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=mem-check",
@@ -151,7 +151,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--load-json=fuzz-summary.json",
                 "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
                 "--hammer-mode=rsa",
@@ -177,7 +177,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--use-hugepage"
             ],
             "env": {
@@ -202,7 +202,7 @@
                 }
             },
             "args": [
-                "--config=esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
                 "--use-hugepage"
             ],
             "env": {
