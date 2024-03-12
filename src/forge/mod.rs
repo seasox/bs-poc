@@ -2,4 +2,7 @@
 
 mod hammerer;
 
-pub use self::hammerer::{DummyHammerer, HammerResult, HammerVictim, Hammerer, Hammering};
+pub use self::hammerer::{
+    load_pattern_from_json, DummyHammerer, HammerResult, HammerVictim, Hammerer, Hammering,
+    HammeringPattern, PatternAddressMapper,
+};

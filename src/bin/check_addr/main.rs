@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bs_poc::jitter::AggressorPtr;
-use bs_poc::memory::construct_memory_tuple_timer;
+use bs_poc::memory::{construct_memory_tuple_timer, VictimMemory};
 use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
 
@@ -26,7 +26,7 @@ fn main() -> Result<()> {
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
     let memory = Memory::new(MEM_SIZE, args.use_hugepage)?;
-    let base_msb = memory.addr as AggressorPtr;
+    let base_msb = memory.addr(0) as AggressorPtr;
     println!("base_msb: {:?}", base_msb);
 
     let start_addr = DRAMAddr::from_virt(base_msb, &mem_config);

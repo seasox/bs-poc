@@ -7,4 +7,6 @@ pub use self::allocator::{LinuxPageMap, VirtToPhysResolver};
 pub use self::dram_addr::DRAMAddr;
 pub use self::memory::BitFlip;
 pub use self::memory::Memory;
+pub use self::memory::PreAllocatedVictimMemory;
+pub use self::memory::VictimMemory;
 pub use self::timer::construct_memory_tuple_timer;

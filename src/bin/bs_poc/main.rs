@@ -1,10 +1,9 @@
 use anyhow::{bail, Context, Result};
-use bs_poc::forge::{DummyHammerer, HammerVictim, Hammerer, Hammering};
-use bs_poc::memory::{BitFlip, LinuxPageMap, Memory, VirtToPhysResolver};
+use bs_poc::forge::{load_pattern_from_json, DummyHammerer, HammerVictim, Hammerer, Hammering};
+use bs_poc::memory::{LinuxPageMap, Memory, VictimMemory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use bs_poc::victim::HammerVictimRsa;
+use bs_poc::victim::{HammerVictimMemCheck, HammerVictimRsa};
 use clap::Parser;
-use rand::rngs::StdRng;
 use std::fmt::Debug;
 
 #[macro_use]
@@ -22,6 +21,9 @@ struct CliArgs {
     /// The pattern ID to load from the JSON file
     #[clap(long = "pattern")]
     pattern: String,
+    /// The mapping ID to load from the JSON file (optional)
+    #[clap(long = "mapping")]
+    mapping: Option<String>,
     /// The hammering mode to use. Set to memcheck for bit flip check or rsa for RSA-CRT attack
     #[clap(long = "hammer-mode")]
     hammer_mode: HammerMode,
@@ -37,51 +39,6 @@ struct CliArgs {
 enum HammerMode {
     MemCheck,
     Rsa,
-}
-
-#[derive(Debug)]
-struct HammerVictimMemCheck<'a> {
-    mem_config: MemConfiguration,
-    memory: &'a Memory,
-    seed: Option<[u8; 32]>,
-    flips: Vec<BitFlip>,
-}
-
-impl<'a> HammerVictimMemCheck<'a> {
-    fn new(mem_config: MemConfiguration, memory: &'a Memory) -> Self {
-        HammerVictimMemCheck {
-            mem_config,
-            memory,
-            seed: None,
-            flips: vec![],
-        }
-    }
-}
-
-impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
-    fn init(&mut self) {
-        let seed = rand::random();
-        self.memory.initialize::<StdRng>(seed);
-        self.seed = Some(seed);
-    }
-
-    fn check(&mut self) -> bool {
-        self.flips = self.memory.check::<StdRng>(
-            self.mem_config,
-            self.seed.with_context(|| "no seed").unwrap(),
-        );
-        !self.flips.is_empty()
-    }
-
-    fn log_report(&self) {
-        let virt_addrs: Vec<String> = self
-            .flips
-            .iter()
-            .map(|bf| bf.dram_addr.to_virt(self.memory.addr, self.mem_config))
-            .map(|addr| format!("0x{:02X}", addr as usize))
-            .collect();
-        info!("Addresses with flips: {:?}", virt_addrs);
-    }
 }
 
 fn main() -> Result<()> {
@@ -104,7 +61,7 @@ fn main() -> Result<()> {
     info!("allocated {} B of memory", MEM_SIZE);
 
     let mut resolver = LinuxPageMap::new()?;
-    let phys = resolver.get_phys(memory.addr as u64);
+    let phys = resolver.get_phys(memory.addr(0) as u64);
     match phys {
         Ok(phys) => info!("phys base_msb: 0x{:02X}", phys),
         Err(err) => warn!("Failed to determine physical address: {}", err),
@@ -115,13 +72,24 @@ fn main() -> Result<()> {
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let offset = 0x17B31343;
     let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
-        Box::new(DummyHammerer::new(memory.addr.clone() as *mut u8, offset))
+        Box::new(DummyHammerer::new(
+            memory.addr(0).clone() as *mut u8,
+            offset,
+        ))
     } else {
+        // load patterns from JSON
+        let pattern = load_pattern_from_json(args.load_json.clone(), args.pattern.clone())?;
+        let mapping = match args.mapping {
+            Some(mapping) => pattern.find_mapping(&mapping).expect("mapping not found"),
+            None => pattern
+                .determine_most_effective_mapping()
+                .expect("pattern contains no mapping"),
+        };
         Box::new(Hammerer::new(
             mem_config,
-            args.load_json.clone(),
-            args.pattern.clone(),
-            memory.addr.clone(),
+            pattern,
+            mapping,
+            memory.addr(0).clone(),
         )?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
@@ -136,6 +104,6 @@ fn main() -> Result<()> {
             "Successful at run {} after {} attempts",
             result.run, result.attempt,
         );
-        victim.log_report();
+        victim.log_report(memory.addr(0));
     }
 }

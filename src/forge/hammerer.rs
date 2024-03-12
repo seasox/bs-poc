@@ -16,7 +16,7 @@ pub trait Hammering {
 }
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone)]
-struct Aggressor(u64);
+pub struct Aggressor(u64);
 
 #[derive(Deserialize, Debug, Clone)]
 struct AggressorAccessPattern {
@@ -27,22 +27,22 @@ struct AggressorAccessPattern {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct BitFlip {
-    dram_addr: DRAMAddr,
+pub struct BitFlip {
+    pub dram_addr: DRAMAddr,
     bitmask: u8,
     data: u8,
 }
 
 #[serde_as]
 #[derive(Deserialize, Debug, Clone)]
-struct PatternAddressMapper {
-    id: String,
-    min_row: usize,
-    max_row: usize,
-    bank_no: usize,
+pub struct PatternAddressMapper {
+    pub id: String,
+    pub min_row: usize,
+    pub max_row: usize,
+    pub bank_no: usize,
     #[serde_as(as = "Vec<(_, _)>")]
-    aggressor_to_addr: HashMap<Aggressor, DRAMAddr>,
-    bit_flips: Vec<Vec<BitFlip>>,
+    pub aggressor_to_addr: HashMap<Aggressor, DRAMAddr>,
+    pub bit_flips: Vec<Vec<BitFlip>>,
     code_jitter: CodeJitter,
 }
 
@@ -81,7 +81,7 @@ struct FuzzSummary {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-struct HammeringPattern {
+pub struct HammeringPattern {
     id: String,
     base_period: i32,
     max_period: usize,
@@ -95,24 +95,32 @@ struct HammeringPattern {
 }
 
 impl HammeringPattern {
-    fn determine_most_effective_mapping(&mut self) -> Option<PatternAddressMapper> {
+    pub fn determine_most_effective_mapping(&self) -> Option<PatternAddressMapper> {
         self.address_mappings
-            .iter_mut()
+            .iter()
             .max_by_key(|m| m.bit_flips.len())
+            .cloned()
+    }
+
+    pub fn find_mapping(&self, mapping_id: &str) -> Option<PatternAddressMapper> {
+        self.address_mappings
+            .iter()
+            .find(|m| m.id == mapping_id)
             .cloned()
     }
 }
 
+#[derive(Debug)]
 pub struct HammerResult {
     pub run: u64,
     pub attempt: u64,
 }
 
-pub trait HammerVictim: Debug {
+pub trait HammerVictim {
     fn init(&mut self) {}
     /// returns true if flip was successful
     fn check(&mut self) -> bool;
-    fn log_report(&self) {}
+    fn log_report(&self, _base_msb: AggressorPtr) {}
 }
 
 pub struct DummyHammerer {
@@ -145,7 +153,7 @@ impl Hammering for DummyHammerer {
         if result {
             return Ok(HammerResult { run: 0, attempt: 0 });
         }
-        bail!("No success")
+        bail!("Hammering not successful")
     }
 }
 
@@ -159,24 +167,12 @@ pub struct Hammerer {
 impl Hammerer {
     pub fn new(
         mem_config: MemConfiguration,
-        json_filename: String,
-        pattern_id: String,
+        pattern: HammeringPattern,
+        mapping: PatternAddressMapper,
         base_msb: AggressorPtr,
     ) -> Result<Self> {
-        // load patterns from JSON
-        let mut pattern = load_pattern_from_json(json_filename, pattern_id)?;
-
-        let mapping: &mut PatternAddressMapper = &mut pattern
-            .determine_most_effective_mapping()
-            .with_context(|| "pattern contains no mappings")?;
-
-        info!("Determined most effective mapping.");
-        /*for victim in &mapping.victim_rows {
-            info!(
-                "Found expected victim row {:?}",
-                DRAMAddr::from_virt((*victim) as *const u8, &mem_config),
-            )
-        }*/
+        info!("Using pattern {}", pattern.id);
+        info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr| {
             debug!(
@@ -268,7 +264,10 @@ impl Hammering for Hammerer {
 }
 
 /// Load patterns from a file, filtering for given pattern_ids
-fn load_pattern_from_json(json_filename: String, pattern_id: String) -> Result<HammeringPattern> {
+pub fn load_pattern_from_json(
+    json_filename: String,
+    pattern_id: String,
+) -> Result<HammeringPattern> {
     let f = File::open(&json_filename)?;
     let reader = BufReader::new(f);
     let patterns: FuzzSummary = serde_json::from_reader(reader)?;

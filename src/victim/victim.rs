@@ -1,11 +1,14 @@
 use std::ptr::null_mut;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 
 use crate::{
-    forge::HammerVictim, memory::Memory, RSACRT_alloc, RSACRT_check_dmp1,
-    RSACRT_check_openssl_version, RSACRT_ctx_t, RSACRT_free_ctx, RSACRT_get_dmp1, RSACRT_init,
-    BIGNUM,
+    forge::HammerVictim,
+    jitter::AggressorPtr,
+    memory::{BitFlip, VictimMemory},
+    util::MemConfiguration,
+    RSACRT_alloc, RSACRT_check_dmp1, RSACRT_check_openssl_version, RSACRT_ctx_t, RSACRT_free_ctx,
+    RSACRT_get_dmp1, RSACRT_init, BIGNUM,
 };
 
 #[derive(Debug)]
@@ -16,7 +19,7 @@ pub struct HammerVictimRsa {
 }
 
 impl HammerVictimRsa {
-    pub fn new(memory: &Memory, offset: usize) -> anyhow::Result<Self> {
+    pub fn new(memory: &dyn VictimMemory, offset: usize) -> anyhow::Result<Self> {
         let check = unsafe { RSACRT_check_openssl_version() };
         if check != 1 {
             bail!("check version");
@@ -28,7 +31,7 @@ impl HammerVictimRsa {
         };
         Ok(HammerVictimRsa {
             ctx,
-            d: unsafe { memory.addr.add(offset) as *mut libc::c_ulong },
+            d: memory.addr(offset) as *mut libc::c_ulong,
             exp_dmp1: None,
         })
     }
@@ -92,5 +95,49 @@ impl HammerVictim for HammerVictimRsa {
 impl Drop for HammerVictimRsa {
     fn drop(&mut self) {
         unsafe { RSACRT_free_ctx(self.ctx) };
+    }
+}
+
+pub struct HammerVictimMemCheck<'a> {
+    mem_config: MemConfiguration,
+    memory: &'a dyn VictimMemory,
+    seed: Option<[u8; 32]>,
+    flips: Vec<BitFlip>,
+}
+
+impl<'a> HammerVictimMemCheck<'a> {
+    pub fn new(mem_config: MemConfiguration, memory: &'a dyn VictimMemory) -> Self {
+        HammerVictimMemCheck {
+            mem_config,
+            memory,
+            seed: None,
+            flips: vec![],
+        }
+    }
+}
+
+impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
+    fn init(&mut self) {
+        let seed = rand::random();
+        self.memory.initialize(seed);
+        self.seed = Some(seed);
+    }
+
+    fn check(&mut self) -> bool {
+        self.flips = self.memory.check(
+            self.mem_config,
+            self.seed.with_context(|| "no seed").unwrap(),
+        );
+        !self.flips.is_empty()
+    }
+
+    fn log_report(&self, base_msb: AggressorPtr) {
+        let virt_addrs: Vec<String> = self
+            .flips
+            .iter()
+            .map(|bf| bf.dram_addr.to_virt(base_msb, self.mem_config))
+            .map(|addr| format!("0x{:02X}", addr as usize))
+            .collect();
+        info!("Addresses with flips: {:?}", virt_addrs);
     }
 }

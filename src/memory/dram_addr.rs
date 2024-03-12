@@ -3,11 +3,11 @@ use std::fmt::{self, Display, Formatter};
 use crate::{jitter::AggressorPtr, util::MemConfiguration};
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DRAMAddr {
-    bank: usize,
-    row: usize,
-    col: usize,
+    pub bank: usize,
+    pub row: usize,
+    pub col: usize,
 }
 
 impl Display for DRAMAddr {
@@ -37,7 +37,7 @@ impl DRAMAddr {
 }
 
 impl DRAMAddr {
-    fn linearize(&self, mem_config: MemConfiguration) -> usize {
+    pub fn linearize(&self, mem_config: MemConfiguration) -> usize {
         (self.bank << mem_config.bk_shift)
             | (self.row << mem_config.row_shift)
             | (self.col << mem_config.col_shift)

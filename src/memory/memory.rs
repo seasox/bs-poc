@@ -1,6 +1,6 @@
 use anyhow::Result;
 use lazy_static::__Deref;
-use rand::{Rng, RngCore, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
 use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
@@ -31,10 +31,109 @@ impl fmt::Display for MemoryError {
     }
 }
 
+pub trait VictimMemory {
+    fn addr(&self, offset: usize) -> AggressorPtr;
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed);
+    fn check(
+        &self,
+        mem_config: MemConfiguration,
+        seed: <StdRng as SeedableRng>::Seed,
+    ) -> Vec<BitFlip>;
+}
+
+pub struct PreAllocatedVictimMemory {
+    addr: AggressorPtr,
+    size: usize,
+}
+
+impl PreAllocatedVictimMemory {
+    const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
+
+    pub fn new(addr: *mut u8, size: usize) -> Result<Self> {
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        unsafe { std::ptr::write_bytes(addr as *mut u8, 0, size) };
+        Ok(PreAllocatedVictimMemory { addr, size })
+    }
+}
+
+impl VictimMemory for PreAllocatedVictimMemory {
+    fn addr(&self, offset: usize) -> AggressorPtr {
+        unsafe { self.addr.add(offset) }
+    }
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
+        let addr = self.addr;
+        let mut rng = StdRng::from_seed(seed);
+
+        let num_pages = self.size / Self::PAGE_SIZE;
+        let len = self.size;
+        if len % 8 != 0 {
+            panic!("size must be divisible by 8");
+        }
+
+        debug!("initialize {} pages with pseudo-random values", num_pages);
+
+        for offset in (0..len).step_by(Self::PAGE_SIZE) {
+            let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+            for i in 0..Self::PAGE_SIZE {
+                value[i] = rng.gen();
+            }
+            unsafe {
+                std::ptr::write_volatile(addr.add(offset) as *mut [u8; Self::PAGE_SIZE], value);
+            }
+        }
+        debug!("memory init done");
+    }
+
+    fn check(
+        &self,
+        mem_config: MemConfiguration,
+        seed: <StdRng as SeedableRng>::Seed,
+    ) -> Vec<BitFlip> {
+        let mut rng = StdRng::from_seed(seed);
+        unsafe {
+            for page_no in (0..self.size).step_by(Self::PAGE_SIZE) {
+                let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+                for i in 0..Self::PAGE_SIZE {
+                    expected[i] = rng.gen();
+                }
+                _mm_clflush(self.addr.add(page_no));
+                _mm_mfence();
+                let cmp = memcmp(
+                    self.addr.add(page_no) as *const c_void,
+                    expected.as_ptr() as *const c_void,
+                    Self::PAGE_SIZE,
+                );
+                if cmp == 0 {
+                    continue;
+                }
+                debug!(
+                    "Found bitflip in page {}. Determining exact flip position",
+                    page_no
+                );
+                let mut ret = vec![];
+                for i in 0..expected.len() {
+                    let addr = self.addr.add(page_no + i);
+                    _mm_clflush(addr);
+                    _mm_mfence();
+                    if *addr != expected[i] {
+                        ret.push(BitFlip::new(
+                            DRAMAddr::from_virt(addr, &mem_config),
+                            *addr ^ expected[i],
+                            expected[i],
+                        ));
+                    }
+                }
+                return ret;
+            }
+        }
+        vec![]
+    }
+}
+
 #[derive(Debug)]
 pub struct Memory {
     allocator: MmapAllocator,
-    pub addr: AggressorPtr,
+    addr: AggressorPtr,
     layout: Layout,
 }
 
@@ -65,11 +164,16 @@ impl Memory {
             layout,
         })
     }
+}
 
-    pub fn initialize<R: RngCore + SeedableRng>(&self, seed: R::Seed) {
+impl VictimMemory for Memory {
+    fn addr(&self, offset: usize) -> AggressorPtr {
+        unsafe { self.addr.add(offset) }
+    }
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
         let layout = self.layout;
         let addr = self.addr;
-        let mut rng = R::from_seed(seed);
+        let mut rng = StdRng::from_seed(seed);
 
         let num_pages = layout.size() / Self::PAGE_SIZE;
         let len = layout.size();
@@ -91,12 +195,12 @@ impl Memory {
         debug!("memory init done");
     }
 
-    pub fn check<R: RngCore + SeedableRng>(
+    fn check(
         &self,
         mem_config: MemConfiguration,
-        seed: R::Seed,
+        seed: <StdRng as SeedableRng>::Seed,
     ) -> Vec<BitFlip> {
-        let mut rng = R::from_seed(seed);
+        let mut rng = StdRng::from_seed(seed);
         unsafe {
             for page_no in (0..self.layout.size()).step_by(Self::PAGE_SIZE) {
                 let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
