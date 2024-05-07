@@ -8,10 +8,12 @@ inherits = "release"
 debug = true
 
 [features]
-default = ["buddyinfo"]
+default = ["buddyinfo", "no_consec_check"]
 spec_hammer = []
 buddyinfo = []
 spoiler = []
+consec_check_pfn = []
+no_consec_check = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
