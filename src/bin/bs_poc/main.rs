@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use bs_poc::forge::{load_pattern_from_json, DummyHammerer, HammerVictim, Hammerer, Hammering};
+use bs_poc::forge::{DummyHammerer, HammerVictim, Hammerer, Hammering, HammeringPattern};
 use bs_poc::memory::{LinuxPageMap, Memory, VictimMemory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::{HammerVictimMemCheck, HammerVictimRsa};
@@ -78,7 +78,8 @@ fn main() -> Result<()> {
         ))
     } else {
         // load patterns from JSON
-        let pattern = load_pattern_from_json(args.load_json.clone(), args.pattern.clone())?;
+        let pattern =
+            HammeringPattern::load_pattern_from_json(args.load_json.clone(), args.pattern.clone())?;
         let mapping = match args.mapping {
             Some(mapping) => pattern.find_mapping(&mapping).expect("mapping not found"),
             None => pattern
@@ -89,6 +90,7 @@ fn main() -> Result<()> {
             mem_config,
             pattern,
             mapping,
+            todo!(),
             memory.addr(0).clone(),
         )?)
     };

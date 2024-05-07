@@ -218,6 +218,7 @@ impl ConsecAlloc for MemBlock {
         })
     }
 
+    #[cfg(feature = "consec_check_pfn")]
     unsafe fn check(&self) -> anyhow::Result<bool> {
         /*
          * Check whether the allocation is actually consecutive. The current implementation simply
@@ -226,7 +227,6 @@ impl ConsecAlloc for MemBlock {
          * in the memory block. If the measured timings correspond to the address function, it is very likely that
          * this indeed is a consecutive memory block.
          */
-        return Ok(true);
         let mut resolver = LinuxPageMap::new()?;
         if (self.ptr as u64) & 0xFFF != 0 {
             bail!("Address is not page-aligned: 0x{:x}", self.ptr as u64);
@@ -254,6 +254,11 @@ impl ConsecAlloc for MemBlock {
         );
         info!("PFNs {:?}", consecs);
         Ok(first_block_bytes >= self.len)
+    }
+
+    #[cfg(feature = "no_consec_check")]
+    unsafe fn check(&self) -> anyhow::Result<bool> {
+        Ok(true)
     }
 }
 

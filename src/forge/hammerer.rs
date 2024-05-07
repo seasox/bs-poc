@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use itertools::Itertools;
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -15,7 +16,7 @@ pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult>;
 }
 
-#[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone)]
+#[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct Aggressor(u64);
 
 #[derive(Deserialize, Debug, Clone)]
@@ -47,7 +48,7 @@ pub struct PatternAddressMapper {
 }
 
 impl PatternAddressMapper {
-    fn get_hammering_addresses(
+    pub fn get_hammering_addresses(
         &self,
         aggressors: &Vec<Aggressor>,
         base_msb: AggressorPtr,
@@ -57,6 +58,52 @@ impl PatternAddressMapper {
             .iter()
             .map(|agg| self.aggressor_to_addr[agg].to_virt(base_msb, mem_config))
             .collect()
+    }
+
+    pub fn get_hammering_addresses_relocate(
+        &self,
+        aggressors: &Vec<Aggressor>,
+        bases: &[AggressorPtr],
+        mem_config: MemConfiguration,
+    ) -> anyhow::Result<Vec<AggressorPtr>> {
+        // find mapping classes
+        let addrs: HashMap<Aggressor, DRAMAddr> = self.aggressor_to_addr.clone();
+
+        // group aggressors by prefix
+        let groups = addrs.iter().group_by(|(_, addr)| {
+            let virt = addr.to_virt(0 as *const u8, mem_config) as usize;
+            let virt = virt >> 22;
+            println!("{:?}", virt);
+            virt
+        });
+
+        let mut base_lookup: HashMap<Aggressor, usize> = HashMap::new();
+        for (i, group) in groups.into_iter().enumerate() {
+            let (_, group) = group;
+            for (aggr, _) in group {
+                base_lookup.insert(*aggr, i);
+            }
+        }
+        println!("{:?}", base_lookup);
+
+        assert_eq!(
+            bases.len() - 1,
+            *base_lookup
+                .iter()
+                .map(|(_, idx)| idx)
+                .max()
+                .context("no base lookup")?,
+            "bases len mismatch"
+        );
+
+        Ok(aggressors
+            .iter()
+            .map(|agg| {
+                let addr = &addrs[agg];
+                let base = bases[base_lookup[agg]];
+                addr.to_virt(base, mem_config)
+            })
+            .collect())
     }
 
     fn get_random_nonaccessed_rows(
@@ -82,16 +129,46 @@ struct FuzzSummary {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct HammeringPattern {
-    id: String,
+    pub id: String,
     base_period: i32,
     max_period: usize,
     total_activations: u32,
     num_refresh_intervals: u32,
     is_location_dependent: bool,
-    access_ids: Vec<Aggressor>,
+    pub access_ids: Vec<Aggressor>,
     agg_access_patterns: Vec<AggressorAccessPattern>,
-    address_mappings: Vec<PatternAddressMapper>,
+    pub address_mappings: Vec<PatternAddressMapper>,
     //code_jitter: CodeJitter,
+}
+
+impl HammeringPattern {
+    pub fn load_patterns(json_filename: String) -> Result<Vec<HammeringPattern>> {
+        let f = File::open(&json_filename)?;
+        let reader = BufReader::new(f);
+        let patterns: FuzzSummary = serde_json::from_reader(reader)?;
+        Ok(patterns.hammering_patterns)
+    }
+
+    /// Load patterns from a file, filtering for given pattern_ids
+    pub fn load_pattern_from_json(
+        json_filename: String,
+        pattern_id: String,
+    ) -> Result<HammeringPattern> {
+        let f = File::open(&json_filename)?;
+        let reader = BufReader::new(f);
+        let patterns: FuzzSummary = serde_json::from_reader(reader)?;
+        Ok(patterns
+            .hammering_patterns
+            .into_iter()
+            .find(|p| pattern_id.eq(&p.id))
+            .with_context(|| {
+                format!(
+                    "did not find pattern with id {} in {}",
+                    pattern_id.clone(),
+                    json_filename
+                )
+            })?)
+    }
 }
 
 impl HammeringPattern {
@@ -169,6 +246,7 @@ impl Hammerer {
         mem_config: MemConfiguration,
         pattern: HammeringPattern,
         mapping: PatternAddressMapper,
+        hammering_addrs: &[AggressorPtr],
         base_msb: AggressorPtr,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
@@ -182,10 +260,6 @@ impl Hammerer {
                 DRAMAddr::from_virt(addr, &mem_config)
             );
         };
-
-        let hammering_addrs =
-            mapping.get_hammering_addresses(&pattern.access_ids, base_msb, mem_config);
-        drop(pattern.access_ids);
 
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
 
@@ -261,25 +335,4 @@ impl Hammering for Hammerer {
         }
         bail!("No success")
     }
-}
-
-/// Load patterns from a file, filtering for given pattern_ids
-pub fn load_pattern_from_json(
-    json_filename: String,
-    pattern_id: String,
-) -> Result<HammeringPattern> {
-    let f = File::open(&json_filename)?;
-    let reader = BufReader::new(f);
-    let patterns: FuzzSummary = serde_json::from_reader(reader)?;
-    Ok(patterns
-        .hammering_patterns
-        .into_iter()
-        .find(|p| pattern_id.eq(&p.id))
-        .with_context(|| {
-            format!(
-                "did not find pattern with id {} in {}",
-                pattern_id.clone(),
-                json_filename
-            )
-        })?)
 }

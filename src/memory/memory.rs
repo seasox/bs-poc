@@ -5,7 +5,7 @@ use std::fmt::Debug;
 
 use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
 
-use super::allocator::MmapAllocator;
+use super::{allocator::MmapAllocator, MemBlock};
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -42,43 +42,49 @@ pub trait VictimMemory {
 }
 
 pub struct PreAllocatedVictimMemory {
-    addr: AggressorPtr,
-    size: usize,
+    blocks: Vec<MemBlock>,
 }
 
 impl PreAllocatedVictimMemory {
     const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
 
-    pub fn new(addr: *mut u8, size: usize) -> Result<Self> {
+    pub fn new(blocks: Vec<MemBlock>) -> Result<Self> {
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        unsafe { std::ptr::write_bytes(addr as *mut u8, 0, size) };
-        Ok(PreAllocatedVictimMemory { addr, size })
+        for block in &blocks {
+            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
+        }
+        Ok(PreAllocatedVictimMemory { blocks })
     }
 }
 
 impl VictimMemory for PreAllocatedVictimMemory {
-    fn addr(&self, offset: usize) -> AggressorPtr {
-        unsafe { self.addr.add(offset) }
+    fn addr(&self, _offset: usize) -> AggressorPtr {
+        //unsafe { self.addr.add(offset) }
+        todo!("not implemented");
     }
     fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
-        let addr = self.addr;
         let mut rng = StdRng::from_seed(seed);
 
-        let num_pages = self.size / Self::PAGE_SIZE;
-        let len = self.size;
-        if len % 8 != 0 {
-            panic!("size must be divisible by 8");
-        }
-
-        debug!("initialize {} pages with pseudo-random values", num_pages);
-
-        for offset in (0..len).step_by(Self::PAGE_SIZE) {
-            let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-            for i in 0..Self::PAGE_SIZE {
-                value[i] = rng.gen();
+        for block in &self.blocks {
+            let num_pages = block.len / Self::PAGE_SIZE;
+            let len = block.len;
+            if len % 8 != 0 {
+                panic!("size must be divisible by 8");
             }
-            unsafe {
-                std::ptr::write_volatile(addr.add(offset) as *mut [u8; Self::PAGE_SIZE], value);
+
+            debug!("initialize {} pages with pseudo-random values", num_pages);
+
+            for offset in (0..len).step_by(Self::PAGE_SIZE) {
+                let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+                for i in 0..Self::PAGE_SIZE {
+                    value[i] = rng.gen();
+                }
+                unsafe {
+                    std::ptr::write_volatile(
+                        block.ptr.add(offset) as *mut [u8; Self::PAGE_SIZE],
+                        value,
+                    );
+                }
             }
         }
         debug!("memory init done");
@@ -91,39 +97,41 @@ impl VictimMemory for PreAllocatedVictimMemory {
     ) -> Vec<BitFlip> {
         let mut rng = StdRng::from_seed(seed);
         unsafe {
-            for page_no in (0..self.size).step_by(Self::PAGE_SIZE) {
-                let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-                for i in 0..Self::PAGE_SIZE {
-                    expected[i] = rng.gen();
-                }
-                _mm_clflush(self.addr.add(page_no));
-                _mm_mfence();
-                let cmp = memcmp(
-                    self.addr.add(page_no) as *const c_void,
-                    expected.as_ptr() as *const c_void,
-                    Self::PAGE_SIZE,
-                );
-                if cmp == 0 {
-                    continue;
-                }
-                debug!(
-                    "Found bitflip in page {}. Determining exact flip position",
-                    page_no
-                );
-                let mut ret = vec![];
-                for i in 0..expected.len() {
-                    let addr = self.addr.add(page_no + i);
-                    _mm_clflush(addr);
-                    _mm_mfence();
-                    if *addr != expected[i] {
-                        ret.push(BitFlip::new(
-                            DRAMAddr::from_virt(addr, &mem_config),
-                            *addr ^ expected[i],
-                            expected[i],
-                        ));
+            for block in &self.blocks {
+                for page_no in (0..block.len).step_by(Self::PAGE_SIZE) {
+                    let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
+                    for i in 0..Self::PAGE_SIZE {
+                        expected[i] = rng.gen();
                     }
+                    _mm_clflush(block.ptr.add(page_no));
+                    _mm_mfence();
+                    let cmp = memcmp(
+                        block.ptr.add(page_no) as *const c_void,
+                        expected.as_ptr() as *const c_void,
+                        Self::PAGE_SIZE,
+                    );
+                    if cmp == 0 {
+                        continue;
+                    }
+                    debug!(
+                        "Found bitflip in page {}. Determining exact flip position",
+                        page_no
+                    );
+                    let mut ret = vec![];
+                    for i in 0..expected.len() {
+                        let addr = block.ptr.add(page_no + i);
+                        _mm_clflush(addr);
+                        _mm_mfence();
+                        if *addr != expected[i] {
+                            ret.push(BitFlip::new(
+                                DRAMAddr::from_virt(addr, &mem_config),
+                                *addr ^ expected[i],
+                                expected[i],
+                            ));
+                        }
+                    }
+                    return ret;
                 }
-                return ret;
             }
         }
         vec![]

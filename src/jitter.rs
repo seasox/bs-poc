@@ -136,7 +136,7 @@ impl Jitter for CodeJitter {
 
         a.set_label(&mut start)?;
 
-        a.push(rbx)?;
+        //a.push(rbx)?;
 
         let num_timed_accesses: usize = self.num_aggs_for_sync;
         let total_activations = self.total_activations;
