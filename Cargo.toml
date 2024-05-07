@@ -11,6 +11,7 @@ debug = true
 default = ["buddyinfo"]
 spec_hammer = []
 buddyinfo = []
+spoiler = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -42,4 +43,4 @@ features = ["code_asm"]
 [build-dependencies]
 bindgen = "0.66.1"
 cc = "1.0"
-
+glob = "0.3.1"
