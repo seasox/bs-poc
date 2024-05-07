@@ -15,27 +15,34 @@ BS_FLAGS+=--load-json=${FUZZ_CONF}
 BS_FLAGS+=--pattern=${PATTERN}
 #BS_FLAGS+=--mapping=${MAPPING}
 
-LOG_LEVEL=info
+PROFILE=debug
+CARGO_FLAGS=
+# CARGO_FLAGS=--release
+
+LOG_LEVEL=debug
 
 LOGGER=RUST_LOG=${LOG_LEVEL}
 
 SUDO=sudo -E taskset -c 1 
 
 all:
-	cargo build --release
+	cargo build ${CARGO_FLAGS}
 
 bait_alloc: all
-	${LOGGER} ${SUDO} target/release/bait_alloc ${BS_FLAGS}
+	${LOGGER} ${SUDO} target/${PROFILE}/bait_alloc ${BS_FLAGS}
 
 bs_poc: all
-	${LOGGER} ${SUDO} target/release/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority
+	${LOGGER} ${SUDO} target/${PROFILE}/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority
 
 bs_poc-dummy: all
-	${LOGGER} ${SUDO} target/release/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority --dummy-hammerer
+	${LOGGER} ${SUDO} target/${PROFILE}/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority --dummy-hammerer
 
 testing: all
-	${LOGGER} target/release/testing ${BS_FLAGS}
+	${LOGGER} target/${PROFILE}/testing ${BS_FLAGS}
 
 
 clean:
-	cargo clean --release
+	cargo clean ${CARGO_FLAGS}
+
+hammer_jit.o.objdump: hammer_jit.o
+	objdump -b binary -m i386:x86-64 -D hammer_jit.o > hammer_jit.o.objdump
