@@ -15,6 +15,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=OPENSSL_LIB_DIR");
     println!("cargo:rerun-if-env-changed=OPENSSL_INCLUDE_DIR");
 
+    let mut bindings = bindgen::Builder::default();
+
     // build rsa-crt
     cc::Build::new()
         .file("lib/rsa/rsa_crt.c")
@@ -22,19 +24,24 @@ fn main() {
         .flag("-Wno-deprecated-declarations")
         .compile("librsa_crt.a");
 
-    // build spoiler
-    let spoiler_srcs = glob("lib/spoiler/src/*.c")
-        .expect("Failed to glob lib/spoiler/src")
-        .filter_map(Result::ok);
-    let spoiler_incs = glob("lib/spoiler/include/*.h")
-        .expect("Failed to glob lib/spoiler/include")
-        .filter_map(Result::ok);
-    cc::Build::new()
-        .files(spoiler_srcs)
-        .files(spoiler_incs)
-        .flag("-g")
-        .flag("-O0")
-        .compile("libspoiler.a");
+    bindings = bindings.header("lib/rsa/rsa_crt.h");
+
+    if cfg!(spoiler) {
+        // build spoiler
+        let spoiler_srcs = glob("lib/spoiler/src/*.c")
+            .expect("Failed to glob lib/spoiler/src")
+            .filter_map(Result::ok);
+        let spoiler_incs = glob("lib/spoiler/include/*.h")
+            .expect("Failed to glob lib/spoiler/include")
+            .filter_map(Result::ok);
+        cc::Build::new()
+            .files(spoiler_srcs)
+            .files(spoiler_incs)
+            .flag("-g")
+            .flag("-O0")
+            .compile("libspoiler.a");
+        bindings = bindings.header("lib/spoiler/include/spoiler.h");
+    }
 
     // Link with OpenSSL library
 
@@ -49,11 +56,7 @@ fn main() {
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
     // the resulting bindings.
-    let bindings = bindgen::Builder::default()
-        // The input header we would like to generate
-        // bindings for.
-        .header("lib/rsa/rsa_crt.h")
-        .header("lib/spoiler/include/spoiler.h")
+    let bindings = bindings
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
