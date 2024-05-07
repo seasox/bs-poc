@@ -7,10 +7,10 @@ use anyhow::bail;
 use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
 use rand::Rng;
 
-use crate::{
-    memory::{LinuxPageMap, VirtToPhysResolver},
-    util::{MB, PAGE_SIZE},
-};
+use crate::util::{MB, PAGE_SIZE};
+
+#[cfg(feature = "consec_check_pfn")]
+use memory::{LinuxPageMap, VirtToPhysResolver};
 
 pub trait ConsecAlloc: Sized {
     unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<Self>;
@@ -18,7 +18,9 @@ pub trait ConsecAlloc: Sized {
 }
 
 pub struct MemBlock {
+    /// block pointer
     pub ptr: *mut u8,
+    /// block length in bytes
     pub len: usize,
 }
 
@@ -88,7 +90,6 @@ impl ConsecAlloc for MemBlock {
         unsafe fn find_block10_candidate() -> anyhow::Result<MemBlock> {
             const HUGEBLOCK_SIZE: usize = 2048 * MB;
             const ALLOC_SIZE: usize = 4 * MB;
-            const CONSEC_SIZE: usize = 4 * MB;
             const MAX_ALLOCS: usize = 2000;
             log_pagetypeinfo();
             loop {
@@ -138,7 +139,7 @@ impl ConsecAlloc for MemBlock {
                     Some(v) => {
                         return Ok(MemBlock {
                             ptr: v as *mut u8,
-                            len: CONSEC_SIZE,
+                            len: ALLOC_SIZE,
                         })
                     }
                     None => {
