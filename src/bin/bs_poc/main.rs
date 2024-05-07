@@ -91,7 +91,7 @@ fn main() -> Result<()> {
             pattern,
             mapping,
             todo!(),
-            memory.addr(0).clone(),
+            vec![memory.addr(0)],
         )?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {

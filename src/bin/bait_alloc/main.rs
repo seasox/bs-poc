@@ -181,36 +181,30 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
             size
         );
 
-        let hammering_addrs = mapping.get_hammering_addresses_relocate(
-            &pattern.access_ids,
-            &blocks
-                .iter()
-                .map(|block| block.ptr as AggressorPtr)
-                .collect::<Vec<_>>(),
-            mem_config,
-        )?;
-        // relocate sets according to blocks
-        for (block, set) in blocks.iter().zip(&sets) {
-            let new_base = ((block.ptr as u64) >> 22) as *const u8;
-            let addrs = set.1;
-            for addr in addrs {
-                let virt = addr.to_virt(new_base, mem_config);
-                let new_virt = DRAMAddr::from_virt(virt, &mem_config);
-                info!("relocating {:?} from {:?} to {:?}", addr, virt, new_virt);
-            }
+        info!("Allocated blocks:");
+        for block in &blocks {
+            info!(
+                "[{:?}, {:?})",
+                block.ptr as AggressorPtr,
+                block.ptr.add(block.len) as AggressorPtr
+            );
         }
+
+        let bases = blocks
+            .iter()
+            .map(|block| block.ptr as AggressorPtr)
+            .collect::<Vec<_>>();
+
+        let hammering_addrs =
+            mapping.get_hammering_addresses_relocate(&pattern.access_ids, &bases, mem_config)?;
 
         let hammerer = Hammerer::new(
             mem_config,
             pattern.clone(),
             mapping.clone(),
             &hammering_addrs,
-            BASE_MSB,
+            bases,
         )?;
-        let _addrs = sets
-            .keys()
-            .map(|base| (base << 20) as AggressorPtr)
-            .collect::<Vec<_>>();
         let memory = PreAllocatedVictimMemory::new(blocks)?;
         let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
