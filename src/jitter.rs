@@ -136,7 +136,7 @@ impl Jitter for CodeJitter {
 
         a.set_label(&mut start)?;
 
-        //a.push(rbx)?;
+        a.push(rbx)?;
 
         let num_timed_accesses: usize = self.num_aggs_for_sync;
         let total_activations = self.total_activations;
@@ -230,7 +230,7 @@ impl Jitter for CodeJitter {
             }
             if self.pattern_sync_each_ref && (cnt_total_activations % num_acts_per_trefi) == 0 {
                 let aggs = &aggressor_pairs[idx..(idx + num_timed_accesses)];
-                sync_ref(aggs, &mut a)?;
+                sync_ref(aggs, &mut a, log_cb)?;
             }
         }
 
@@ -239,7 +239,7 @@ impl Jitter for CodeJitter {
         // ------- part 3: synchronize with the end  -----------------------------------------------------------------------
         let last_aggs =
             &aggressor_pairs[aggressor_pairs.len() - num_timed_accesses..aggressor_pairs.len()];
-        sync_ref(last_aggs, &mut a)?;
+        sync_ref(last_aggs, &mut a, log_cb)?;
 
         a.jmp(for_begin)?;
         a.set_label(&mut for_end)?;
@@ -252,7 +252,11 @@ impl Jitter for CodeJitter {
     }
 }
 
-fn sync_ref(aggs: &[AggressorPtr], a: &mut CodeAssembler) -> Result<(), IcedError> {
+fn sync_ref(
+    aggs: &[AggressorPtr],
+    a: &mut CodeAssembler,
+    log_cb: &dyn Fn(&str, AggressorPtr) -> (),
+) -> Result<(), IcedError> {
     debug!("SYNC");
     let mut wbegin = a.create_label();
     let mut wend = a.create_label();
@@ -268,10 +272,14 @@ fn sync_ref(aggs: &[AggressorPtr], a: &mut CodeAssembler) -> Result<(), IcedErro
     for &agg in aggs {
         // flush
         a.mov(rax, agg as u64)?;
+        log_cb("ACCESS", agg);
         a.clflushopt(ptr(rax))?;
+        log_cb("FLUSH", agg);
         // access
         a.mov(rax, agg as u64)?;
+        log_cb("ACCESS", agg);
         a.mov(rcx, ptr(rax))?;
+        log_cb("FLUSH", agg);
 
         // we do not deduct the sync aggressors from the total number of activations because the number of sync activations
         // varies for different patterns; if we deduct it from the total number of activations, we cannot ensure anymore
