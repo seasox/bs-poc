@@ -9,7 +9,7 @@ use crate::{
     util::{MemConfiguration, PAGE_SIZE},
 };
 
-use super::{allocator::MmapAllocator, MemBlock};
+use super::allocator::MmapAllocator;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -36,54 +36,31 @@ impl fmt::Display for MemoryError {
 }
 
 pub trait VictimMemory {
-    fn addr(&self, offset: usize) -> AggressorPtr;
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed);
-    fn check(
-        &self,
-        mem_config: MemConfiguration,
-        seed: <StdRng as SeedableRng>::Seed,
-    ) -> Vec<BitFlip>;
-}
-
-pub struct PreAllocatedVictimMemory {
-    blocks: Vec<MemBlock>,
-}
-
-impl PreAllocatedVictimMemory {
-    pub fn new(blocks: Vec<MemBlock>) -> Result<Self> {
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        for block in &blocks {
-            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
-        }
-        Ok(PreAllocatedVictimMemory { blocks })
-    }
-}
-
-impl VictimMemory for PreAllocatedVictimMemory {
-    fn addr(&self, _offset: usize) -> AggressorPtr {
-        //unsafe { self.addr.add(offset) }
-        todo!("not implemented");
-    }
+    fn addr(&self, offset: usize) -> *mut u8;
+    fn len(&self) -> usize;
     fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
         let mut rng = StdRng::from_seed(seed);
 
-        for block in &self.blocks {
-            let num_pages = block.len / PAGE_SIZE;
-            let len = block.len;
-            if len % 8 != 0 {
-                panic!("size must be divisible by 8");
+        let len = self.len();
+        if len % 8 != 0 {
+            panic!("memory len must be divisible by 8");
+        }
+        if len % PAGE_SIZE != 0 {
+            panic!(
+                "memory len ({}) must be divisible by PAGE_SIZE ({})",
+                len, PAGE_SIZE
+            );
+        }
+
+        debug!("initialize {} bytes with pseudo-random values", len);
+
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+            for i in 0..PAGE_SIZE {
+                value[i] = rng.gen();
             }
-
-            debug!("initialize {} pages with pseudo-random values", num_pages);
-
-            for offset in (0..len).step_by(PAGE_SIZE) {
-                let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-                for i in 0..PAGE_SIZE {
-                    value[i] = rng.gen();
-                }
-                unsafe {
-                    std::ptr::write_volatile(block.ptr.add(offset) as *mut [u8; PAGE_SIZE], value);
-                }
+            unsafe {
+                std::ptr::write_volatile(self.addr(offset) as *mut [u8; PAGE_SIZE], value);
             }
         }
         debug!("memory init done");
@@ -95,45 +72,70 @@ impl VictimMemory for PreAllocatedVictimMemory {
         seed: <StdRng as SeedableRng>::Seed,
     ) -> Vec<BitFlip> {
         let mut rng = StdRng::from_seed(seed);
+        let len = self.len();
+        assert_eq!(
+            len % PAGE_SIZE,
+            0,
+            "memory len must be divisible by PAGE_SIZE"
+        );
         unsafe {
-            for block in &self.blocks {
-                for page_no in (0..block.len).step_by(PAGE_SIZE) {
-                    let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-                    for i in 0..PAGE_SIZE {
-                        expected[i] = rng.gen();
-                    }
-                    _mm_clflush(block.ptr.add(page_no));
-                    _mm_mfence();
-                    let cmp = memcmp(
-                        block.ptr.add(page_no) as *const c_void,
-                        expected.as_ptr() as *const c_void,
-                        PAGE_SIZE,
-                    );
-                    if cmp == 0 {
-                        continue;
-                    }
-                    debug!(
-                        "Found bitflip in page {}. Determining exact flip position",
-                        page_no
-                    );
-                    let mut ret = vec![];
-                    for i in 0..expected.len() {
-                        let addr = block.ptr.add(page_no + i);
-                        _mm_clflush(addr);
-                        _mm_mfence();
-                        if *addr != expected[i] {
-                            ret.push(BitFlip::new(
-                                DRAMAddr::from_virt(addr, &mem_config),
-                                *addr ^ expected[i],
-                                expected[i],
-                            ));
-                        }
-                    }
-                    return ret;
+            for page_no in (0..len).step_by(PAGE_SIZE) {
+                let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+                for i in 0..PAGE_SIZE {
+                    expected[i] = rng.gen();
                 }
+                _mm_clflush(self.addr(page_no));
+                _mm_mfence();
+                let cmp = memcmp(
+                    self.addr(page_no) as *const c_void,
+                    expected.as_ptr() as *const c_void,
+                    PAGE_SIZE,
+                );
+                if cmp == 0 {
+                    continue;
+                }
+                debug!(
+                    "Found bitflip in page {}. Determining exact flip position",
+                    page_no
+                );
+                let mut ret = vec![];
+                for i in 0..expected.len() {
+                    let addr = self.addr(page_no + i);
+                    _mm_clflush(addr);
+                    _mm_mfence();
+                    if *addr != expected[i] {
+                        ret.push(BitFlip::new(
+                            DRAMAddr::from_virt(addr, &mem_config),
+                            *addr ^ expected[i],
+                            expected[i],
+                        ));
+                    }
+                }
+                return ret;
             }
         }
         vec![]
+    }
+}
+
+impl Memory {
+    /// Move an instance of T into the allocated memory region at `offset', overwriting
+    /// anything that might reside at `offset', returning a pinned reference to the moved
+    /// object. This is an unsafe operation, as it relies on direct pointer operations.
+    pub unsafe fn move_object<T: Unpin>(&self, x: T, offset: usize) -> Pin<&mut T> {
+        let addr = self.addr.add(offset) as *mut T;
+        core::ptr::write(addr, x);
+        let pinned = Pin::new(&mut *addr);
+        assert_eq!((pinned.deref() as *const T) as usize, addr as usize);
+        pinned
+    }
+}
+
+impl Drop for Memory {
+    fn drop(&mut self) {
+        unsafe {
+            self.allocator.dealloc(self.addr as *mut u8, self.layout);
+        }
     }
 }
 
@@ -172,98 +174,11 @@ impl Memory {
 }
 
 impl VictimMemory for Memory {
-    fn addr(&self, offset: usize) -> AggressorPtr {
-        unsafe { self.addr.add(offset) }
+    fn addr(&self, offset: usize) -> *mut u8 {
+        unsafe { self.addr.add(offset) as *mut u8 }
     }
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
-        let layout = self.layout;
-        let addr = self.addr;
-        let mut rng = StdRng::from_seed(seed);
-
-        let num_pages = layout.size() / PAGE_SIZE;
-        let len = layout.size();
-        if len % 8 != 0 {
-            panic!("layout size must be divisible by 8");
-        }
-
-        debug!("initialize {} pages with pseudo-random values", num_pages);
-
-        for offset in (0..len).step_by(PAGE_SIZE) {
-            let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-            for i in 0..PAGE_SIZE {
-                value[i] = rng.gen();
-            }
-            unsafe {
-                std::ptr::write_volatile(addr.add(offset) as *mut [u8; PAGE_SIZE], value);
-            }
-        }
-        debug!("memory init done");
-    }
-
-    fn check(
-        &self,
-        mem_config: MemConfiguration,
-        seed: <StdRng as SeedableRng>::Seed,
-    ) -> Vec<BitFlip> {
-        let mut rng = StdRng::from_seed(seed);
-        unsafe {
-            for page_no in (0..self.layout.size()).step_by(PAGE_SIZE) {
-                let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-                for i in 0..PAGE_SIZE {
-                    expected[i] = rng.gen();
-                }
-                _mm_clflush(self.addr.add(page_no));
-                _mm_mfence();
-                let cmp = memcmp(
-                    self.addr.add(page_no) as *const c_void,
-                    expected.as_ptr() as *const c_void,
-                    PAGE_SIZE,
-                );
-                if cmp == 0 {
-                    continue;
-                }
-                debug!(
-                    "Found bitflip in page {}. Determining exact flip position",
-                    page_no
-                );
-                let mut ret = vec![];
-                for i in 0..expected.len() {
-                    let addr = self.addr.add(page_no + i);
-                    _mm_clflush(addr);
-                    _mm_mfence();
-                    if *addr != expected[i] {
-                        ret.push(BitFlip::new(
-                            DRAMAddr::from_virt(addr, &mem_config),
-                            *addr ^ expected[i],
-                            expected[i],
-                        ));
-                    }
-                }
-                return ret;
-            }
-        }
-        vec![]
-    }
-}
-
-impl Memory {
-    /// Move an instance of T into the allocated memory region at `offset', overwriting
-    /// anything that might reside at `offset', returning a pinned reference to the moved
-    /// object. This is an unsafe operation, as it relies on direct pointer operations.
-    pub unsafe fn move_object<T: Unpin>(&self, x: T, offset: usize) -> Pin<&mut T> {
-        let addr = self.addr.add(offset) as *mut T;
-        core::ptr::write(addr, x);
-        let pinned = Pin::new(&mut *addr);
-        assert_eq!((pinned.deref() as *const T) as usize, addr as usize);
-        pinned
-    }
-}
-
-impl Drop for Memory {
-    fn drop(&mut self) {
-        unsafe {
-            self.allocator.dealloc(self.addr as *mut u8, self.layout);
-        }
+    fn len(&self) -> usize {
+        return self.layout.size();
     }
 }
 

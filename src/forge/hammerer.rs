@@ -59,7 +59,7 @@ impl PatternAddressMapper {
             .collect()
     }
 
-    fn aggressor_sets(
+    pub fn aggressor_sets(
         &self,
         mem_config: MemConfiguration,
         block_shift: usize,
@@ -78,20 +78,15 @@ impl PatternAddressMapper {
         groups
     }
 
-    pub fn get_hammering_addresses_relocate<F>(
+    pub fn get_hammering_addresses_relocate(
         &self,
         aggressors: &Vec<Aggressor>,
         mem_config: MemConfiguration,
         block_shift: usize,
-        block_factory: F,
-    ) -> anyhow::Result<Vec<AggressorPtr>>
-    where
-        F: FnOnce(usize) -> anyhow::Result<Vec<MemBlock>>,
-    {
+        blocks: &[MemBlock],
+    ) -> anyhow::Result<Vec<AggressorPtr>> {
         let addrs = &self.aggressor_to_addr;
         let sets = self.aggressor_sets(mem_config, block_shift);
-
-        let blocks = block_factory(sets.len())?;
 
         let mut base_lookup: HashMap<Aggressor, usize> = HashMap::new();
         for (i, group) in sets.iter().enumerate() {
@@ -111,7 +106,7 @@ impl PatternAddressMapper {
                 let virt = virt as u64 & ((1 << block_shift) - 1);
                 let virt = (base | virt) as *const u8;
 
-                info!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
+                debug!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
                 virt
             })
             .collect();
@@ -248,26 +243,26 @@ impl Hammering for DummyHammerer {
     }
 }
 
-pub struct Hammerer {
-    bases: Vec<MemBlock>,
+pub struct Hammerer<'a> {
+    blocks: &'a [MemBlock],
     mem_config: MemConfiguration,
     mapping: PatternAddressMapper,
     program: Program,
 }
 
-impl Hammerer {
+impl<'a> Hammerer<'a> {
     pub fn new(
         mem_config: MemConfiguration,
         pattern: HammeringPattern,
         mapping: PatternAddressMapper,
         hammering_addrs: &[AggressorPtr],
-        bases: Vec<MemBlock>,
+        blocks: &'a [MemBlock],
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr| {
-            let found = bases
+            let found = blocks
                 .iter()
                 .find(|base| unsafe {
                     addr as u64 >= base.ptr as u64
@@ -296,10 +291,10 @@ impl Hammerer {
             .with_context(|| "failed to write function to disk")?;
 
         return Ok(Hammerer {
-            bases,
+            blocks,
             program,
             mem_config,
-            mapping: mapping.clone(),
+            mapping,
         });
     }
 
@@ -323,7 +318,7 @@ impl Hammerer {
     }
 }
 
-impl Hammering for Hammerer {
+impl<'a> Hammering for Hammerer<'a> {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
         let num_retries = 100;
         let num_runs = u64::MAX;
@@ -339,7 +334,7 @@ impl Hammering for Hammerer {
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
                 let random_rows = self.mapping.get_random_nonaccessed_rows(
                     &self
-                        .bases
+                        .blocks
                         .iter()
                         .map(|b| b.ptr as *const u8)
                         .collect::<Vec<_>>(),

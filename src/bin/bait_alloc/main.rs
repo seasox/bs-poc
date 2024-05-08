@@ -13,15 +13,13 @@ use anyhow::Context;
 use bs_poc::{
     forge::{Hammerer, Hammering, HammeringPattern, PatternAddressMapper},
     jitter::AggressorPtr,
-    memory::{
-        ConsecAlloc, DRAMAddr, LinuxPageMap, MemBlock, PreAllocatedVictimMemory, VirtToPhysResolver,
-    },
+    memory::{BlockMemory, DRAMAddr, LinuxPageMap, VirtToPhysResolver},
     util::{BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
     victim::HammerVictimMemCheck,
 };
 use clap::Parser;
 use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use log::info;
+use log::{debug, info};
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -90,7 +88,8 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
             .expect("pattern contains no mapping"),
     };
 
-    info!("Using mapping {:?}", mapping);
+    info!("Using mapping {}", mapping.id);
+    debug!("{:?}", mapping);
 
     // find offset from base and mapping start
     let mapping_base = find_mapping_base(mapping.clone(), mem_config, BASE_MSB as *const u8);
@@ -115,7 +114,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //info!("determined flip aggr offset as {}", flip_aggr_offset);
 
     for (aggr, addr) in &mapping.aggressor_to_addr {
-        info!(
+        debug!(
             "{:?}: {:?}, {:?}",
             aggr,
             addr,
@@ -142,19 +141,15 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //let mut set_iter = sets.iter();
     //let mut cur = set_iter.next();
     //while let Some((base, _)) = cur {
-    let size = 1 << KNOWN_BITS;
 
-    let mut blocks = vec![];
+    // get mapping size, round to nearest multiple of PAGE_SIZE
+    let num_sets = mapping.aggressor_sets(mem_config, KNOWN_BITS).len();
+    let memory = BlockMemory::new(num_sets * (1usize << KNOWN_BITS))?;
     let hammering_addrs = mapping.get_hammering_addresses_relocate(
         &pattern.access_ids,
         mem_config,
         KNOWN_BITS,
-        |num_blocks| {
-            blocks = (0..num_blocks)
-                .map(|_| MemBlock::alloc_consec_block(size))
-                .collect::<anyhow::Result<Vec<_>>>()?;
-            Ok(blocks.clone())
-        },
+        &memory.blocks,
     );
 
     let hammering_addrs = hammering_addrs?;
@@ -164,11 +159,11 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         pattern.clone(),
         mapping.clone(),
         &hammering_addrs,
-        blocks.clone(),
+        &memory.blocks,
     )?;
-    let memory = PreAllocatedVictimMemory::new(blocks)?;
     let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
+    info!("Hammering pattern. This will take a while...");
     let res = hammerer.hammer(&mut victim);
     print!("{:?}", res);
 

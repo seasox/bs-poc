@@ -7,17 +7,59 @@ use anyhow::bail;
 use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
 use rand::Rng;
 
-use crate::util::{MB, PAGE_SIZE};
+use crate::util::{KNOWN_BITS, MB, PAGE_SIZE};
 
-#[cfg(feature = "consec_check_pfn")]
-use memory::{LinuxPageMap, VirtToPhysResolver};
+use super::VictimMemory;
 
 pub trait ConsecAlloc: Sized {
     unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<Self>;
     unsafe fn check(&self) -> anyhow::Result<bool>;
 }
 
-#[derive(Clone)]
+pub struct BlockMemory {
+    pub blocks: Vec<MemBlock>,
+}
+
+impl BlockMemory {
+    pub fn new(len: usize) -> anyhow::Result<Self> {
+        let block_size = 1 << KNOWN_BITS;
+        if len % block_size != 0 {
+            bail!(
+                "Size {} must be a multiple of block size {}",
+                len,
+                block_size
+            );
+        }
+        let num_blocks = len / block_size;
+        info!("Allocating {} blocks of size {}", num_blocks, block_size);
+        let blocks = (0..len / block_size)
+            .map(|_| unsafe { MemBlock::alloc_consec_block(block_size) })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        for block in &blocks {
+            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
+        }
+        Ok(BlockMemory { blocks })
+    }
+}
+
+impl VictimMemory for BlockMemory {
+    fn addr(&self, offset: usize) -> *mut u8 {
+        let mut offset = offset;
+        for block in &self.blocks {
+            if offset < block.len {
+                return unsafe { block.ptr.add(offset) as *mut u8 };
+            }
+            offset -= block.len;
+        }
+        unreachable!("block not found for offset {}", offset);
+    }
+
+    fn len(&self) -> usize {
+        return self.blocks.iter().map(|block| block.len).sum();
+    }
+}
+
 pub struct MemBlock {
     /// block pointer
     pub ptr: *mut u8,
@@ -229,6 +271,8 @@ impl ConsecAlloc for MemBlock {
          * in the memory block. If the measured timings correspond to the address function, it is very likely that
          * this indeed is a consecutive memory block.
          */
+
+        use crate::memory::{LinuxPageMap, VirtToPhysResolver};
         let mut resolver = LinuxPageMap::new()?;
         if (self.ptr as u64) & 0xFFF != 0 {
             bail!("Address is not page-aligned: 0x{:x}", self.ptr as u64);
@@ -341,6 +385,14 @@ unsafe fn determine_locked_2mb_blocks() -> anyhow::Result<usize> {
         }
     }
     Ok(locked)
+}
+
+impl Drop for MemBlock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.ptr as *mut libc::c_void, self.len);
+        }
+    }
 }
 
 /// Read /proc/pagetypeinfo to string

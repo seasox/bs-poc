@@ -57,6 +57,10 @@ fn main() -> Result<()> {
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
     let memory = Memory::new(MEM_SIZE, true)?;
+    let block = vec![MemBlock {
+        ptr: memory.addr(0) as *mut u8,
+        len: MEM_SIZE,
+    }];
 
     info!("allocated {} B of memory", MEM_SIZE);
 
@@ -89,17 +93,7 @@ fn main() -> Result<()> {
         let addrs =
             mapping.get_hammering_addresses(&pattern.access_ids, memory.addr(0), mem_config);
 
-        let block = MemBlock {
-            ptr: memory.addr(0) as *mut u8,
-            len: MEM_SIZE,
-        };
-        Box::new(Hammerer::new(
-            mem_config,
-            pattern,
-            mapping,
-            &addrs,
-            vec![block],
-        )?)
+        Box::new(Hammerer::new(mem_config, pattern, mapping, &addrs, &block)?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
