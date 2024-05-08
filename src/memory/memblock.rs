@@ -17,6 +17,7 @@ pub trait ConsecAlloc: Sized {
     unsafe fn check(&self) -> anyhow::Result<bool>;
 }
 
+#[derive(Clone)]
 pub struct MemBlock {
     /// block pointer
     pub ptr: *mut u8,

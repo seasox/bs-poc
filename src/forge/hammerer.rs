@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use nalgebra::base;
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -9,8 +8,8 @@ use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::memory::DRAMAddr;
-use crate::util::{MemConfiguration, MB};
+use crate::memory::{DRAMAddr, MemBlock};
+use crate::util::{group, MemConfiguration};
 
 pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult>;
@@ -47,23 +46,6 @@ pub struct PatternAddressMapper {
     code_jitter: CodeJitter,
 }
 
-fn group<F, K: std::hash::Hash + std::cmp::Eq, T>(addrs: Vec<T>, f: F) -> Vec<Vec<T>>
-where
-    F: Fn(&T) -> K,
-{
-    let mut idx_lookup = HashMap::new();
-    let mut out = vec![];
-    for addr in addrs {
-        let k = f(&addr);
-        let idx = idx_lookup.entry(k).or_insert(out.len());
-        if *idx == out.len() {
-            out.push(vec![]);
-        }
-        out[*idx].push(addr);
-    }
-    out
-}
-
 impl PatternAddressMapper {
     pub fn get_hammering_addresses(
         &self,
@@ -77,26 +59,42 @@ impl PatternAddressMapper {
             .collect()
     }
 
-    pub fn get_hammering_addresses_relocate(
+    fn aggressor_sets(
         &self,
-        aggressors: &Vec<Aggressor>,
-        bases: &[AggressorPtr],
         mem_config: MemConfiguration,
-    ) -> anyhow::Result<Vec<AggressorPtr>> {
+        block_shift: usize,
+    ) -> Vec<Vec<(&Aggressor, &DRAMAddr)>> {
         // find mapping classes
-        let addrs: HashMap<Aggressor, DRAMAddr> = self.aggressor_to_addr.clone();
+        let addrs: &HashMap<Aggressor, DRAMAddr> = &self.aggressor_to_addr;
 
         let addrs_vec = addrs.iter().collect::<Vec<_>>();
 
         // group aggressors by prefix
         let groups: Vec<Vec<(&Aggressor, &DRAMAddr)>> = group(addrs_vec, |(_, addr)| {
             let virt = addr.to_virt(0 as *const u8, mem_config) as usize;
-            let virt = virt >> 22;
+            let virt = virt >> block_shift;
             virt
         });
+        groups
+    }
+
+    pub fn get_hammering_addresses_relocate<F>(
+        &self,
+        aggressors: &Vec<Aggressor>,
+        mem_config: MemConfiguration,
+        block_shift: usize,
+        block_factory: F,
+    ) -> anyhow::Result<Vec<AggressorPtr>>
+    where
+        F: FnOnce(usize) -> anyhow::Result<Vec<MemBlock>>,
+    {
+        let addrs = &self.aggressor_to_addr;
+        let sets = self.aggressor_sets(mem_config, block_shift);
+
+        let blocks = block_factory(sets.len())?;
 
         let mut base_lookup: HashMap<Aggressor, usize> = HashMap::new();
-        for (i, group) in groups.iter().enumerate() {
+        for (i, group) in sets.iter().enumerate() {
             debug!("{}: {:?}", i, group.iter().collect::<Vec<_>>());
             for (&aggr, _) in group {
                 base_lookup.insert(aggr, i);
@@ -104,21 +102,21 @@ impl PatternAddressMapper {
         }
         debug!("{:?}", base_lookup);
 
-        assert_eq!(bases.len(), groups.len(), "bases len mismatch");
-
-        Ok(aggressors
+        let aggrs = aggressors
             .iter()
             .map(|agg| {
                 let addr = &addrs[agg];
-                let base = bases[base_lookup[agg]] as u64;
+                let base = blocks[base_lookup[agg]].ptr as u64;
                 let virt = addr.to_virt(0 as *const u8, mem_config);
-                let virt = virt as u64 & ((1 << 22) - 1); // TODO: magic number 22
+                let virt = virt as u64 & ((1 << block_shift) - 1);
                 let virt = (base | virt) as *const u8;
 
                 info!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
                 virt
             })
-            .collect())
+            .collect();
+
+        Ok(aggrs)
     }
 
     fn get_random_nonaccessed_rows(
@@ -251,7 +249,7 @@ impl Hammering for DummyHammerer {
 }
 
 pub struct Hammerer {
-    bases: Vec<AggressorPtr>,
+    bases: Vec<MemBlock>,
     mem_config: MemConfiguration,
     mapping: PatternAddressMapper,
     program: Program,
@@ -263,7 +261,7 @@ impl Hammerer {
         pattern: HammeringPattern,
         mapping: PatternAddressMapper,
         hammering_addrs: &[AggressorPtr],
-        bases: Vec<AggressorPtr>,
+        bases: Vec<MemBlock>,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -271,8 +269,9 @@ impl Hammerer {
         let hammer_log_cb = |action: &str, addr| {
             let found = bases
                 .iter()
-                .find(|&&base| unsafe {
-                    addr as u64 >= base as u64 && (addr as u64) < (base.add(4 * MB) as u64)
+                .find(|base| unsafe {
+                    addr as u64 >= base.ptr as u64
+                        && (addr as u64) < (base.ptr.add(base.len) as u64)
                 })
                 .is_some();
             if !found {
@@ -338,9 +337,14 @@ impl Hammering for Hammerer {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
-                let random_rows = self
-                    .mapping
-                    .get_random_nonaccessed_rows(&self.bases, self.mem_config);
+                let random_rows = self.mapping.get_random_nonaccessed_rows(
+                    &self
+                        .bases
+                        .iter()
+                        .map(|b| b.ptr as *const u8)
+                        .collect::<Vec<_>>(),
+                    self.mem_config,
+                );
                 debug!(
                     "do random memory accesses for {} us before running jitted code",
                     wait_until_start_hammering_us as u128

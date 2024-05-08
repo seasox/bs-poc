@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bs_poc::forge::{DummyHammerer, HammerVictim, Hammerer, Hammering, HammeringPattern};
-use bs_poc::memory::{LinuxPageMap, Memory, VictimMemory, VirtToPhysResolver};
+use bs_poc::memory::{LinuxPageMap, MemBlock, Memory, VictimMemory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::{HammerVictimMemCheck, HammerVictimRsa};
 use clap::Parser;
@@ -86,12 +86,19 @@ fn main() -> Result<()> {
                 .determine_most_effective_mapping()
                 .expect("pattern contains no mapping"),
         };
+        let addrs =
+            mapping.get_hammering_addresses(&pattern.access_ids, memory.addr(0), mem_config);
+
+        let block = MemBlock {
+            ptr: memory.addr(0) as *mut u8,
+            len: MEM_SIZE,
+        };
         Box::new(Hammerer::new(
             mem_config,
             pattern,
             mapping,
-            todo!(),
-            vec![memory.addr(0)],
+            &addrs,
+            vec![block],
         )?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
