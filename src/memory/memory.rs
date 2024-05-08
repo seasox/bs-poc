@@ -3,7 +3,11 @@ use lazy_static::__Deref;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
-use crate::{jitter::AggressorPtr, memory::DRAMAddr, util::MemConfiguration};
+use crate::{
+    jitter::AggressorPtr,
+    memory::DRAMAddr,
+    util::{MemConfiguration, PAGE_SIZE},
+};
 
 use super::{allocator::MmapAllocator, MemBlock};
 use libc::{c_void, memcmp};
@@ -46,8 +50,6 @@ pub struct PreAllocatedVictimMemory {
 }
 
 impl PreAllocatedVictimMemory {
-    const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
-
     pub fn new(blocks: Vec<MemBlock>) -> Result<Self> {
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
         for block in &blocks {
@@ -66,7 +68,7 @@ impl VictimMemory for PreAllocatedVictimMemory {
         let mut rng = StdRng::from_seed(seed);
 
         for block in &self.blocks {
-            let num_pages = block.len / Self::PAGE_SIZE;
+            let num_pages = block.len / PAGE_SIZE;
             let len = block.len;
             if len % 8 != 0 {
                 panic!("size must be divisible by 8");
@@ -74,16 +76,13 @@ impl VictimMemory for PreAllocatedVictimMemory {
 
             debug!("initialize {} pages with pseudo-random values", num_pages);
 
-            for offset in (0..len).step_by(Self::PAGE_SIZE) {
-                let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-                for i in 0..Self::PAGE_SIZE {
+            for offset in (0..len).step_by(PAGE_SIZE) {
+                let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+                for i in 0..PAGE_SIZE {
                     value[i] = rng.gen();
                 }
                 unsafe {
-                    std::ptr::write_volatile(
-                        block.ptr.add(offset) as *mut [u8; Self::PAGE_SIZE],
-                        value,
-                    );
+                    std::ptr::write_volatile(block.ptr.add(offset) as *mut [u8; PAGE_SIZE], value);
                 }
             }
         }
@@ -98,9 +97,9 @@ impl VictimMemory for PreAllocatedVictimMemory {
         let mut rng = StdRng::from_seed(seed);
         unsafe {
             for block in &self.blocks {
-                for page_no in (0..block.len).step_by(Self::PAGE_SIZE) {
-                    let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-                    for i in 0..Self::PAGE_SIZE {
+                for page_no in (0..block.len).step_by(PAGE_SIZE) {
+                    let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+                    for i in 0..PAGE_SIZE {
                         expected[i] = rng.gen();
                     }
                     _mm_clflush(block.ptr.add(page_no));
@@ -108,7 +107,7 @@ impl VictimMemory for PreAllocatedVictimMemory {
                     let cmp = memcmp(
                         block.ptr.add(page_no) as *const c_void,
                         expected.as_ptr() as *const c_void,
-                        Self::PAGE_SIZE,
+                        PAGE_SIZE,
                     );
                     if cmp == 0 {
                         continue;
@@ -146,8 +145,6 @@ pub struct Memory {
 }
 
 impl Memory {
-    const PAGE_SIZE: usize = 4096; // TODO get from sysconf?
-
     pub fn new(size: usize, use_hugepage: bool) -> Result<Self> {
         let allocator = MmapAllocator::new(use_hugepage);
         let layout = Layout::from_size_align(size, 1)?;
@@ -183,7 +180,7 @@ impl VictimMemory for Memory {
         let addr = self.addr;
         let mut rng = StdRng::from_seed(seed);
 
-        let num_pages = layout.size() / Self::PAGE_SIZE;
+        let num_pages = layout.size() / PAGE_SIZE;
         let len = layout.size();
         if len % 8 != 0 {
             panic!("layout size must be divisible by 8");
@@ -191,13 +188,13 @@ impl VictimMemory for Memory {
 
         debug!("initialize {} pages with pseudo-random values", num_pages);
 
-        for offset in (0..len).step_by(Self::PAGE_SIZE) {
-            let mut value: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-            for i in 0..Self::PAGE_SIZE {
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+            for i in 0..PAGE_SIZE {
                 value[i] = rng.gen();
             }
             unsafe {
-                std::ptr::write_volatile(addr.add(offset) as *mut [u8; Self::PAGE_SIZE], value);
+                std::ptr::write_volatile(addr.add(offset) as *mut [u8; PAGE_SIZE], value);
             }
         }
         debug!("memory init done");
@@ -210,9 +207,9 @@ impl VictimMemory for Memory {
     ) -> Vec<BitFlip> {
         let mut rng = StdRng::from_seed(seed);
         unsafe {
-            for page_no in (0..self.layout.size()).step_by(Self::PAGE_SIZE) {
-                let mut expected: [u8; Self::PAGE_SIZE] = [0u8; Self::PAGE_SIZE];
-                for i in 0..Self::PAGE_SIZE {
+            for page_no in (0..self.layout.size()).step_by(PAGE_SIZE) {
+                let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+                for i in 0..PAGE_SIZE {
                     expected[i] = rng.gen();
                 }
                 _mm_clflush(self.addr.add(page_no));
@@ -220,7 +217,7 @@ impl VictimMemory for Memory {
                 let cmp = memcmp(
                     self.addr.add(page_no) as *const c_void,
                     expected.as_ptr() as *const c_void,
-                    Self::PAGE_SIZE,
+                    PAGE_SIZE,
                 );
                 if cmp == 0 {
                     continue;
