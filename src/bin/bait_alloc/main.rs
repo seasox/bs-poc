@@ -1,5 +1,7 @@
 use std::{
     env,
+    fs::File,
+    io::{stdin, BufReader},
     process::Command,
     ptr::null_mut,
     sync::{
@@ -9,12 +11,14 @@ use std::{
     thread,
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use bs_poc::{
-    forge::{Hammerer, Hammering, HammeringPattern, PatternAddressMapper},
+    forge::{
+        FuzzSummary, HammerVictim, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
+    },
     jitter::AggressorPtr,
     memory::{BlockMemory, DRAMAddr, LinuxPageMap, VirtToPhysResolver},
-    util::{BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
+    util::{retry, BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
     victim::HammerVictimMemCheck,
 };
 use clap::Parser;
@@ -35,7 +39,7 @@ struct CliArgs {
     load_json: String,
     /// The pattern ID to load from the JSON file
     #[clap(long = "pattern")]
-    pattern: String,
+    pattern: Option<String>,
     /// The mapping ID to load from the JSON file (optional, will determine most optimal pattern if omitted)
     #[clap(long = "mapping")]
     mapping: Option<String>,
@@ -71,6 +75,46 @@ fn find_mapping_base(
     addr.to_virt(base_msb, mem_config)
 }
 
+fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
+    let f = File::open(&json_filename)?;
+    let reader = BufReader::new(f);
+    let fuzz: FuzzSummary = serde_json::from_reader(reader)?;
+    let pattern = retry(|| {
+        println!("Please choose a pattern:");
+        for (i, pattern) in fuzz.hammering_patterns.iter().enumerate() {
+            println!(
+                "{}: {} (max flips: {:?})",
+                i,
+                pattern.id,
+                pattern
+                    .address_mappings
+                    .iter()
+                    .map(|m| &m.bit_flips)
+                    .flatten()
+                    .count(),
+            )
+        }
+        let mut option = String::new();
+        stdin()
+            .read_line(&mut option)
+            .expect("Did not enter a correct string");
+        match str::parse::<usize>(&option.trim()) {
+            Ok(i) => {
+                if i < fuzz.hammering_patterns.len() {
+                    return Ok(fuzz.hammering_patterns[i].id.clone());
+                }
+                bail!(
+                    "Invalid pattern index {}/{}",
+                    i,
+                    fuzz.hammering_patterns.len()
+                );
+            }
+            Err(e) => Err(e.into()),
+        }
+    });
+    Ok(pattern)
+}
+
 unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
@@ -79,8 +123,12 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     const BASE_MSB: *const u8 = 0x2000000000 as *const u8;
 
     // load patterns from JSON
-    let pattern =
-        HammeringPattern::load_pattern_from_json(args.load_json.clone(), args.pattern.clone())?;
+    let pattern = match &args.pattern {
+        Some(pattern) => pattern.clone(),
+        None => cli_ask_pattern(args.load_json.clone())?,
+    };
+
+    let pattern = HammeringPattern::load_pattern_from_json(args.load_json.clone(), pattern)?;
     let mapping = match &args.mapping {
         Some(mapping) => pattern.find_mapping(&mapping).expect("mapping not found"),
         None => pattern
@@ -150,9 +198,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         mem_config,
         KNOWN_BITS,
         &memory.blocks,
-    );
-
-    let hammering_addrs = hammering_addrs?;
+    )?;
 
     let hammerer = Hammerer::new(
         mem_config,
@@ -161,11 +207,13 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         &hammering_addrs,
         &memory.blocks,
     )?;
+    // let hammerer = DummyHammerer::new(memory.addr(0), 0x42);
     let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
     info!("Hammering pattern. This will take a while...");
     let res = hammerer.hammer(&mut victim);
     print!("{:?}", res);
+    victim.log_report(BASE_MSB as AggressorPtr);
 
     // signal child process
     //signal("INT", child.id())?;

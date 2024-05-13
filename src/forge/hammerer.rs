@@ -132,8 +132,8 @@ impl PatternAddressMapper {
 }
 
 #[derive(Deserialize, Debug)]
-struct FuzzSummary {
-    hammering_patterns: Vec<HammeringPattern>,
+pub struct FuzzSummary {
+    pub hammering_patterns: Vec<HammeringPattern>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

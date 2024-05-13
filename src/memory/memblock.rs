@@ -128,7 +128,7 @@ impl ConsecAlloc for MemBlock {
                 .filter(|(_, &n)| n > 0)
                 .fold(0, |acc, (order, n)| acc + (1 << order) * n);
             let low_order_sum = usize::try_from(low_order_sum).unwrap() * PAGE_SIZE;
-            info!("low order: {}", low_order_sum);
+            debug!("low order: {}", low_order_sum);
             low_order_sum < 2usize.pow(block_order as u32) * PAGE_SIZE
         }
 

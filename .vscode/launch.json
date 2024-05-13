@@ -21,8 +21,9 @@
             },
             "args": [
                 "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=config/fuzz-summary_small.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
+                "--load-json=config/fuzz-summary_25mb.json",
+                "--pattern=835de010-4e2f-468b-85a9-a1f9db351ae8",
+                "--mapping=715b602f-1ad9-45a6-9119-b71fb3002b48"
             ],
             "env": {
                 "RUST_LOG": "debug"
