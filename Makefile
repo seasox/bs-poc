@@ -8,18 +8,18 @@ CONFIG=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json
 # [+] Sweeping pattern 835de010-4e2f-468b-85a9-a1f9db351ae8 with mapping 715b602f-1ad9-45a6-9119-b71fb3002b48 over 256 MB, equiv. to 1024 rows, with each 10 repetitions.
 FUZZ_CONF=config/fuzz-summary_25mb.json
 PATTERN=835de010-4e2f-468b-85a9-a1f9db351ae8
-MAPPING=715b602f-1ad9-45a6-9119-b71fb3002b48
+#MAPPING=715b602f-1ad9-45a6-9119-b71fb3002b48
 
 BS_FLAGS =--config=${CONFIG}
 BS_FLAGS+=--load-json=${FUZZ_CONF}
 BS_FLAGS+=--pattern=${PATTERN}
 #BS_FLAGS+=--mapping=${MAPPING}
 
-PROFILE=debug
-CARGO_FLAGS=
-# CARGO_FLAGS=--release
+PROFILE=release
+# CARGO_FLAGS=
+CARGO_FLAGS=--release
 
-LOG_LEVEL=debug
+LOG_LEVEL=info
 
 LOGGER=RUST_LOG=${LOG_LEVEL}
 
