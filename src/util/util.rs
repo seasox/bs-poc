@@ -16,3 +16,17 @@ where
     }
     out
 }
+
+pub fn retry<F, T>(mut f: F) -> T
+where
+    F: FnMut() -> anyhow::Result<T>,
+{
+    loop {
+        match f() {
+            Ok(x) => return x,
+            Err(e) => {
+                error!("{:?}", e);
+            }
+        }
+    }
+}

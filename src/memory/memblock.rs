@@ -108,6 +108,8 @@ impl ConsecAlloc for MemBlock {
     unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
         use std::ptr::null_mut;
 
+        use crate::util::retry;
+
         if size > 4 * MB {
             return Err(anyhow::anyhow!(
                 "Buddyinfo only supports consecutive allocations of up to 4MB."
@@ -449,18 +451,4 @@ fn diff_arrs<const S: usize>(l: &[usize; S], r: &[usize; S]) -> [i64; S] {
         i += 1;
     }
     diffs
-}
-
-fn retry<F, T>(mut f: F) -> T
-where
-    F: FnMut() -> anyhow::Result<T>,
-{
-    loop {
-        match f() {
-            Ok(x) => return x,
-            Err(e) => {
-                error!("{:?}", e);
-            }
-        }
-    }
 }
