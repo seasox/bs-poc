@@ -13,13 +13,11 @@ use std::{
 
 use anyhow::{bail, Context};
 use bs_poc::{
-    forge::{
-        FuzzSummary, HammerVictim, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
-    },
+    forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern, PatternAddressMapper},
     jitter::AggressorPtr,
     memory::{BlockMemory, DRAMAddr, LinuxPageMap, VirtToPhysResolver},
     util::{retry, BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
-    victim::HammerVictimMemCheck,
+    victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
 use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};

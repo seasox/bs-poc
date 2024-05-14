@@ -3,13 +3,17 @@ use std::ptr::null_mut;
 use anyhow::{bail, Context};
 
 use crate::{
-    forge::HammerVictim,
-    jitter::AggressorPtr,
-    memory::{BitFlip, VictimMemory},
-    util::MemConfiguration,
+    forge::BitFlip, jitter::AggressorPtr, memory::VictimMemory, util::MemConfiguration,
     RSACRT_alloc, RSACRT_check_dmp1, RSACRT_check_openssl_version, RSACRT_ctx_t, RSACRT_free_ctx,
     RSACRT_get_dmp1, RSACRT_init, BIGNUM,
 };
+
+pub trait HammerVictim {
+    fn init(&mut self) {}
+    /// returns true if flip was successful
+    fn check(&mut self) -> bool;
+    fn log_report(&self, _base_msb: AggressorPtr) {}
+}
 
 #[derive(Debug)]
 pub struct HammerVictimRsa {

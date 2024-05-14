@@ -4,6 +4,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
 use crate::{
+    forge::BitFlip,
     jitter::AggressorPtr,
     memory::DRAMAddr,
     util::{MemConfiguration, PAGE_SIZE},
@@ -118,6 +119,13 @@ pub trait VictimMemory {
     }
 }
 
+#[derive(Debug)]
+pub struct Memory {
+    allocator: MmapAllocator,
+    addr: AggressorPtr,
+    layout: Layout,
+}
+
 impl Memory {
     /// Move an instance of T into the allocated memory region at `offset', overwriting
     /// anything that might reside at `offset', returning a pinned reference to the moved
@@ -137,13 +145,6 @@ impl Drop for Memory {
             self.allocator.dealloc(self.addr as *mut u8, self.layout);
         }
     }
-}
-
-#[derive(Debug)]
-pub struct Memory {
-    allocator: MmapAllocator,
-    addr: AggressorPtr,
-    layout: Layout,
 }
 
 impl Memory {
@@ -179,22 +180,5 @@ impl VictimMemory for Memory {
     }
     fn len(&self) -> usize {
         return self.layout.size();
-    }
-}
-
-#[derive(Debug)]
-pub struct BitFlip {
-    pub dram_addr: DRAMAddr,
-    pub flips: u8,
-    pub expected: u8,
-}
-
-impl BitFlip {
-    fn new(dram_addr: DRAMAddr, flips: u8, expected: u8) -> Self {
-        BitFlip {
-            dram_addr,
-            flips,
-            expected,
-        }
     }
 }

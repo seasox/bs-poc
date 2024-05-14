@@ -10,6 +10,7 @@ use std::{collections::HashMap, fs::File, io::BufReader};
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::{DRAMAddr, MemBlock};
 use crate::util::{group, MemConfiguration};
+use crate::victim::HammerVictim;
 
 pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult>;
@@ -31,6 +32,16 @@ pub struct BitFlip {
     pub dram_addr: DRAMAddr,
     bitmask: u8,
     data: u8,
+}
+
+impl BitFlip {
+    pub fn new(dram_addr: DRAMAddr, bitmask: u8, data: u8) -> Self {
+        BitFlip {
+            dram_addr,
+            bitmask,
+            data,
+        }
+    }
 }
 
 #[serde_as]
@@ -200,13 +211,6 @@ impl HammeringPattern {
 pub struct HammerResult {
     pub run: u64,
     pub attempt: u64,
-}
-
-pub trait HammerVictim {
-    fn init(&mut self) {}
-    /// returns true if flip was successful
-    fn check(&mut self) -> bool;
-    fn log_report(&self, _base_msb: AggressorPtr) {}
 }
 
 pub struct DummyHammerer {

@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
-use bs_poc::forge::{DummyHammerer, HammerVictim, Hammerer, Hammering, HammeringPattern};
+use bs_poc::forge::{DummyHammerer, Hammerer, Hammering, HammeringPattern};
 use bs_poc::memory::{LinuxPageMap, MemBlock, Memory, VictimMemory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use bs_poc::victim::{HammerVictimMemCheck, HammerVictimRsa};
+use bs_poc::victim::{HammerVictim, HammerVictimMemCheck, HammerVictimRsa};
 use clap::Parser;
 use std::fmt::Debug;
 
