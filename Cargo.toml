@@ -7,16 +7,6 @@ edition = "2021"
 inherits = "release"
 debug = true
 
-[features]
-default = ["buddyinfo", "no_consec_check"]
-spec_hammer = []
-buddyinfo = []
-spoiler = []
-consec_check_pfn = []
-no_consec_check = []
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = { version = "1.0", features = ["backtrace"] }
 clap = { version = "4.3", features = ["derive"] }
