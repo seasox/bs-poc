@@ -17,6 +17,7 @@ pub trait ConsecAllocator: Sized {
         &self,
         size: usize,
         checker: &dyn ConsecChecker,
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks>;
 }
 
@@ -48,10 +49,13 @@ impl ConsecAllocator for ConsecAlloc {
         &self,
         size: usize,
         checker: &dyn ConsecChecker,
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
         match self {
-            ConsecAlloc::BuddyInfo => buddyinfo_alloc_blocks(size, checker),
-            ConsecAlloc::Hugepage => MmapAllocator::new(true).alloc_consec_blocks(size, checker),
+            ConsecAlloc::BuddyInfo => buddyinfo_alloc_blocks(size, checker, progress_cb),
+            ConsecAlloc::Hugepage => {
+                MmapAllocator::new(true).alloc_consec_blocks(size, checker, progress_cb)
+            }
         }
     }
 }
@@ -59,6 +63,7 @@ impl ConsecAllocator for ConsecAlloc {
 pub fn buddyinfo_alloc_blocks(
     size: usize,
     consec_checker: &dyn ConsecChecker,
+    progress_cb: impl Fn(),
 ) -> anyhow::Result<ConsecBlocks> {
     let block_size = 4 * MB;
     if size % block_size != 0 {
@@ -71,7 +76,11 @@ pub fn buddyinfo_alloc_blocks(
     let num_blocks = size / block_size;
     info!("Allocating {} blocks of size {}", num_blocks, block_size);
     let blocks = (0..size / block_size)
-        .map(|_| unsafe { MemBlock::buddyinfo_alloc(block_size, consec_checker) })
+        .map(|_| {
+            let block = unsafe { MemBlock::buddyinfo_alloc(block_size, consec_checker) };
+            progress_cb();
+            block
+        })
         .collect::<anyhow::Result<Vec<_>>>()?;
     // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
     for block in &blocks {
@@ -310,7 +319,6 @@ impl MemBlock {
     }
 }
 
-#[cfg(feature = "buddyinfo")]
 unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
     use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
@@ -338,8 +346,8 @@ fn compact_mem() -> anyhow::Result<()> {
         .arg("-c")
         .arg("echo 0 | sudo tee /proc/sys/kernel/randomize_va_space")
         .output()?;
-    info!("Waiting 3 seconds for memory compaction...");
-    std::thread::sleep(Duration::from_secs(3));
+    info!("Waiting for memory compaction...");
+    std::thread::sleep(Duration::from_secs(2));
     Ok(())
 }
 

@@ -108,6 +108,7 @@ impl ConsecAllocator for MmapAllocator {
         &self,
         size: usize,
         checker: &dyn super::ConsecChecker,
+        _progress_cb: impl Fn(),
     ) -> anyhow::Result<super::ConsecBlocks> {
         let ptr = self.alloc(Layout::from_size_align(size, 1)?);
         if ptr.is_null() {

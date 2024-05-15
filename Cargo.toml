@@ -27,6 +27,8 @@ ctrlc = "3.4.1"
 sys-info = "0.9.1"
 proc_getter = "0.0.3"
 itertools = "0.12.1"
+indicatif = "0.17.8"
+indicatif-log-bridge = "0.2.2"
 
 [dependencies.iced-x86]
 version = "1.19.0"

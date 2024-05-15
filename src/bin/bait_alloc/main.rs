@@ -22,8 +22,10 @@ use bs_poc::{
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
+use indicatif::{MultiProgress, ProgressBar};
+use indicatif_log_bridge::LogWrapper;
 use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use log::{debug, info};
+use log::{debug, info, warn};
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -120,6 +122,14 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
 }
 
 unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
+    // wrap logger for indicatif
+    let logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+    let multi = MultiProgress::new();
+
+    LogWrapper::new(multi.clone(), logger).try_init()?;
+
+    let pg = multi.add(ProgressBar::new(10));
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
@@ -204,10 +214,12 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let block_size = args.alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;
     let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
+    pg.set_length(num_sets as u64);
     loop {
-        let memory = args
-            .alloc_strategy
-            .alloc_consec_blocks(num_sets * block_size, &checker)?;
+        pg.set_position(0);
+        let memory =
+            args.alloc_strategy
+                .alloc_consec_blocks(num_sets * block_size, &checker, || pg.inc(1))?;
         let hammering_addrs = mapping.get_hammering_addresses_relocate(
             &pattern.access_ids,
             mem_config,
@@ -225,15 +237,15 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         // let hammerer = DummyHammerer::new(memory.addr(0), 0x42);
         let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
-        info!("Hammering pattern. This will take a while...");
-        let res = hammerer.hammer(&mut victim, 1);
+        info!("Hammering pattern. This might take a while...");
+        let res = hammerer.hammer(&mut victim, 3);
         match res {
             Ok(res) => {
                 print!("{:?}", res);
                 victim.log_report(BASE_MSB as AggressorPtr);
             }
             Err(e) => {
-                println!("Hammering not successful: {:?}", e);
+                warn!("Hammering not successful: {:?}", e);
                 continue;
             }
         }
@@ -250,8 +262,8 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     }
 }
 
-// TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben
 unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
+    env_logger::init();
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
     let waiting_sigh = waiting.clone();
@@ -301,7 +313,6 @@ unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
-    env_logger::init();
     let args = CliArgs::parse();
 
     let resolver = LinuxPageMap::new()?;
