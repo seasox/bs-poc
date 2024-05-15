@@ -102,11 +102,16 @@ fn main() -> Result<()> {
     info!("initialized hammerer");
     info!("start hammering");
     loop {
-        let result = hammerer.hammer(victim.as_mut())?;
-        println!(
-            "Successful at run {} after {} attempts",
-            result.run, result.attempt,
-        );
-        victim.log_report(memory.addr(0));
+        let result = hammerer.hammer(victim.as_mut(), 1);
+        match result {
+            Ok(result) => {
+                println!(
+                    "Successful at run {} after {} attempts",
+                    result.run, result.attempt,
+                );
+                victim.log_report(memory.addr(0));
+            }
+            Err(e) => println!("Hammering not successful: {:?} Retrying...", e),
+        }
     }
 }

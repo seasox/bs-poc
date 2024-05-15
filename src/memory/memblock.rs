@@ -7,43 +7,80 @@ use anyhow::bail;
 use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
 use rand::Rng;
 
-use crate::util::{KNOWN_BITS, MB, PAGE_SIZE};
+use crate::util::{MB, PAGE_SIZE};
 
-use super::VictimMemory;
+use super::{allocator::MmapAllocator, ConsecChecker, VictimMemory};
 
-pub trait ConsecAlloc: Sized {
-    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<Self>;
-    unsafe fn check(&self) -> anyhow::Result<bool>;
+pub trait ConsecAllocator: Sized {
+    fn block_size(&self) -> usize;
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        checker: &dyn ConsecChecker,
+    ) -> anyhow::Result<ConsecBlocks>;
 }
 
-pub struct BlockMemory {
+pub struct ConsecBlocks {
     pub blocks: Vec<MemBlock>,
 }
 
-impl BlockMemory {
-    pub fn new(len: usize) -> anyhow::Result<Self> {
-        let block_size = 1 << KNOWN_BITS;
-        if len % block_size != 0 {
-            bail!(
-                "Size {} must be a multiple of block size {}",
-                len,
-                block_size
-            );
-        }
-        let num_blocks = len / block_size;
-        info!("Allocating {} blocks of size {}", num_blocks, block_size);
-        let blocks = (0..len / block_size)
-            .map(|_| unsafe { MemBlock::alloc_consec_block(block_size) })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        for block in &blocks {
-            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
-        }
-        Ok(BlockMemory { blocks })
+impl ConsecBlocks {
+    pub fn new(blocks: Vec<MemBlock>) -> Self {
+        ConsecBlocks { blocks }
     }
 }
 
-impl VictimMemory for BlockMemory {
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum ConsecAlloc {
+    BuddyInfo,
+    Hugepage,
+}
+
+impl ConsecAllocator for ConsecAlloc {
+    fn block_size(&self) -> usize {
+        match self {
+            ConsecAlloc::BuddyInfo => 4 * MB,
+            ConsecAlloc::Hugepage => MmapAllocator::new(true).block_size(),
+        }
+    }
+
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        checker: &dyn ConsecChecker,
+    ) -> anyhow::Result<ConsecBlocks> {
+        match self {
+            ConsecAlloc::BuddyInfo => buddyinfo_alloc_blocks(size, checker),
+            ConsecAlloc::Hugepage => MmapAllocator::new(true).alloc_consec_blocks(size, checker),
+        }
+    }
+}
+
+pub fn buddyinfo_alloc_blocks(
+    size: usize,
+    consec_checker: &dyn ConsecChecker,
+) -> anyhow::Result<ConsecBlocks> {
+    let block_size = 4 * MB;
+    if size % block_size != 0 {
+        bail!(
+            "Size {} must be a multiple of block size {}",
+            size,
+            block_size
+        );
+    }
+    let num_blocks = size / block_size;
+    info!("Allocating {} blocks of size {}", num_blocks, block_size);
+    let blocks = (0..size / block_size)
+        .map(|_| unsafe { MemBlock::buddyinfo_alloc(block_size, consec_checker) })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+    for block in &blocks {
+        unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
+    }
+    Ok(ConsecBlocks::new(blocks))
+}
+
+impl VictimMemory for ConsecBlocks {
     fn addr(&self, offset: usize) -> *mut u8 {
         let mut offset = offset;
         for block in &self.blocks {
@@ -67,7 +104,13 @@ pub struct MemBlock {
     pub len: usize,
 }
 
-impl ConsecAlloc for MemBlock {
+impl MemBlock {
+    pub fn new(ptr: *mut u8, len: usize) -> Self {
+        MemBlock { ptr, len }
+    }
+}
+
+impl MemBlock {
     #[cfg(feature = "spec_hammer")]
     unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
         let locked_2mb_blocks = determine_locked_2mb_blocks()?;
@@ -104,8 +147,10 @@ impl ConsecAlloc for MemBlock {
         Ok(v)
     }
 
-    #[cfg(feature = "buddyinfo")]
-    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
+    unsafe fn buddyinfo_alloc(
+        size: usize,
+        consec_checker: &dyn ConsecChecker,
+    ) -> anyhow::Result<MemBlock> {
         use std::ptr::null_mut;
 
         use crate::util::retry;
@@ -201,7 +246,7 @@ impl ConsecAlloc for MemBlock {
          */
         let block = retry(|| {
             let block = find_block10_candidate()?;
-            match block.check() {
+            match consec_checker.check(&block) {
                 Ok(true) => Ok(block),
                 Ok(false) => {
                     libc::munmap(block.ptr as *mut libc::c_void, block.len);
@@ -262,51 +307,6 @@ impl ConsecAlloc for MemBlock {
             ptr: addr as *mut libc::c_void,
             len: 8 * MB,
         })
-    }
-
-    #[cfg(feature = "consec_check_pfn")]
-    unsafe fn check(&self) -> anyhow::Result<bool> {
-        /*
-         * Check whether the allocation is actually consecutive. The current implementation simply
-         * checks for consecutive PFNs using the virt-to-phys pagemap. This needs root permissions.
-         * Therefore, this check should be replaced with a timing side channel to verify the address function
-         * in the memory block. If the measured timings correspond to the address function, it is very likely that
-         * this indeed is a consecutive memory block.
-         */
-
-        use crate::memory::{LinuxPageMap, VirtToPhysResolver};
-        let mut resolver = LinuxPageMap::new()?;
-        if (self.ptr as u64) & 0xFFF != 0 {
-            bail!("Address is not page-aligned: 0x{:x}", self.ptr as u64);
-        }
-        trace!("Get consecutive PFNs for vaddr 0x{:x}", self.ptr as u64);
-        let mut phys_prev = resolver.get_phys(self.ptr as u64)?;
-        let mut consecs = vec![phys_prev];
-        for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
-            let virt = (self.ptr as *const u8).add(offset);
-            let phys = resolver.get_phys(virt as u64)?;
-            if phys != phys_prev + PAGE_SIZE as u64 {
-                consecs.push(phys_prev + PAGE_SIZE as u64);
-                consecs.push(phys);
-            }
-            phys_prev = phys;
-        }
-        consecs.push(phys_prev + PAGE_SIZE as u64);
-        trace!("PFN check done");
-        let first_block_bytes = (consecs[1] - consecs[0]) as usize;
-        info!(
-            "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
-            first_block_bytes / 1024,
-            self.ptr as u64,
-            self.ptr.add(first_block_bytes) as u64,
-        );
-        info!("PFNs {:?}", consecs);
-        Ok(first_block_bytes >= self.len)
-    }
-
-    #[cfg(feature = "no_consec_check")]
-    unsafe fn check(&self) -> anyhow::Result<bool> {
-        Ok(true)
     }
 }
 

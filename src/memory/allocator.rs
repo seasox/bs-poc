@@ -10,6 +10,8 @@ use std::{
     ptr::null_mut,
 };
 
+use super::{memblock::ConsecAllocator, ConsecBlocks, MemBlock};
+
 // https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
 //
 // The output of "cat /proc/meminfo" will include lines like:
@@ -95,6 +97,30 @@ unsafe impl GlobalAlloc for MmapAllocator {
     unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
         libc::munmap(p as *mut c_void, len);
+    }
+}
+
+impl ConsecAllocator for MmapAllocator {
+    fn block_size(&self) -> usize {
+        *HUGEPAGE_SIZE as usize
+    }
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        checker: &dyn super::ConsecChecker,
+    ) -> anyhow::Result<super::ConsecBlocks> {
+        let ptr = self.alloc(Layout::from_size_align(size, 1)?);
+        if ptr.is_null() {
+            bail!("Alloc failed");
+        }
+        let block = MemBlock::new(ptr, size);
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        std::ptr::write_bytes(block.ptr, 0, block.len);
+        let is_consecutive = checker.check(&block)?;
+        if !is_consecutive {
+            bail!("Allocated memory is not consecutive");
+        }
+        Ok(ConsecBlocks::new(vec![block]))
     }
 }
 

