@@ -5,6 +5,7 @@
 pub mod forge;
 pub mod jitter;
 pub mod memory;
+pub mod timer;
 pub mod util;
 pub mod victim;
 
