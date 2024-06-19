@@ -5,19 +5,31 @@ CONFIG=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json
 # FUZZ_CONF=config/fuzz-summary_small.json
 # PATTERN=31a3b147-c1b4-4e15-8dec-d586a93f4fed
 # MAPPING=9a9fc4d8-0edb-43f3-9e6f-ffe7670b20bf
-# [+] Sweeping pattern 835de010-4e2f-468b-85a9-a1f9db351ae8 with mapping 715b602f-1ad9-45a6-9119-b71fb3002b48 over 256 MB, equiv. to 1024 rows, with each 10 repetitions.
-FUZZ_CONF=config/fuzz-summary_25mb.json
-PATTERN=835de010-4e2f-468b-85a9-a1f9db351ae8
-#MAPPING=715b602f-1ad9-45a6-9119-b71fb3002b48
+FUZZ_CONF=config/fuzz-summary.json
+PATTERN=39ad622b-3bfe-4161-b860-dad5f3e6dd68
+#MAPPING=4d16a3db-c991-419a-b6fe-3a7f41113a8e
+
+#ALLOC_STRATEGY=hugepage-rnd
+ALLOC_STRATEGY=co-co
+#ALLOC_STRATEGY=buddy-info
 
 BS_FLAGS =--config=${CONFIG}
 BS_FLAGS+=--load-json=${FUZZ_CONF}
+BS_FLAGS+=--alloc-strategy=${ALLOC_STRATEGY}
+
+ifneq ($(PATTERN),)
 BS_FLAGS+=--pattern=${PATTERN}
-#BS_FLAGS+=--mapping=${MAPPING}
+endif
+
+ifneq ($(MAPPING),)
+BS_FLAGS+=--mapping=${MAPPING}
+endif
 
 PROFILE=release
-# CARGO_FLAGS=
-CARGO_FLAGS=--release
+
+ifeq ($(PROFILE),release)
+	CARGO_FLAGS=--release
+endif
 
 LOG_LEVEL=info
 
@@ -28,7 +40,9 @@ SUDO=sudo -E taskset -c 1
 all:
 	cargo build ${CARGO_FLAGS}
 
-bait_alloc: all
+bait_alloc: all run_bait_alloc
+
+run_bait_alloc:
 	${LOGGER} ${SUDO} target/${PROFILE}/bait_alloc ${BS_FLAGS}
 
 bs_poc: all
