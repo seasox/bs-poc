@@ -26,6 +26,14 @@ pub struct ConsecBlocks {
 }
 
 impl ConsecBlocks {
+    pub fn dealloc(self) {
+        for block in self.blocks {
+            unsafe { libc::munmap(block.ptr as *mut libc::c_void, block.len) };
+        }
+    }
+}
+
+impl ConsecBlocks {
     pub fn new(blocks: Vec<MemBlock>) -> Self {
         ConsecBlocks { blocks }
     }
@@ -395,14 +403,6 @@ unsafe fn determine_locked_2mb_blocks() -> anyhow::Result<usize> {
         }
     }
     Ok(locked)
-}
-
-impl Drop for MemBlock {
-    fn drop(&mut self) {
-        unsafe {
-            libc::munmap(self.ptr as *mut libc::c_void, self.len);
-        }
-    }
 }
 
 /// Read /proc/pagetypeinfo to string
