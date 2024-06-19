@@ -58,6 +58,7 @@ fn bind_ptedit(bindings: bindgen::Builder) -> bindgen::Builder {
 fn build_ptedit() {
     // build ptedit
     cc::Build::new()
+        .flag("-Wno-strict-aliasing") // silence warning regarding ptedit_cast macro in lib/ptedit/ptedit.h:498:33
         .file("lib/ptedit/ptedit.c")
         .compile("libptedit.a")
 }
