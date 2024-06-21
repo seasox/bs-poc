@@ -1,23 +1,22 @@
-use std::{io::Read, process::Command, time::Duration};
+use std::{ffi::CString, io::Read, process::Command, time::Duration};
 
 #[cfg(feature = "spoiler")]
 use crate::memory_addresses;
 
+use crate::util::{retry, MB, PAGE_SIZE};
 use anyhow::bail;
 use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
+use rand::prelude::SliceRandom;
 use rand::Rng;
 
-use crate::util::{MB, PAGE_SIZE};
+use super::{AllocChecker, VictimMemory};
 
-use super::{allocator::MmapAllocator, ConsecChecker, VictimMemory};
-
-pub trait ConsecAllocator: Sized {
+pub trait ConsecAllocator {
     fn block_size(&self) -> usize;
     unsafe fn alloc_consec_blocks(
         &self,
         size: usize,
-        checker: &dyn ConsecChecker,
-        progress_cb: impl Fn(),
+        progress_cb: &dyn Fn(),
     ) -> anyhow::Result<ConsecBlocks>;
 }
 
@@ -26,75 +25,14 @@ pub struct ConsecBlocks {
 }
 
 impl ConsecBlocks {
+    pub fn new(blocks: Vec<MemBlock>) -> Self {
+        ConsecBlocks { blocks }
+    }
     pub fn dealloc(self) {
         for block in self.blocks {
             unsafe { libc::munmap(block.ptr as *mut libc::c_void, block.len) };
         }
     }
-}
-
-impl ConsecBlocks {
-    pub fn new(blocks: Vec<MemBlock>) -> Self {
-        ConsecBlocks { blocks }
-    }
-}
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum ConsecAlloc {
-    BuddyInfo,
-    Hugepage,
-}
-
-impl ConsecAllocator for ConsecAlloc {
-    fn block_size(&self) -> usize {
-        match self {
-            ConsecAlloc::BuddyInfo => 4 * MB,
-            ConsecAlloc::Hugepage => MmapAllocator::new(true).block_size(),
-        }
-    }
-
-    unsafe fn alloc_consec_blocks(
-        &self,
-        size: usize,
-        checker: &dyn ConsecChecker,
-        progress_cb: impl Fn(),
-    ) -> anyhow::Result<ConsecBlocks> {
-        match self {
-            ConsecAlloc::BuddyInfo => buddyinfo_alloc_blocks(size, checker, progress_cb),
-            ConsecAlloc::Hugepage => {
-                MmapAllocator::new(true).alloc_consec_blocks(size, checker, progress_cb)
-            }
-        }
-    }
-}
-
-pub fn buddyinfo_alloc_blocks(
-    size: usize,
-    consec_checker: &dyn ConsecChecker,
-    progress_cb: impl Fn(),
-) -> anyhow::Result<ConsecBlocks> {
-    let block_size = 4 * MB;
-    if size % block_size != 0 {
-        bail!(
-            "Size {} must be a multiple of block size {}",
-            size,
-            block_size
-        );
-    }
-    let num_blocks = size / block_size;
-    info!("Allocating {} blocks of size {}", num_blocks, block_size);
-    let blocks = (0..size / block_size)
-        .map(|_| {
-            let block = unsafe { MemBlock::buddyinfo_alloc(block_size, consec_checker) };
-            progress_cb();
-            block
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-    for block in &blocks {
-        unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
-    }
-    Ok(ConsecBlocks::new(blocks))
 }
 
 impl VictimMemory for ConsecBlocks {
@@ -114,6 +52,143 @@ impl VictimMemory for ConsecBlocks {
     }
 }
 
+pub struct ConsecAllocHugepageRnd {
+    hugepages: Vec<ConsecBlocks>,
+}
+
+impl ConsecAllocHugepageRnd {
+    pub fn new(hugepages: Vec<ConsecBlocks>) -> Self {
+        ConsecAllocHugepageRnd { hugepages }
+    }
+}
+
+impl ConsecAllocator for ConsecAllocHugepageRnd {
+    fn block_size(&self) -> usize {
+        4 * MB
+    }
+
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        progress_cb: &dyn Fn(),
+    ) -> anyhow::Result<ConsecBlocks> {
+        let hp_size = 1024 * MB;
+        let chunk_size = self.block_size();
+        let num_chunks = hp_size / chunk_size;
+        let total_chunks = self.hugepages.len() * num_chunks;
+        let num_blocks = size / chunk_size;
+
+        let mut chunk_indices: Vec<usize> = (0..total_chunks).collect();
+        let mut rng = rand::thread_rng();
+        chunk_indices.shuffle(&mut rng);
+        let selected_indices = &chunk_indices[..num_blocks];
+        //let free_indices = &chunk_indices[num_blocks..];
+
+        let blocks = selected_indices
+            .iter()
+            .map(|index| {
+                info!("Hugepage {}", index / num_chunks);
+                progress_cb();
+                self.hugepages[index / num_chunks].addr((index % num_chunks) * chunk_size)
+            })
+            .map(|ptr| MemBlock::new(ptr, chunk_size))
+            .collect::<Vec<_>>();
+        let consecs = ConsecBlocks::new(blocks);
+        Ok(consecs)
+    }
+}
+
+pub struct ConsecAllocCoCo {}
+
+impl ConsecAllocator for ConsecAllocCoCo {
+    fn block_size(&self) -> usize {
+        4 * MB
+    }
+
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        progress_cb: &dyn Fn(),
+    ) -> anyhow::Result<ConsecBlocks> {
+        const mod_path: &str = "/dev/coco_dec_mem";
+        let c_mod_path = CString::new(mod_path)?;
+        let fd = libc::open(c_mod_path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
+        if fd == -1 {
+            bail!("Failed to open {}", mod_path);
+        }
+        let block_size: usize = self.block_size();
+        let block_count = (size as f32 / block_size as f32).ceil() as i32;
+        let blocks = (0..block_count)
+            .map(|_| {
+                let v = libc::mmap(
+                    std::ptr::null_mut(),
+                    block_size,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED | libc::MAP_POPULATE,
+                    fd,
+                    0,
+                );
+                if v == libc::MAP_FAILED {
+                    bail!("Failed to mmap");
+                }
+                let block = MemBlock::new(v as *mut u8, 4 * MB);
+                libc::memset(block.ptr as *mut libc::c_void, 0, block.len);
+                //consec_checker.check(&block)?;
+                progress_cb();
+                Ok(block)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        libc::close(fd);
+        Ok(ConsecBlocks::new(blocks))
+    }
+}
+
+pub struct ConsecAllocBuddyInfo {
+    consec_checker: Box<dyn AllocChecker>,
+}
+
+impl ConsecAllocBuddyInfo {
+    pub fn new(consec_checker: Box<dyn AllocChecker>) -> Self {
+        ConsecAllocBuddyInfo { consec_checker }
+    }
+}
+
+impl ConsecAllocator for ConsecAllocBuddyInfo {
+    fn block_size(&self) -> usize {
+        1 * MB
+    }
+
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        progress_cb: &dyn Fn(),
+    ) -> anyhow::Result<ConsecBlocks> {
+        let block_size = self.block_size();
+        if size % block_size != 0 {
+            bail!(
+                "Size {} must be a multiple of block size {}",
+                size,
+                block_size
+            );
+        }
+        let num_blocks = size / block_size;
+        info!("Allocating {} blocks of size {}", num_blocks, block_size);
+        let mut blocks = vec![];
+        for _ in 0..num_blocks {
+            let block =
+                unsafe { MemBlock::buddyinfo_alloc(block_size, &*self.consec_checker, &blocks)? };
+            progress_cb();
+            blocks.push(block);
+        }
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        for block in &blocks {
+            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
+        }
+        Ok(ConsecBlocks::new(blocks))
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct MemBlock {
     /// block pointer
     pub ptr: *mut u8,
@@ -164,106 +239,109 @@ impl MemBlock {
         Ok(v)
     }
 
+    fn is_block_candidate(diff: &[i64; 11], block_order: usize) -> bool {
+        if block_order > 10 {
+            panic!("Invalid block order")
+        }
+        if diff[block_order] != 1 {
+            return false;
+        }
+        let low_order_sum = diff[..block_order]
+            .iter()
+            .enumerate()
+            .filter(|(_, &n)| n > 0)
+            .fold(0, |acc, (order, n)| acc + (1 << order) * n);
+        let low_order_sum = usize::try_from(low_order_sum).unwrap() * PAGE_SIZE;
+        debug!("low order: {}", low_order_sum);
+        low_order_sum < 2usize.pow(block_order as u32) * PAGE_SIZE
+    }
+
+    unsafe fn find_block10_candidate() -> anyhow::Result<MemBlock> {
+        //const HUGEBLOCK_SIZE: usize = 2048 * MB;
+        const ALLOC_SIZE: usize = 4 * MB;
+        const MAX_ALLOCS: usize = 65000;
+        log_pagetypeinfo();
+        loop {
+            let mut pages = [std::ptr::null_mut(); MAX_ALLOCS];
+            let mut v1 = None;
+            let mut diff: [i64; 11]; // = [0; 11];
+
+            compact_mem()?;
+            do_random_allocations();
+
+            //trace!("will alloc hugeblock");
+            //let hb = mmap_block(null_mut(), HUGEBLOCK_SIZE);
+            //trace!("hugeblock allocated");
+
+            for i in 0..MAX_ALLOCS {
+                log_pagetypeinfo();
+                let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
+                let v = mmap_block(std::ptr::null_mut(), ALLOC_SIZE);
+                log_pagetypeinfo();
+                let blocks_after = get_normal_page_nums()?;
+                diff = diff_arrs(&blocks_before, &blocks_after);
+                //debug!("  {:?}", blocks_before);
+                //debug!("- {:?}", blocks_after);
+                if diff[10] != 0 {
+                    debug!("diff: {:?}", diff);
+                }
+                if MemBlock::is_block_candidate(&diff, 10) {
+                    debug!("allocated block from order 10 block");
+                    v1 = Some(v);
+                    break;
+                } else {
+                    pages[i] = v;
+                }
+            }
+
+            // cleanup
+            //libc::munmap(hb, HUGEBLOCK_SIZE);
+            for p in pages {
+                if p.is_null() {
+                    continue;
+                }
+                libc::munmap(p, ALLOC_SIZE);
+            }
+
+            // return
+            match v1 {
+                Some(v) => {
+                    return Ok(MemBlock {
+                        ptr: v as *mut u8,
+                        len: ALLOC_SIZE,
+                    })
+                }
+                None => {
+                    debug!("No block10 candidate found. Retrying...");
+                }
+            };
+        }
+    }
+
     unsafe fn buddyinfo_alloc(
         size: usize,
-        consec_checker: &dyn ConsecChecker,
+        consec_checker: &dyn AllocChecker,
+        previous_blocks: &[MemBlock],
     ) -> anyhow::Result<MemBlock> {
-        use std::ptr::null_mut;
-
-        use crate::util::retry;
-
         if size > 4 * MB {
             return Err(anyhow::anyhow!(
                 "Buddyinfo only supports consecutive allocations of up to 4MB."
             ));
         }
-        fn is_block_candidate(diff: &[i64; 11], block_order: usize) -> bool {
-            if block_order > 10 {
-                panic!("Invalid block order")
-            }
-            if diff[block_order] != 1 {
-                return false;
-            }
-            let low_order_sum = diff[..block_order]
-                .iter()
-                .enumerate()
-                .filter(|(_, &n)| n > 0)
-                .fold(0, |acc, (order, n)| acc + (1 << order) * n);
-            let low_order_sum = usize::try_from(low_order_sum).unwrap() * PAGE_SIZE;
-            debug!("low order: {}", low_order_sum);
-            low_order_sum < 2usize.pow(block_order as u32) * PAGE_SIZE
-        }
-
-        unsafe fn find_block10_candidate() -> anyhow::Result<MemBlock> {
-            const HUGEBLOCK_SIZE: usize = 2048 * MB;
-            const ALLOC_SIZE: usize = 4 * MB;
-            const MAX_ALLOCS: usize = 2000;
-            log_pagetypeinfo();
-            loop {
-                let mut pages = [null_mut(); MAX_ALLOCS];
-                let mut v1 = None;
-                let mut diff: [i64; 11]; // = [0; 11];
-
-                compact_mem()?;
-                do_random_allocations();
-
-                trace!("will alloc hugeblock");
-                let hb = mmap_block(null_mut(), HUGEBLOCK_SIZE);
-                trace!("hugeblock allocated");
-
-                for i in 0..MAX_ALLOCS {
-                    log_pagetypeinfo();
-                    let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
-                    let v = mmap_block(null_mut(), ALLOC_SIZE);
-                    log_pagetypeinfo();
-                    let blocks_after = get_normal_page_nums()?;
-                    diff = diff_arrs(&blocks_before, &blocks_after);
-                    //debug!("  {:?}", blocks_before);
-                    //debug!("- {:?}", blocks_after);
-                    if diff[10] != 0 {
-                        debug!("diff: {:?}", diff);
-                    }
-                    if is_block_candidate(&diff, 10) {
-                        debug!("allocated block from order 10 block");
-                        v1 = Some(v);
-                        break;
-                    } else {
-                        pages[i] = v;
-                    }
-                }
-
-                // cleanup
-                libc::munmap(hb, HUGEBLOCK_SIZE);
-                for p in pages {
-                    if p.is_null() {
-                        continue;
-                    }
-                    libc::munmap(p, ALLOC_SIZE);
-                }
-
-                // return
-                match v1 {
-                    Some(v) => {
-                        return Ok(MemBlock {
-                            ptr: v as *mut u8,
-                            len: ALLOC_SIZE,
-                        })
-                    }
-                    None => {
-                        debug!("No block10 candidate found. Retrying...");
-                    }
-                };
-            }
-        }
-
         /*
          * there's two things that might fail here:
          * (1) finding a suitable block10 candidate and
          * (2) verifying that the block is actually consecutive (using the MemBlock::check() function)
          */
         let block = retry(|| {
-            let block = find_block10_candidate()?;
-            match consec_checker.check(&block) {
+            let block = MemBlock::find_block10_candidate()?;
+            // munmap slice of MemBlock
+            let ptr = (block.ptr as *mut u8).add(size);
+            unsafe {
+                libc::munmap(ptr as *mut libc::c_void, block.len - size);
+            }
+            let block = MemBlock::new(block.ptr, size);
+            match consec_checker.check(&block, previous_blocks) {
                 Ok(true) => Ok(block),
                 Ok(false) => {
                     libc::munmap(block.ptr as *mut libc::c_void, block.len);
@@ -328,13 +406,13 @@ impl MemBlock {
 }
 
 unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
-    use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+    use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
 
     let v = libc::mmap(
         addr,
         len,
         PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE,
+        MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
         -1,
         0,
     );

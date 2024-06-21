@@ -1,14 +1,17 @@
 use anyhow::{bail, Context, Result};
+use itertools::Itertools;
+use perfcnt::linux::PerfCounterBuilderLinux;
+use perfcnt::{AbstractPerfCounter, PerfCounter};
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
-use std::arch::x86_64::_mm_clflush;
+use std::arch::x86_64::{__rdtscp, _mm_clflush, _mm_mfence};
 use std::fmt::Debug;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::memory::{DRAMAddr, MemBlock};
+use crate::memory::{ConsecBlocks, DRAMAddr, MemBlock, VictimMemory};
 use crate::util::{group, MemConfiguration};
 use crate::victim::HammerVictim;
 
@@ -108,21 +111,21 @@ impl PatternAddressMapper {
         }
         debug!("{:?}", base_lookup);
 
-        let aggrs = aggressors
-            .iter()
-            .map(|agg| {
-                let addr = &addrs[agg];
-                let base = blocks[base_lookup[agg]].ptr as u64;
-                let virt = addr.to_virt(0 as *const u8, mem_config);
-                let virt = virt as u64 & ((1 << block_shift) - 1);
-                let virt = (base | virt) as *const u8;
-
-                debug!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
-                virt
-            })
-            .collect();
-
-        Ok(aggrs)
+        let mut aggrs_relocated = vec![];
+        for agg in aggressors {
+            let base_idx = base_lookup[agg];
+            let base = match blocks.get(base_idx) {
+                Some(base) => base.ptr as u64,
+                None => bail!("No base found for {:?}", agg),
+            };
+            let addr = &addrs[agg];
+            let virt = addr.to_virt(0 as *const u8, mem_config);
+            let virt = virt as u64 & ((1 << block_shift) - 1);
+            let virt = (base | virt) as *const u8;
+            debug!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
+            aggrs_relocated.push(virt);
+        }
+        Ok(aggrs_relocated)
     }
 
     fn get_random_nonaccessed_rows(
@@ -217,15 +220,15 @@ pub struct HammerResult {
     pub attempt: u8,
 }
 
-pub struct DummyHammerer {
-    base_msb: *mut u8,
+pub struct DummyHammerer<'a> {
+    blocks: &'a ConsecBlocks,
     flip_offset: usize,
 }
 
-impl DummyHammerer {
-    pub fn new(base_msb: *mut u8, flip_offset: usize) -> Self {
+impl<'a> DummyHammerer<'a> {
+    pub fn new(blocks: &'a ConsecBlocks, flip_offset: usize) -> Self {
         DummyHammerer {
-            base_msb,
+            blocks,
             flip_offset,
         }
     }
@@ -235,7 +238,7 @@ impl<'a> Hammering for DummyHammerer<'a> {
     fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u64) -> Result<HammerResult> {
         victim.init();
         unsafe {
-            let flipped_byte = self.base_msb.add(self.flip_offset);
+            let flipped_byte = self.blocks.addr(self.flip_offset);
             debug!(
                 "Flip 0x{:02X} from {} to {} at offset {}",
                 flipped_byte as usize, *flipped_byte, !*flipped_byte, self.flip_offset
@@ -290,13 +293,23 @@ impl<'a> Hammerer<'a> {
 
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
 
+        let num_accessed_addrs = hammering_addrs
+            .into_iter()
+            .map(|x| (*x as usize) & !(0xFFF))
+            .unique()
+            .count();
+
+        info!("{} accessed addresses", num_accessed_addrs);
+
         let program =
             mapping
                 .code_jitter
                 .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
-        program
-            .write("hammer_jit.o")
-            .with_context(|| "failed to write function to disk")?;
+        if cfg!(jitter_dump) {
+            program
+                .write("hammer_jit.o")
+                .with_context(|| "failed to write function to disk")?;
+        }
 
         return Ok(Hammerer {
             blocks,
@@ -333,6 +346,25 @@ impl<'a> Hammering for Hammerer<'a> {
 
         const NUM_RETRIES: u8 = 100;
 
+        let walk_1g = x86::perfcnt::intel::events()
+            .unwrap()
+            .get("DTLB_LOAD_MISSES.WALK_COMPLETED_1G")
+            .unwrap();
+        let mut pc_1g: PerfCounter = PerfCounterBuilderLinux::from_intel_event_description(walk_1g)
+            .exclude_idle()
+            .exclude_kernel()
+            .finish()
+            .expect("Could not create counter");
+        let walk_4k = x86::perfcnt::intel::events()
+            .unwrap()
+            .get("DTLB_LOAD_MISSES.WALK_COMPLETED_4K")
+            .unwrap();
+        let mut pc_4k: PerfCounter = PerfCounterBuilderLinux::from_intel_event_description(walk_4k)
+            .exclude_idle()
+            .exclude_kernel()
+            .finish()
+            .expect("Could not create counter");
+
         for run in 0..max_runs {
             victim.init();
             info!("Hammering run {}", run);
@@ -354,11 +386,32 @@ impl<'a> Hammering for Hammerer<'a> {
                 );
                 self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
                 debug!("call into jitted program");
-                let result = unsafe { self.program.call() };
-                debug!(
-                    "jit call done: 0x{:02X} (attempt {}:{})",
-                    result, run, attempt
+                unsafe {
+                    let mut aux = 0;
+                    _mm_mfence();
+                    let time = __rdtscp(&mut aux);
+                    _mm_mfence();
+                    pc_1g.start().expect("Can not start the counter");
+                    pc_4k.start().expect("Can not start the counter");
+                    let result = self.program.call();
+                    pc_1g.stop().expect("Can not stop the counter");
+                    pc_4k.stop().expect("Can not stop the counter");
+                    _mm_mfence();
+                    let time = __rdtscp(&mut aux) - time;
+                    _mm_mfence();
+                    info!("Run {};{}: JIT call took {} cycles", run, attempt, time);
+                    debug!(
+                        "jit call done: 0x{:02X} (attempt {}:{})",
+                        result, run, attempt
+                    );
+                }
+                info!(
+                    "1G/4K TLB walks: {:?}/{:?}",
+                    pc_1g.read().expect("Can not read counter"),
+                    pc_4k.read().expect("Can not read counter")
                 );
+                pc_1g.reset().expect("Can not reset the counter");
+                pc_4k.reset().expect("Can not reset the counter");
                 let result = victim.check();
                 if result {
                     return Ok(HammerResult { run, attempt });
