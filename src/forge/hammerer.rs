@@ -140,6 +140,10 @@ impl PatternAddressMapper {
         }
         addresses
     }
+
+    pub fn count_bitflips(&self) -> usize {
+        self.bit_flips.iter().map(|b| b.len()).sum()
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -195,7 +199,7 @@ impl HammeringPattern {
     pub fn determine_most_effective_mapping(&self) -> Option<PatternAddressMapper> {
         self.address_mappings
             .iter()
-            .max_by_key(|m| m.bit_flips.len())
+            .max_by_key(|m| m.count_bitflips())
             .cloned()
     }
 
