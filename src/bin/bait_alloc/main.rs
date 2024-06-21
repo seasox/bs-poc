@@ -20,7 +20,8 @@ use bs_poc::{
         ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd, ConsecAllocator,
         ConsecCheckPfn, HugepageAllocator, LinuxPageMap, MemBlock, VirtToPhysResolver,
     },
-    util::{retry, BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
+    retry,
+    util::{BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
@@ -92,7 +93,7 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     let f = File::open(&json_filename)?;
     let reader = BufReader::new(f);
     let fuzz: FuzzSummary = serde_json::from_reader(reader)?;
-    let pattern = retry(|| {
+    let pattern = retry!(|| {
         println!("Please choose a pattern:");
         for (i, pattern) in fuzz.hammering_patterns.iter().enumerate() {
             let best_mapping = pattern

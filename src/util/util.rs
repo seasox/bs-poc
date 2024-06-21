@@ -17,6 +17,7 @@ where
     out
 }
 
+/*
 pub fn retry<F, T>(mut f: F) -> T
 where
     F: FnMut() -> anyhow::Result<T>,
@@ -29,4 +30,20 @@ where
             }
         }
     }
+}
+*/
+
+#[macro_export]
+macro_rules! retry {
+    ($f:expr) => {{
+        let f = $f;
+        loop {
+            match f() {
+                Ok(x) => break x,
+                Err(e) => {
+                    log::error!("{:?}", e);
+                }
+            }
+        }
+    }};
 }

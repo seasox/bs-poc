@@ -333,7 +333,7 @@ impl MemBlock {
          * (1) finding a suitable block10 candidate and
          * (2) verifying that the block is actually consecutive (using the MemBlock::check() function)
          */
-        let block = retry(|| {
+        let block = retry!(|| {
             let block = MemBlock::find_block10_candidate()?;
             // munmap slice of MemBlock
             let ptr = (block.ptr as *mut u8).add(size);
