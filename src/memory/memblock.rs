@@ -3,7 +3,10 @@ use std::{ffi::CString, io::Read, process::Command, time::Duration};
 #[cfg(feature = "spoiler")]
 use crate::memory_addresses;
 
-use crate::util::{retry, MB, PAGE_SIZE};
+use crate::{
+    retry,
+    util::{MB, PAGE_SIZE},
+};
 use anyhow::bail;
 use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
 use rand::prelude::SliceRandom;
