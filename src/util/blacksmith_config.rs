@@ -44,7 +44,7 @@ pub struct BlacksmithConfig {
     //ranks: u64,
     //total_banks: u64,
     //max_rows: u64,
-    //threshold: u64,
+    pub threshold: u64,
     //hammer_rounds: usize,
     //drama_rounds: usize,
     //acts_per_trefi: u64,
