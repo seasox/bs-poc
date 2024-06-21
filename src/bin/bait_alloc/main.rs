@@ -17,8 +17,8 @@ use bs_poc::{
     jitter::AggressorPtr,
     memory::{
         AllocCheck, AllocCheckSameBank, AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo,
-        ConsecAllocHugepageRnd, ConsecAllocator, ConsecCheck, HugepageAllocator, LinuxPageMap,
-        VirtToPhysResolver,
+        ConsecAllocHugepageRnd, ConsecAllocator, ConsecCheckNone, ConsecCheckPfn,
+        HugepageAllocator, LinuxPageMap, VirtToPhysResolver,
     },
     util::{retry, BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
@@ -139,8 +139,8 @@ fn make_vec<T>(n: usize, f: &dyn Fn(usize) -> T) -> Vec<T> {
 
 fn create_checker_from_cli(consec_check: ConsecCheckType) -> Box<dyn AllocChecker> {
     match consec_check {
-        ConsecCheckType::None => Box::new(ConsecCheck::None),
-        ConsecCheckType::Pfn => Box::new(ConsecCheck::Pfn),
+        ConsecCheckType::None => Box::new(ConsecCheckNone {}),
+        ConsecCheckType::Pfn => Box::new(ConsecCheckPfn {}),
     }
 }
 
