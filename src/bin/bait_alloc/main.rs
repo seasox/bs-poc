@@ -304,7 +304,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     // get mapping size, round to nearest multiple of PAGE_SIZE
     let alignment_checker = AllocCheckPageAligned {};
     let consec_checker = create_consec_checker_from_cli(args.consec_check);
-    let bank_checker = AllocCheckSameBank {};
+    let bank_checker = AllocCheckSameBank::new(config.threshold);
     let checker = AllocCheckAnd::new(
         alignment_checker,
         AllocCheckAnd::new(consec_checker, bank_checker),

@@ -1,6 +1,9 @@
 use anyhow::bail;
 
-use crate::{memory::construct_memory_tuple_timer, util::PAGE_SIZE};
+use crate::{
+    memory::construct_memory_tuple_timer,
+    util::{PAGE_SIZE, TIMER_ROUNDS},
+};
 
 use super::MemBlock;
 
@@ -82,21 +85,28 @@ impl AllocChecker for ConsecCheckPfn {
     }
 }
 
-pub struct AllocCheckSameBank {}
+pub struct AllocCheckSameBank {
+    threshold: u64,
+}
+
+impl AllocCheckSameBank {
+    pub fn new(threshold: u64) -> Self {
+        Self { threshold }
+    }
+}
 
 impl AllocChecker for AllocCheckSameBank {
     /// bank check
     fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
-        const THRESHOLD: u64 = 330;
         let timer = construct_memory_tuple_timer()?;
         let a1 = block.ptr;
         for previous_block in previous_blocks {
             let a2 = previous_block.ptr;
-            let time = unsafe { timer.time_subsequent_access_from_ram(a1, a2, 1000) };
-            if time < THRESHOLD {
+            let time = unsafe { timer.time_subsequent_access_from_ram(a1, a2, TIMER_ROUNDS) };
+            if time < self.threshold {
                 error!(
-                    "Blocks ({:#02x}, {:#02x}) are not on the same bank, timed as {}",
-                    a1 as usize, a2 as usize, time
+                    "Bank conflict check failed: timed {} < {}",
+                    time, self.threshold
                 );
                 return Ok(false);
             }
