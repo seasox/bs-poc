@@ -135,12 +135,17 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         !self.flips.is_empty()
     }
 
-    fn log_report(&self, base_msb: AggressorPtr) {
+    fn log_report(&self, _base_msb: AggressorPtr) {
         let virt_addrs: Vec<String> = self
             .flips
             .iter()
-            .map(|bf| bf.dram_addr.to_virt(base_msb, self.mem_config))
-            .map(|addr| format!("0x{:02X}", addr as usize))
+            .map(|bf| {
+                format!(
+                    "{:?}",
+                    bf.dram_addr,
+                    //bf.dram_addr.to_virt(base_msb, self.mem_config) as usize
+                )
+            })
             .collect();
         info!("Addresses with flips: {:?}", virt_addrs);
     }
