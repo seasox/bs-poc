@@ -13,7 +13,7 @@ use crate::util::{group, MemConfiguration};
 use crate::victim::HammerVictim;
 
 pub trait Hammering {
-    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u8) -> Result<HammerResult>;
+    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult>;
 }
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -213,7 +213,7 @@ impl HammeringPattern {
 
 #[derive(Debug)]
 pub struct HammerResult {
-    pub run: u8,
+    pub run: u64,
     pub attempt: u8,
 }
 
@@ -231,8 +231,8 @@ impl DummyHammerer {
     }
 }
 
-impl Hammering for DummyHammerer {
-    fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u8) -> Result<HammerResult> {
+impl<'a> Hammering for DummyHammerer<'a> {
+    fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u64) -> Result<HammerResult> {
         victim.init();
         unsafe {
             let flipped_byte = self.base_msb.add(self.flip_offset);
@@ -327,7 +327,7 @@ impl<'a> Hammerer<'a> {
 }
 
 impl<'a> Hammering for Hammerer<'a> {
-    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u8) -> Result<HammerResult> {
+    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
 
