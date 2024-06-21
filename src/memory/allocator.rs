@@ -1,14 +1,18 @@
 use anyhow::{bail, Context, Result};
 use lazy_static::lazy_static;
 #[cfg(target_arch = "x86_64")]
-use libc::{self, c_void, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, PROT_READ, PROT_WRITE};
-use libc::{MAP_HUGE_SHIFT, MAP_SHARED};
+use libc::{
+    self, c_void, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_HUGE_1GB, MAP_SHARED, PROT_READ,
+    PROT_WRITE,
+};
 use std::{
     alloc::{GlobalAlloc, Layout},
     fs::File,
     io::Read,
     ptr::null_mut,
 };
+
+use crate::util::PAGE_SHIFT;
 
 use super::{memblock::ConsecAllocator, ConsecBlocks, MemBlock};
 
@@ -65,25 +69,21 @@ fn align_to(size: usize, align: usize) -> usize {
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
 #[derive(Debug)]
-pub(crate) struct MmapAllocator {
-    use_hugepage: bool,
-}
+pub struct HugepageAllocator {}
 
-impl MmapAllocator {
-    pub fn new(use_hugepage: bool) -> Self {
-        MmapAllocator { use_hugepage }
+impl HugepageAllocator {
+    pub fn new() -> Self {
+        HugepageAllocator {}
     }
 }
 
 #[cfg(target_arch = "x86_64")]
-unsafe impl GlobalAlloc for MmapAllocator {
+unsafe impl GlobalAlloc for HugepageAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
         let mut p = 0x2000000000 as *mut c_void;
         let mut mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
-        if self.use_hugepage {
-            mmap_flags |= MAP_HUGETLB | (30 << MAP_HUGE_SHIFT);
-        }
+        mmap_flags |= MAP_HUGETLB | MAP_HUGE_1GB;
         p = libc::mmap(p, len, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
 
         if p == MAP_FAILED {
@@ -100,15 +100,14 @@ unsafe impl GlobalAlloc for MmapAllocator {
     }
 }
 
-impl ConsecAllocator for MmapAllocator {
+impl ConsecAllocator for HugepageAllocator {
     fn block_size(&self) -> usize {
         *HUGEPAGE_SIZE as usize
     }
     unsafe fn alloc_consec_blocks(
         &self,
         size: usize,
-        checker: &dyn super::ConsecChecker,
-        _progress_cb: impl Fn(),
+        _progress_cb: &dyn Fn(),
     ) -> anyhow::Result<super::ConsecBlocks> {
         let ptr = self.alloc(Layout::from_size_align(size, 1)?);
         if ptr.is_null() {
@@ -117,10 +116,6 @@ impl ConsecAllocator for MmapAllocator {
         let block = MemBlock::new(ptr, size);
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
         std::ptr::write_bytes(block.ptr, 0, block.len);
-        let is_consecutive = checker.check(&block)?;
-        if !is_consecutive {
-            bail!("Allocated memory is not consecutive");
-        }
         Ok(ConsecBlocks::new(vec![block]))
     }
 }
@@ -150,7 +145,7 @@ pub mod tests {
 
     #[test]
     fn test_allocator() {
-        let hugepage_alloc = MmapAllocator { use_hugepage: true };
+        let hugepage_alloc = HugepageAllocator {};
 
         // u16.
         unsafe {
@@ -234,7 +229,7 @@ impl VirtToPhysResolver for LinuxPageMap {
         let pfn = entry[0]
             .pfn()
             .with_context(|| format!("failed to get PFN for pagemap entry {:?}", entry[0]))?;
-        let phys_addr = (pfn << 12) | ((virt as u64) & 0xFFF);
+        let phys_addr = (pfn << PAGE_SHIFT) | ((virt as u64) & 0xFFF);
 
         Ok(phys_addr)
     }

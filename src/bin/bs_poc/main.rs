@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use bs_poc::forge::{DummyHammerer, Hammerer, Hammering, HammeringPattern};
+use bs_poc::forge::{Hammerer, Hammering, HammeringPattern};
 use bs_poc::memory::{LinuxPageMap, MemBlock, Memory, VictimMemory, VirtToPhysResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::{HammerVictim, HammerVictimMemCheck, HammerVictimRsa};
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
 
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
-    let memory = Memory::new(MEM_SIZE, true)?;
+    let memory = Memory::new(MEM_SIZE)?;
     let block = vec![MemBlock {
         ptr: memory.addr(0) as *mut u8,
         len: MEM_SIZE,
@@ -76,10 +76,11 @@ fn main() -> Result<()> {
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let offset = 0x17B31343;
     let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
-        Box::new(DummyHammerer::new(
+        todo!("dummy hammerer not implemented")
+        /*Box::new(DummyHammerer::new(
             memory.addr(0).clone() as *mut u8,
             offset,
-        ))
+        ))*/
     } else {
         // load patterns from JSON
         let pattern =

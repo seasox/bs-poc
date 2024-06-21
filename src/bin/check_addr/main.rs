@@ -12,8 +12,6 @@ struct CliArgs {
     /// The JSON file containing the memory config
     #[clap(long = "config", default_value = "config.json")]
     config: String,
-    #[clap(long = "use-hugepage", action)]
-    use_hugepage: bool,
 }
 
 fn main() -> Result<()> {
@@ -25,7 +23,7 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    let memory = Memory::new(MEM_SIZE, args.use_hugepage)?;
+    let memory = Memory::new(MEM_SIZE)?;
     let base_msb = memory.addr(0) as AggressorPtr;
     println!("base_msb: {:?}", base_msb);
 

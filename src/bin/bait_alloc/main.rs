@@ -13,19 +13,21 @@ use std::{
 
 use anyhow::{bail, Context};
 use bs_poc::{
-    forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern, PatternAddressMapper},
+    forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern},
     jitter::AggressorPtr,
     memory::{
-        ConsecAlloc, ConsecAllocator, ConsecCheck, DRAMAddr, LinuxPageMap, VirtToPhysResolver,
+        AllocCheck, AllocCheckSameBank, AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo,
+        ConsecAllocHugepageRnd, ConsecAllocator, ConsecCheck, HugepageAllocator, LinuxPageMap,
+        VirtToPhysResolver,
     },
-    util::{retry, BlacksmithConfig, MemConfiguration, PAGE_SIZE},
+    util::{retry, BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
 use indicatif_log_bridge::LogWrapper;
 use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
-use log::{debug, info, warn};
+use log::{info, warn};
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Debug, Parser)]
@@ -46,9 +48,24 @@ struct CliArgs {
     #[clap(long = "mapping")]
     mapping: Option<String>,
     #[clap(long = "consec-check", default_value = "pfn")]
-    consec_check: ConsecCheck,
+    consec_check: ConsecCheckType,
     #[clap(long = "alloc-strategy", default_value = "hugepage")]
-    alloc_strategy: ConsecAlloc,
+    alloc_strategy: ConsecAllocType,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum ConsecCheckType {
+    None,
+    Pfn,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum ConsecAllocType {
+    BuddyInfo,
+    // Allocate using the CoCo dec mem module: https://git.its.uni-luebeck.de/research-projects/tdx/kmod-coco-dec-mem
+    CoCo,
+    Hugepage,
+    HugepageRnd,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -70,15 +87,6 @@ fn _signal(sig: &str, pid: u32) -> anyhow::Result<()> {
         .spawn()?;
     kill.wait()?;
     Ok(())
-}
-
-fn find_mapping_base(
-    mapping: PatternAddressMapper,
-    mem_config: MemConfiguration,
-    base_msb: *const u8,
-) -> *const u8 {
-    let addr = DRAMAddr::new(mapping.bank_no, mapping.min_row, 0);
-    addr.to_virt(base_msb, mem_config)
 }
 
 fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
@@ -120,6 +128,41 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     Ok(pattern)
 }
 
+fn make_vec<T>(n: usize, f: &dyn Fn(usize) -> T) -> Vec<T> {
+    let mut v = Vec::with_capacity(n);
+    for i in 0..n {
+        let val = f(i);
+        v.push(val);
+    }
+    v
+}
+
+fn create_checker_from_cli(consec_check: ConsecCheckType) -> Box<dyn AllocChecker> {
+    match consec_check {
+        ConsecCheckType::None => Box::new(ConsecCheck::None),
+        ConsecCheckType::Pfn => Box::new(ConsecCheck::Pfn),
+    }
+}
+
+fn create_allocator_from_cli(
+    alloc_strategy: ConsecAllocType,
+    consec_checker: Box<dyn AllocChecker>,
+) -> Box<dyn ConsecAllocator> {
+    match alloc_strategy {
+        ConsecAllocType::BuddyInfo => Box::new(ConsecAllocBuddyInfo::new(consec_checker)),
+        ConsecAllocType::CoCo => Box::new(ConsecAllocCoCo {}),
+        ConsecAllocType::Hugepage => Box::new(HugepageAllocator::new()),
+        ConsecAllocType::HugepageRnd => {
+            let hugepages = make_vec(10, &|_| unsafe {
+                HugepageAllocator::new()
+                    .alloc_consec_blocks(1024 * MB, &|| {})
+                    .expect("hugepage alloc")
+            });
+            Box::new(ConsecAllocHugepageRnd::new(hugepages))
+        }
+    }
+}
+
 unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     // wrap logger for indicatif
     let logger =
@@ -132,10 +175,6 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-
-    let checker = args.consec_check;
-
-    const BASE_MSB: *const u8 = 0x2000000000 as *const u8;
 
     // load patterns from JSON
     let pattern = match &args.pattern {
@@ -152,12 +191,14 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     };
 
     info!("Using mapping {}", mapping.id);
-    let max_flips = mapping.bit_flips.iter().map(|f| f.len()).max().unwrap();
+    let max_flips = mapping.count_bitflips();
     info!("Max flips: {:?}", max_flips);
     if max_flips == 0 {
         bail!("No flips in mapping");
     }
+    info!("Flips in mapping: {:?}", &mapping.bit_flips);
 
+    /*
     // find offset from base and mapping start
     let mapping_base = find_mapping_base(mapping.clone(), mem_config, BASE_MSB as *const u8);
     let mapping_end = DRAMAddr::new(mapping.bank_no, mapping.max_row, 0)
@@ -198,6 +239,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         mapping_min.to_virt(BASE_MSB, mem_config),
         mapping_max.to_virt(BASE_MSB, mem_config)
     );
+    */
 
     //log_pagetypeinfo();
     //let prog = prog().expect("prog");
@@ -210,15 +252,21 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //while let Some((base, _)) = cur {
 
     // get mapping size, round to nearest multiple of PAGE_SIZE
-    let block_size = args.alloc_strategy.block_size();
+    let checker = create_checker_from_cli(args.consec_check);
+    let bank_checker = Box::new(AllocCheckSameBank {});
+    let checker = AllocCheck::And(checker, bank_checker);
+    let alloc_strategy: Box<dyn ConsecAllocator> =
+        create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
+
+    let block_size = alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;
     let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
     pg.set_length(num_sets as u64);
+
     loop {
         pg.set_position(0);
-        let memory =
-            args.alloc_strategy
-                .alloc_consec_blocks(num_sets * block_size, &checker, || pg.inc(1))?;
+        let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, &|| pg.inc(1))?;
+        pg.finish_and_clear();
         let hammering_addrs = mapping.get_hammering_addresses_relocate(
             &pattern.access_ids,
             mem_config,
@@ -233,18 +281,19 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
             &hammering_addrs,
             &memory.blocks,
         )?;
-        // let hammerer = DummyHammerer::new(memory.addr(0), 0x42);
+        //let hammerer = DummyHammerer::new(&memory, 17);
         let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
 
         info!("Hammering pattern. This might take a while...");
         let res = hammerer.hammer(&mut victim, 3);
         match res {
             Ok(res) => {
-                print!("{:?}", res);
-                victim.log_report(BASE_MSB as AggressorPtr);
+                info!("{:?}", res);
+                victim.log_report(0 as AggressorPtr);
             }
             Err(e) => {
                 warn!("Hammering not successful: {:?}", e);
+                memory.dealloc();
                 continue;
             }
         }
@@ -257,7 +306,9 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         // cleanup
         //libc::munmap(v as *mut c_void, 2 * MB);
         // TODO munmap all allocation
-        return Ok(());
+
+        memory.dealloc();
+        //return Ok(());
     }
 }
 
