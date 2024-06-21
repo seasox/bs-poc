@@ -16,9 +16,9 @@ use bs_poc::{
     forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern},
     jitter::AggressorPtr,
     memory::{
-        AllocCheck, AllocCheckSameBank, AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo,
-        ConsecAllocHugepageRnd, ConsecAllocator, ConsecCheckNone, ConsecCheckPfn,
-        HugepageAllocator, LinuxPageMap, VirtToPhysResolver,
+        AllocCheckAnd, AllocCheckPageAligned, AllocCheckSameBank, AllocChecker,
+        ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd, ConsecAllocator,
+        ConsecCheckPfn, HugepageAllocator, LinuxPageMap, MemBlock, VirtToPhysResolver,
     },
     util::{retry, BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
@@ -55,7 +55,6 @@ struct CliArgs {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ConsecCheckType {
-    None,
     Pfn,
 }
 
@@ -137,28 +136,78 @@ fn make_vec<T>(n: usize, f: &dyn Fn(usize) -> T) -> Vec<T> {
     v
 }
 
-fn create_checker_from_cli(consec_check: ConsecCheckType) -> Box<dyn AllocChecker> {
+/**
+ * A helper enum to create a checker from CLI arguments. This allows us to circumvent heap allocation
+ */
+enum ConsecCheck {
+    Pfn(ConsecCheckPfn),
+}
+
+impl AllocChecker for ConsecCheck {
+    fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
+        match self {
+            ConsecCheck::Pfn(c) => c.check(block, previous_blocks),
+        }
+    }
+}
+
+fn create_consec_checker_from_cli(consec_check: ConsecCheckType) -> ConsecCheck {
     match consec_check {
-        ConsecCheckType::None => Box::new(ConsecCheckNone {}),
-        ConsecCheckType::Pfn => Box::new(ConsecCheckPfn {}),
+        ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
+    }
+}
+
+/**
+ * A helper enum to create an allocator from CLI arguments. This allows us to circumvent heap allocation
+ */
+enum ConsecAlloc {
+    BuddyInfo(ConsecAllocBuddyInfo),
+    CoCo(ConsecAllocCoCo),
+    Hugepage(HugepageAllocator),
+    HugepageRnd(ConsecAllocHugepageRnd),
+}
+
+impl ConsecAllocator for ConsecAlloc {
+    fn block_size(&self) -> usize {
+        match self {
+            ConsecAlloc::BuddyInfo(alloc) => alloc.block_size(),
+            ConsecAlloc::CoCo(alloc) => alloc.block_size(),
+            ConsecAlloc::Hugepage(alloc) => alloc.block_size(),
+            ConsecAlloc::HugepageRnd(alloc) => alloc.block_size(),
+        }
+    }
+
+    unsafe fn alloc_consec_blocks(
+        &self,
+        size: usize,
+        progress_cb: &dyn Fn(),
+    ) -> anyhow::Result<bs_poc::memory::ConsecBlocks> {
+        match self {
+            ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+            ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+            ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+            ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+        }
     }
 }
 
 fn create_allocator_from_cli(
     alloc_strategy: ConsecAllocType,
     consec_checker: Box<dyn AllocChecker>,
-) -> Box<dyn ConsecAllocator> {
+) -> ConsecAlloc {
     match alloc_strategy {
-        ConsecAllocType::BuddyInfo => Box::new(ConsecAllocBuddyInfo::new(consec_checker)),
-        ConsecAllocType::CoCo => Box::new(ConsecAllocCoCo {}),
-        ConsecAllocType::Hugepage => Box::new(HugepageAllocator::new()),
+        ConsecAllocType::BuddyInfo => {
+            ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
+        }
+        ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
+        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
         ConsecAllocType::HugepageRnd => {
             let hugepages = make_vec(10, &|_| unsafe {
                 HugepageAllocator::new()
                     .alloc_consec_blocks(1024 * MB, &|| {})
                     .expect("hugepage alloc")
             });
-            Box::new(ConsecAllocHugepageRnd::new(hugepages))
+            ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(hugepages))
         }
     }
 }
@@ -252,11 +301,14 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     //while let Some((base, _)) = cur {
 
     // get mapping size, round to nearest multiple of PAGE_SIZE
-    let checker = create_checker_from_cli(args.consec_check);
-    let bank_checker = Box::new(AllocCheckSameBank {});
-    let checker = AllocCheck::And(checker, bank_checker);
-    let alloc_strategy: Box<dyn ConsecAllocator> =
-        create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
+    let alignment_checker = AllocCheckPageAligned {};
+    let consec_checker = create_consec_checker_from_cli(args.consec_check);
+    let bank_checker = AllocCheckSameBank {};
+    let checker = AllocCheckAnd::new(
+        alignment_checker,
+        AllocCheckAnd::new(consec_checker, bank_checker),
+    );
+    let alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
 
     let block_size = alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;

@@ -8,27 +8,26 @@ pub trait AllocChecker {
     fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool>;
 }
 
-pub enum AllocCheck {
-    And(Box<dyn AllocChecker>, Box<dyn AllocChecker>),
+pub struct AllocCheckAnd<A, B> {
+    a: A,
+    b: B,
 }
 
-impl AllocChecker for AllocCheck {
-    fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
-        match self {
-            AllocCheck::And(a, b) => a.check(block, previous_blocks).and_then(|res| {
-                if res {
-                    b.check(block, previous_blocks)
-                } else {
-                    Ok(false)
-                }
-            }),
-        }
+impl<A: AllocChecker, B: AllocChecker> AllocCheckAnd<A, B> {
+    pub fn new(a: A, b: B) -> Self {
+        Self { a, b }
     }
 }
 
-pub struct ConsecCheckNone {}
+impl<A: AllocChecker, B: AllocChecker> AllocChecker for AllocCheckAnd<A, B> {
+    fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
+        Ok(self.a.check(block, previous_blocks)? && self.b.check(block, previous_blocks)?)
+    }
+}
 
-impl AllocChecker for ConsecCheckNone {
+pub struct AllocCheckPageAligned {}
+
+impl AllocChecker for AllocCheckPageAligned {
     fn check(&self, block: &MemBlock, _previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
         if (block.ptr as u64) & 0xFFF != 0 {
             bail!("Address is not page-aligned: 0x{:x}", block.ptr as u64);
@@ -50,9 +49,6 @@ impl AllocChecker for ConsecCheckPfn {
          */
         use crate::memory::{LinuxPageMap, VirtToPhysResolver};
         let mut resolver = LinuxPageMap::new()?;
-        if (block.ptr as u64) & 0xFFF != 0 {
-            bail!("Address is not page-aligned: 0x{:x}", block.ptr as u64);
-        }
         let mut blocks = vec![*block];
         for &b in previous_blocks {
             blocks.push(b);
