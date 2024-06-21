@@ -10,7 +10,7 @@ use crate::{
     util::{MemConfiguration, PAGE_SIZE},
 };
 
-use super::allocator::MmapAllocator;
+use super::allocator::HugepageAllocator;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -39,9 +39,8 @@ impl fmt::Display for MemoryError {
 pub trait VictimMemory {
     fn addr(&self, offset: usize) -> *mut u8;
     fn len(&self) -> usize;
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
-        let mut rng = StdRng::from_seed(seed);
 
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8) {
         let len = self.len();
         if len % 8 != 0 {
             panic!("memory len must be divisible by 8");
@@ -53,18 +52,78 @@ pub trait VictimMemory {
             );
         }
 
-        debug!("initialize {} bytes with pseudo-random values", len);
+        info!("initialize {} bytes", len);
 
         for offset in (0..len).step_by(PAGE_SIZE) {
             let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
             for i in 0..PAGE_SIZE {
-                value[i] = rng.gen();
+                value[i] = f(offset + i);
             }
             unsafe {
                 std::ptr::write_volatile(self.addr(offset) as *mut [u8; PAGE_SIZE], value);
             }
         }
         debug!("memory init done");
+    }
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
+        let mut rng = StdRng::from_seed(seed);
+        info!(
+            "initialize buffer with pseudo-random values from seed {:?}",
+            seed
+        );
+        self.initialize_cb(&mut |_: usize| rng.gen());
+        debug!("memory init done");
+    }
+
+    fn check_cb(
+        &self,
+        mem_config: MemConfiguration,
+        f: &mut dyn FnMut(usize) -> u8,
+    ) -> Vec<BitFlip> {
+        let len = self.len();
+        if len % PAGE_SIZE != 0 {
+            panic!(
+                "memory len ({}) must be divisible by PAGE_SIZE ({})",
+                len, PAGE_SIZE
+            );
+        }
+
+        let mut ret = vec![];
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+            for i in 0..PAGE_SIZE {
+                expected[i] = f(offset + i);
+            }
+            unsafe {
+                _mm_clflush(self.addr(offset));
+                _mm_mfence();
+                let cmp = memcmp(
+                    self.addr(offset) as *const c_void,
+                    expected.as_ptr() as *const c_void,
+                    PAGE_SIZE,
+                );
+                if cmp == 0 {
+                    continue;
+                }
+                debug!(
+                    "Found bitflip in page {}. Determining exact flip position",
+                    offset
+                );
+                for i in 0..expected.len() {
+                    let addr = self.addr(offset + i);
+                    _mm_clflush(addr);
+                    _mm_mfence();
+                    if *addr != expected[i] {
+                        ret.push(BitFlip::new(
+                            DRAMAddr::from_virt(addr, &mem_config),
+                            *addr ^ expected[i],
+                            expected[i],
+                        ));
+                    }
+                }
+            }
+        }
+        ret
     }
 
     fn check(
@@ -121,7 +180,7 @@ pub trait VictimMemory {
 
 #[derive(Debug)]
 pub struct Memory {
-    allocator: MmapAllocator,
+    allocator: HugepageAllocator,
     addr: AggressorPtr,
     layout: Layout,
 }
@@ -148,8 +207,8 @@ impl Drop for Memory {
 }
 
 impl Memory {
-    pub fn new(size: usize, use_hugepage: bool) -> Result<Self> {
-        let allocator = MmapAllocator::new(use_hugepage);
+    pub fn new(size: usize) -> Result<Self> {
+        let allocator = HugepageAllocator::new();
         let layout = Layout::from_size_align(size, 1)?;
         if layout.size() == 0 {
             return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
