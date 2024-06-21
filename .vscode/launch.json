@@ -1,5 +1,6 @@
 {
     // Use IntelliSense to learn about possible attributes.
+    // aaf3a69a-de8f-4151-90d2-50b4d8f41f70
     // Hover to view descriptions of existing attributes.
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
@@ -21,9 +22,11 @@
             },
             "args": [
                 "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=config/fuzz-summary_25mb.json",
-                "--pattern=835de010-4e2f-468b-85a9-a1f9db351ae8",
-                "--mapping=715b602f-1ad9-45a6-9119-b71fb3002b48"
+                "--load-json=config/fuzz-summary.json",
+                "--alloc-strategy=hugepage-rnd",
+                "--pattern=39ad622b-3bfe-4161-b860-dad5f3e6dd68",
+                "--mapping=4d16a3db-c991-419a-b6fe-3a7f41113a8e",
+                "--consec-check=none"
             ],
             "env": {
                 "RUST_LOG": "debug"

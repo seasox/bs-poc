@@ -10,8 +10,8 @@ PATTERN=39ad622b-3bfe-4161-b860-dad5f3e6dd68
 #MAPPING=4d16a3db-c991-419a-b6fe-3a7f41113a8e
 
 #ALLOC_STRATEGY=hugepage-rnd
-ALLOC_STRATEGY=co-co
-#ALLOC_STRATEGY=buddy-info
+#ALLOC_STRATEGY=co-co
+ALLOC_STRATEGY=buddy-info
 
 BS_FLAGS =--config=${CONFIG}
 BS_FLAGS+=--load-json=${FUZZ_CONF}
