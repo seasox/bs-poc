@@ -88,16 +88,15 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     let pattern = retry(|| {
         println!("Please choose a pattern:");
         for (i, pattern) in fuzz.hammering_patterns.iter().enumerate() {
+            let best_mapping = pattern
+                .determine_most_effective_mapping()
+                .expect("no mappings");
             println!(
-                "{}: {} (max flips: {:?})",
+                "{}: {} (best mapping {} with {} flips)",
                 i,
                 pattern.id,
-                pattern
-                    .address_mappings
-                    .iter()
-                    .map(|m| &m.bit_flips)
-                    .flatten()
-                    .count(),
+                best_mapping.id,
+                best_mapping.count_bitflips()
             )
         }
         let mut option = String::new();
