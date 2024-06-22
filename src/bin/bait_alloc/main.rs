@@ -361,7 +361,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         // TODO munmap all allocation
 
         memory.dealloc();
-        //return Ok(());
+        return Ok(());
     }
 }
 
