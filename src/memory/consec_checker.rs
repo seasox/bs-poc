@@ -70,6 +70,10 @@ impl AllocChecker for ConsecCheckPfn {
         }
         consecs.push(phys_prev + PAGE_SIZE as u64);
         trace!("PFN check done");
+        let mut pfns = String::from("PFNs: ");
+        for (p1, p2) in consecs.windows(2).map(|w| (w[0], w[1])).step_by(2) {
+            pfns += &format!("{:x}..[{} KB]..{:x} ", p1, (p2 - p1 as u64) / 1024, p2);
+        }
         let first_block_bytes = (consecs[1] - consecs[0]) as usize;
         info!(
             "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
@@ -77,7 +81,7 @@ impl AllocChecker for ConsecCheckPfn {
             block.ptr as u64,
             unsafe { block.ptr.add(first_block_bytes) as u64 },
         );
-        info!("PFNs {:?}", consecs);
+        info!("{}", pfns);
         if first_block_bytes < block.len {
             return Ok(false);
         }
@@ -100,13 +104,13 @@ impl AllocChecker for AllocCheckSameBank {
     fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
         let timer = construct_memory_tuple_timer()?;
         let a1 = block.ptr;
-        for previous_block in previous_blocks {
+        for (i, previous_block) in previous_blocks.iter().enumerate() {
             let a2 = previous_block.ptr;
             let time = unsafe { timer.time_subsequent_access_from_ram(a1, a2, TIMER_ROUNDS) };
             if time < self.threshold {
                 error!(
-                    "Bank conflict check failed: timed {} < {}",
-                    time, self.threshold
+                    "Bank conflict check with block {} failed: timed {} < {}",
+                    i, time, self.threshold
                 );
                 return Ok(false);
             }
