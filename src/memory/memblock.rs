@@ -1,4 +1,4 @@
-use std::{ffi::CString, io::Read, process::Command, time::Duration};
+use std::{ffi::CString, io::Read, process::Command};
 
 #[cfg(feature = "spoiler")]
 use crate::memory_addresses;
@@ -158,7 +158,7 @@ impl ConsecAllocBuddyInfo {
 
 impl ConsecAllocator for ConsecAllocBuddyInfo {
     fn block_size(&self) -> usize {
-        1 * MB
+        2 * MB
     }
 
     unsafe fn alloc_consec_blocks(
@@ -339,9 +339,11 @@ impl MemBlock {
         let block = retry!(|| {
             let block = MemBlock::find_block10_candidate()?;
             // munmap slice of MemBlock
-            let ptr = (block.ptr as *mut u8).add(size);
             unsafe {
-                libc::munmap(ptr as *mut libc::c_void, block.len - size);
+                libc::munmap(
+                    (block.ptr as *mut u8).add(size) as *mut libc::c_void,
+                    block.len - size,
+                );
             }
             let block = MemBlock::new(block.ptr, size);
             match consec_checker.check(&block, previous_blocks) {
@@ -425,18 +427,14 @@ unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
 }
 
 fn compact_mem() -> anyhow::Result<()> {
-    let _output = Command::new("/usr/bin/sudo")
-        .arg("-S")
-        .arg("sh")
+    Command::new("sh")
         .arg("-c")
-        .arg("echo 1 >> /proc/sys/vm/compact_memory")
+        .arg("echo 1 | sudo tee /proc/sys/vm/compact_memory")
         .output()?;
-    let _output = Command::new("sh")
+    Command::new("sh")
         .arg("-c")
         .arg("echo 0 | sudo tee /proc/sys/kernel/randomize_va_space")
         .output()?;
-    info!("Waiting for memory compaction...");
-    std::thread::sleep(Duration::from_secs(2));
     Ok(())
 }
 
