@@ -75,17 +75,17 @@ impl AllocChecker for ConsecCheckPfn {
             pfns += &format!("{:x}..[{} KB]..{:x} ", p1, (p2 - p1 as u64) / 1024, p2);
         }
         let first_block_bytes = (consecs[1] - consecs[0]) as usize;
-        info!(
-            "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
-            first_block_bytes / 1024,
-            block.ptr as u64,
-            unsafe { block.ptr.add(first_block_bytes) as u64 },
-        );
-        info!("{}", pfns);
-        if first_block_bytes < block.len {
-            return Ok(false);
+        let is_consec = first_block_bytes >= block.len;
+        if is_consec {
+            info!(
+                "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
+                first_block_bytes / 1024,
+                block.ptr as u64,
+                unsafe { block.ptr.add(first_block_bytes) as u64 },
+            );
+            info!("{}", pfns);
         }
-        Ok(true)
+        Ok(is_consec)
     }
 }
 
@@ -110,6 +110,10 @@ impl AllocChecker for AllocCheckSameBank {
             if time < self.threshold {
                 error!(
                     "Bank conflict check with block {} failed: timed {} < {}",
+                    i, time, self.threshold
+                );
+                info!(
+                    "Bank conflict check with block {} succeeded: timed {} < {}",
                     i, time, self.threshold
                 );
                 return Ok(false);
