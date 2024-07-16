@@ -365,7 +365,9 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     }
 }
 
-unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
+unsafe fn mode_prey() -> anyhow::Result<()> {
+    let mut resolver = LinuxPageMap::new()?;
+
     env_logger::init();
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
@@ -418,11 +420,9 @@ unsafe fn mode_prey(mut resolver: LinuxPageMap) -> anyhow::Result<()> {
 unsafe fn _main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
 
-    let resolver = LinuxPageMap::new()?;
-
     match args.mode {
         BaitMode::Bait => mode_bait(args),
-        BaitMode::Prey => mode_prey(resolver),
+        BaitMode::Prey => mode_prey(),
     }
 }
 
