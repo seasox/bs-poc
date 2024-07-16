@@ -1,0 +1,3 @@
+[submodule "lib/lpfs"]
+	path = lib/lpfs
+	url = https://github.com/seasox/lpfs
