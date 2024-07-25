@@ -3,6 +3,7 @@ pub const MB: usize = 1 << 20;
 
 pub const PAGE_SHIFT: usize = 12;
 
+pub const ROW_SIZE: usize = 8192;
 pub const PAGE_SIZE: usize = 1 << PAGE_SHIFT;
 
 pub const TIMER_ROUNDS: usize = 100_000;
