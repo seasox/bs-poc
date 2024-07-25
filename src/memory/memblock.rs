@@ -7,17 +7,18 @@ use crate::{
     retry,
     util::{MB, PAGE_SIZE},
 };
-use anyhow::bail;
-use proc_getter::buddyinfo::{buddyinfo, BuddyInfo};
+use anyhow::{bail, Context};
+use lpfs::proc::{buddyinfo::BuddyInfo, pagetypeinfo::PageTypeInfo};
 use rand::prelude::SliceRandom;
 use rand::Rng;
+use std::cmp::min;
 
 use super::{AllocChecker, VictimMemory};
 
 pub trait ConsecAllocator {
     fn block_size(&self) -> usize;
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         progress_cb: &dyn Fn(),
     ) -> anyhow::Result<ConsecBlocks>;
@@ -71,7 +72,7 @@ impl ConsecAllocator for ConsecAllocHugepageRnd {
     }
 
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         progress_cb: &dyn Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
@@ -109,7 +110,7 @@ impl ConsecAllocator for ConsecAllocCoCo {
     }
 
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         progress_cb: &dyn Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
@@ -158,11 +159,11 @@ impl ConsecAllocBuddyInfo {
 
 impl ConsecAllocator for ConsecAllocBuddyInfo {
     fn block_size(&self) -> usize {
-        2 * MB
+        4 * MB
     }
 
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         progress_cb: &dyn Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
@@ -179,7 +180,7 @@ impl ConsecAllocator for ConsecAllocBuddyInfo {
         let mut blocks = vec![];
         for _ in 0..num_blocks {
             let block =
-                unsafe { MemBlock::buddyinfo_alloc(block_size, &*self.consec_checker, &blocks)? };
+                unsafe { MemBlock::buddyinfo_alloc(block_size, &mut *self.consec_checker)? };
             progress_cb();
             blocks.push(block);
         }
@@ -202,6 +203,9 @@ pub struct MemBlock {
 impl MemBlock {
     pub fn new(ptr: *mut u8, len: usize) -> Self {
         MemBlock { ptr, len }
+    }
+    pub fn dealloc(self) {
+        unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
     }
 }
 
@@ -242,6 +246,17 @@ impl MemBlock {
         Ok(v)
     }
 
+    fn low_order_bytes(blocks: &[i64; 11], max_order: usize) -> usize {
+        if max_order > 10 {
+            panic!("Invalid order");
+        }
+        let mut bytes = 0;
+        for i in 0..=max_order {
+            bytes += blocks[i] as usize * (1 << i) * PAGE_SIZE;
+        }
+        bytes
+    }
+
     fn is_block_candidate(diff: &[i64; 11], block_order: usize) -> bool {
         if block_order > 10 {
             panic!("Invalid block order")
@@ -261,11 +276,11 @@ impl MemBlock {
 
     unsafe fn find_block10_candidate() -> anyhow::Result<MemBlock> {
         //const HUGEBLOCK_SIZE: usize = 2048 * MB;
-        const ALLOC_SIZE: usize = 4 * MB;
+        //const ALLOC_SIZE: usize = 4 * MB;
         const MAX_ALLOCS: usize = 65000;
         log_pagetypeinfo();
         loop {
-            let mut pages = [std::ptr::null_mut(); MAX_ALLOCS];
+            let mut pages = vec![];
             let mut v1 = None;
             let mut diff: [i64; 11]; // = [0; 11];
 
@@ -276,10 +291,19 @@ impl MemBlock {
             //let hb = mmap_block(null_mut(), HUGEBLOCK_SIZE);
             //trace!("hugeblock allocated");
 
-            for i in 0..MAX_ALLOCS {
+            for _ in 0..MAX_ALLOCS {
                 log_pagetypeinfo();
+                let locked_blocks = all_locked_blocks()?;
+                info!("Locked blocks: {}", fmt_arr(locked_blocks));
                 let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
-                let v = mmap_block(std::ptr::null_mut(), ALLOC_SIZE);
+                let free_blocks = diff_arrs(&blocks_before, &locked_blocks);
+                info!("Free blocks:   {}", fmt_arr(free_blocks));
+                let low_order_bytes = Self::low_order_bytes(&free_blocks, 9);
+                info!("Allocating {} bytes", low_order_bytes);
+                let v = mmap_block(std::ptr::null_mut(), low_order_bytes);
+                pages.push(MemBlock::new(v as *mut u8, low_order_bytes));
+                let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
+                let v = mmap_block(std::ptr::null_mut(), 4 * MB);
                 log_pagetypeinfo();
                 let blocks_after = get_normal_page_nums()?;
                 diff = diff_arrs(&blocks_before, &blocks_after);
@@ -293,17 +317,14 @@ impl MemBlock {
                     v1 = Some(v);
                     break;
                 } else {
-                    pages[i] = v;
+                    pages.push(MemBlock::new(v as *mut u8, 4 * MB));
                 }
             }
 
             // cleanup
             //libc::munmap(hb, HUGEBLOCK_SIZE);
-            for p in pages {
-                if p.is_null() {
-                    continue;
-                }
-                libc::munmap(p, ALLOC_SIZE);
+            for a in pages {
+                a.dealloc();
             }
 
             // return
@@ -311,7 +332,7 @@ impl MemBlock {
                 Some(v) => {
                     return Ok(MemBlock {
                         ptr: v as *mut u8,
-                        len: ALLOC_SIZE,
+                        len: 4 * MB,
                     })
                 }
                 None => {
@@ -323,8 +344,7 @@ impl MemBlock {
 
     unsafe fn buddyinfo_alloc(
         size: usize,
-        consec_checker: &dyn AllocChecker,
-        previous_blocks: &[MemBlock],
+        consec_checker: &mut dyn AllocChecker,
     ) -> anyhow::Result<MemBlock> {
         if size > 4 * MB {
             return Err(anyhow::anyhow!(
@@ -346,7 +366,7 @@ impl MemBlock {
                 );
             }
             let block = MemBlock::new(block.ptr, size);
-            match consec_checker.check(&block, previous_blocks) {
+            match consec_checker.check(&block) {
                 Ok(true) => Ok(block),
                 Ok(false) => {
                     libc::munmap(block.ptr as *mut libc::c_void, block.len);
@@ -449,22 +469,45 @@ unsafe fn do_random_allocations() {
     }
 }
 
-#[cfg(feature = "spec_hammer")]
-unsafe fn determine_locked_2mb_blocks() -> anyhow::Result<usize> {
-    let mut locked = usize::MAX;
-    for _repetition in 0..10 {
-        let mut allocations = [null_mut(); 50000];
+pub unsafe fn all_locked_blocks() -> anyhow::Result<[u64; 11]> {
+    let mut locked: [u64; 11] = [0; 11];
+    for i in (0..10).rev() {
+        locked[i] = determine_locked_blocks(i)?;
+    }
+    locked[10] = 0;
+    Ok(locked)
+}
+
+fn fmt_arr<I>(arr: [I; 11]) -> String
+where
+    I: std::fmt::Display,
+{
+    let mut table = String::new();
+    for value in arr {
+        table.push_str(&format!("{:>7}", value));
+    }
+    table
+}
+
+unsafe fn determine_locked_blocks(order: usize) -> anyhow::Result<u64> {
+    let mut locked = u64::MAX;
+    let alloc_size = (1 << order) * PAGE_SIZE;
+    const MAX_ALLOCS: usize = 65000;
+    const REPETITIONS: usize = 3;
+    //info!("order {}", order);
+    for _repetition in 0..REPETITIONS {
+        let mut allocations = Vec::with_capacity(MAX_ALLOCS);
         const MAX_REPETITIONS: usize = 10;
         let mut split_allocations = 0;
-        for i in 0..50000 {
+        for i in 0..MAX_ALLOCS {
             //log_pagetypeinfo();
             let buddy_before = get_normal_page_nums()?;
-            let v = mmap_block(2 * MB);
-            allocations[i] = v;
+            let v = mmap_block(std::ptr::null_mut(), alloc_size);
+            allocations.push(v);
             let buddy_after = get_normal_page_nums()?;
             let diff = diff_arrs(&buddy_before, &buddy_after);
-            locked = min(locked, buddy_before[9]);
-            if diff[9] < 0 {
+            locked = min(locked, buddy_before[order]);
+            if diff[order] < 0 {
                 // the last allocation increased the block count -> we encountered a split
                 log_pagetypeinfo();
                 split_allocations += 1;
@@ -473,12 +516,13 @@ unsafe fn determine_locked_2mb_blocks() -> anyhow::Result<usize> {
                 debug!("= {:?}", diff);
             }
             if split_allocations == MAX_REPETITIONS {
+                //info!("split ({}, {})", locked, buddy_before[order]);
                 debug!("Allocated {} blocks before hitting threshold", i);
                 break;
             }
         }
         for v in allocations {
-            libc::munmap(v, 2 * MB);
+            libc::munmap(v, alloc_size);
         }
     }
     Ok(locked)
@@ -500,38 +544,45 @@ fn log_pagetypeinfo() {
     }
 }
 
-/// A small wrapper around buddyinfo() from proc_getter, which is not convertible to anyhow::Result
-fn get_buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
-    match buddyinfo() {
+/// A small wrapper around pagetypeinfo() from lpfs, which is not convertible to anyhow::Result
+fn pagetypeinfo() -> anyhow::Result<PageTypeInfo> {
+    match lpfs::proc::pagetypeinfo::pagetypeinfo() {
+        Ok(pti) => Ok(pti),
+        Err(e) => bail!("{:?}", e),
+    }
+}
+
+/// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
+fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
+    match lpfs::proc::buddyinfo::buddyinfo() {
         Ok(b) => Ok(b),
         Err(e) => bail!("{:?}", e),
     }
 }
 
-fn get_normal_page_nums() -> anyhow::Result<[usize; 11]> {
-    let zones = get_buddyinfo()?;
-    /*
-    let mut free_space = 0;
+pub fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
+    let zones = buddyinfo()?;
     let zone = zones
         .iter()
         .find(|z| z.zone().eq("Normal"))
         .context("Zone 'Normal' not found")?;
-    return Ok(zone.page_nums().clone());*/
-    fn add_acc(mut l: [usize; 11], r: &[usize; 11]) -> [usize; 11] {
+    return Ok(zone.free_areas().clone());
+    /*
+    fn add_acc<S: std::ops::AddAssign + Copy>(mut l: [S; 11], r: &[S; 11]) -> [S; 11] {
         for i in 0..11 {
             l[i] += r[i];
         }
         l
     }
     let pages = zones.iter().fold([0; 11], |mut acc, next| {
-        acc = add_acc(acc, next.page_nums());
+        acc = add_acc(acc, next.free_areas());
         acc
     });
-    Ok(pages)
+    Ok(pages)*/
 }
 
-fn diff_arrs<const S: usize>(l: &[usize; S], r: &[usize; S]) -> [i64; S] {
-    let mut diffs = [0_i64; S];
+pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
+    let mut diffs: [i64; S] = [Default::default(); S];
     let mut i = 0;
     for (&l, &r) in l.iter().zip(r) {
         diffs[i] = l as i64 - r as i64;
