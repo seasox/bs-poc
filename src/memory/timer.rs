@@ -1,52 +1,9 @@
 use anyhow::Result;
 #[cfg(target_arch = "x86_64")]
-use {core::arch::x86_64, core::ptr, std::arch::asm};
+use {core::arch::x86_64, core::ptr};
 
 #[cfg(target_arch = "aarch64")]
 use anyhow::bail;
-
-pub trait MemoryTimer {
-    unsafe fn time_access(&self, a: *const u8) -> u64;
-    unsafe fn flush(&self, a: *const u8);
-}
-
-#[cfg(target_arch = "x86_64")]
-pub struct DefaultMemoryTimer {}
-
-#[cfg(target_arch = "x86_64")]
-impl MemoryTimer for DefaultMemoryTimer {
-    unsafe fn time_access(&self, a: *const u8) -> u64 {
-        let mut timing = 0;
-        asm!(
-        "mfence",
-        "rdtsc",      /*writes to edx:eax*/
-        "shl rdx, 32", /*shift low 32 bits in edx to high bits*/
-        "or rdx,rax",  /*add low bits stored in eax*/
-        "mov rcx, rdx", /*stash measurement in rcx*/
-        "mov rax,  [{a}]",
-        "lfence",
-        "rdtsc",
-        "shl rdx, 32", /*shift low 32 bits in edx to high bits*/
-        "or rdx,rax",  /*add low bits stored in eax*/
-        "sub rdx, rcx", /*calculdate diff*/
-        "mov {timing}, rdx",
-        a = in(reg) a as u64,
-        timing = inout(reg) timing,
-        out("rdx") _, /*mark rdx as clobbered*/
-        out("rax") _, /*mark rax as clobbered*/
-        out("rcx") _, /*mark rcx as clobbered*/
-
-        );
-        return timing;
-    }
-
-    unsafe fn flush(&self, a: *const u8) {
-        asm!(
-        "clflush [{a}]",
-        a = in(reg) a as u64,
-        );
-    }
-}
 
 pub trait MemoryTupleTimer {
     unsafe fn time_subsequent_access_from_ram(
@@ -80,25 +37,39 @@ impl MemoryTupleTimer for DefaultMemoryTupleTimer {
         b: *const u8,
         rounds: usize,
     ) -> u64 {
-        let mut sum = 0;
+        let mut measurements = Vec::with_capacity(rounds);
         //flush data from cache
         x86_64::_mm_clflush(a);
         x86_64::_mm_clflush(b);
-
-        for _run_idx in 1..rounds {
+        let mut aux = 0;
+        let mut run_idx = 0;
+        let mut sum = 0;
+        while run_idx < rounds {
             x86_64::_mm_mfence(); //ensures clean slate memory access time wise
-            let before = x86_64::_rdtsc(); // read timestamp counter
-            x86_64::_mm_lfence(); //ensure rdtsc is done
+            let before = x86_64::__rdtscp(&mut aux); // read timestamp counter
+            x86_64::_mm_mfence(); //ensures clean slate memory access time wise
             ptr::read_volatile(a);
             ptr::read_volatile(b);
-            x86_64::_mm_lfence(); //ensure accesses are done
-            let after = x86_64::_rdtsc(); //read second timestamp
-            sum += after - before;
+            let after = x86_64::__rdtscp(&mut aux); //read second timestamp
+            x86_64::_mm_mfence(); //ensure rdtsc is done
+            let time = after - before;
+            measurements.push(time);
+            sum += time;
+            run_idx += 1;
             //flush data from cache
             x86_64::_mm_clflush(a);
             x86_64::_mm_clflush(b);
         }
-
-        return sum / rounds as u64;
+        trace!("Measurements: {:?}", measurements);
+        let _mean = sum / rounds as u64;
+        let median = median(measurements);
+        median
     }
+}
+
+fn median(mut list: Vec<u64>) -> u64 {
+    list.sort();
+    let mid = list.len() / 2;
+    let median = (list[mid] + list[mid + 1]) / 2;
+    median
 }
