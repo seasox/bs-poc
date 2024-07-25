@@ -210,40 +210,44 @@ impl MemBlock {
 }
 
 impl MemBlock {
-    #[cfg(feature = "spec_hammer")]
-    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
-        let locked_2mb_blocks = determine_locked_2mb_blocks()?;
-        info!("Locked 2MB blocks: {}", locked_2mb_blocks);
-        let mut available_2mb_blocks = usize::MAX;
-        let mut allocations = [null_mut(); 50000];
-        let mut i = 0;
-        while available_2mb_blocks > locked_2mb_blocks {
-            let buddy_before = get_normal_page_nums()?;
-            let v = mmap_block(2 * MB);
-            let buddy_after = get_normal_page_nums()?;
-            let diff = diff_arrs(&buddy_before, &buddy_after);
-            allocations[i] = v;
-            i += 1;
-            available_2mb_blocks = get_normal_page_nums()?[9];
-            if available_2mb_blocks <= locked_2mb_blocks {
-                log_pagetypeinfo();
-                debug!("  {:?}", buddy_before);
-                debug!("- {:?}", buddy_after);
-                debug!("= {:?}", diff);
+    unsafe fn buddyinfo_alloc(
+        size: usize,
+        consec_checker: &mut dyn AllocChecker,
+    ) -> anyhow::Result<MemBlock> {
+        if size > 4 * MB {
+            return Err(anyhow::anyhow!(
+                "Buddyinfo only supports consecutive allocations of up to 4MB."
+            ));
+        }
+        /*
+         * there's two things that might fail here:
+         * (1) finding a suitable block10 candidate and
+         * (2) verifying that the block is actually consecutive (using the MemBlock::check() function)
+         */
+        let block = retry!(|| {
+            let block = MemBlock::find_block10_candidate()?;
+            // munmap slice of MemBlock
+            unsafe {
+                libc::munmap(
+                    (block.ptr as *mut u8).add(size) as *mut libc::c_void,
+                    block.len - size,
+                );
             }
-        }
-        debug!("hit thresh");
-        let buddy_before = get_normal_page_nums()?;
-        let v = mmap_block(2 * MB);
-        let buddy_after = get_normal_page_nums()?;
-        let diff = diff_arrs(&buddy_before, &buddy_after);
-        info!("  {:?}", buddy_before);
-        info!("- {:?}", buddy_after);
-        info!("= {:?}", diff);
-        for ptr in allocations {
-            libc::munmap(ptr, 2 * MB);
-        }
-        Ok(v)
+            let block = MemBlock::new(block.ptr, size);
+            match consec_checker.check(&block) {
+                Ok(true) => Ok(block),
+                Ok(false) => {
+                    libc::munmap(block.ptr as *mut libc::c_void, block.len);
+                    Err(anyhow::anyhow!("Block is not consecutive. Retrying..."))
+                }
+                Err(e) => {
+                    error!("Memory check failed: {:?}", e);
+                    libc::munmap(block.ptr as *mut libc::c_void, block.len);
+                    Err(e)
+                }
+            }
+        });
+        Ok(block)
     }
 
     fn low_order_bytes(blocks: &[i64; 11], max_order: usize) -> usize {
@@ -341,45 +345,43 @@ impl MemBlock {
             };
         }
     }
+}
 
-    unsafe fn buddyinfo_alloc(
-        size: usize,
-        consec_checker: &mut dyn AllocChecker,
-    ) -> anyhow::Result<MemBlock> {
-        if size > 4 * MB {
-            return Err(anyhow::anyhow!(
-                "Buddyinfo only supports consecutive allocations of up to 4MB."
-            ));
+impl MemBlock {
+    #[cfg(feature = "spec_hammer")]
+    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
+        let locked_2mb_blocks = determine_locked_2mb_blocks()?;
+        info!("Locked 2MB blocks: {}", locked_2mb_blocks);
+        let mut available_2mb_blocks = usize::MAX;
+        let mut allocations = [null_mut(); 50000];
+        let mut i = 0;
+        while available_2mb_blocks > locked_2mb_blocks {
+            let buddy_before = get_normal_page_nums()?;
+            let v = mmap_block(2 * MB);
+            let buddy_after = get_normal_page_nums()?;
+            let diff = diff_arrs(&buddy_before, &buddy_after);
+            allocations[i] = v;
+            i += 1;
+            available_2mb_blocks = get_normal_page_nums()?[9];
+            if available_2mb_blocks <= locked_2mb_blocks {
+                log_pagetypeinfo();
+                debug!("  {:?}", buddy_before);
+                debug!("- {:?}", buddy_after);
+                debug!("= {:?}", diff);
+            }
         }
-        /*
-         * there's two things that might fail here:
-         * (1) finding a suitable block10 candidate and
-         * (2) verifying that the block is actually consecutive (using the MemBlock::check() function)
-         */
-        let block = retry!(|| {
-            let block = MemBlock::find_block10_candidate()?;
-            // munmap slice of MemBlock
-            unsafe {
-                libc::munmap(
-                    (block.ptr as *mut u8).add(size) as *mut libc::c_void,
-                    block.len - size,
-                );
-            }
-            let block = MemBlock::new(block.ptr, size);
-            match consec_checker.check(&block) {
-                Ok(true) => Ok(block),
-                Ok(false) => {
-                    libc::munmap(block.ptr as *mut libc::c_void, block.len);
-                    Err(anyhow::anyhow!("Block is not consecutive. Retrying..."))
-                }
-                Err(e) => {
-                    error!("Memory check failed: {:?}", e);
-                    libc::munmap(block.ptr as *mut libc::c_void, block.len);
-                    Err(e)
-                }
-            }
-        });
-        Ok(block)
+        debug!("hit thresh");
+        let buddy_before = get_normal_page_nums()?;
+        let v = mmap_block(2 * MB);
+        let buddy_after = get_normal_page_nums()?;
+        let diff = diff_arrs(&buddy_before, &buddy_after);
+        info!("  {:?}", buddy_before);
+        info!("- {:?}", buddy_after);
+        info!("= {:?}", diff);
+        for ptr in allocations {
+            libc::munmap(ptr, 2 * MB);
+        }
+        Ok(v)
     }
 
     #[cfg(feature = "spoiler")]
