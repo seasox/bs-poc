@@ -34,6 +34,15 @@ impl DRAMAddr {
 
         DRAMAddr { bank, row, col }
     }
+
+    pub fn from_virt_offset(
+        addr: AggressorPtr,
+        offset: isize,
+        mem_config: &MemConfiguration,
+    ) -> DRAMAddr {
+        let p = unsafe { addr.byte_offset(offset) };
+        return DRAMAddr::from_virt(p, mem_config);
+    }
 }
 
 impl DRAMAddr {
