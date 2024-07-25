@@ -8,7 +8,7 @@ use crate::{
     util::{MB, PAGE_SIZE},
 };
 use anyhow::{bail, Context};
-use lpfs::proc::{buddyinfo::BuddyInfo, pagetypeinfo::PageTypeInfo};
+use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use std::cmp::min;
@@ -544,14 +544,6 @@ fn log_pagetypeinfo() {
     }
 }
 
-/// A small wrapper around pagetypeinfo() from lpfs, which is not convertible to anyhow::Result
-fn pagetypeinfo() -> anyhow::Result<PageTypeInfo> {
-    match lpfs::proc::pagetypeinfo::pagetypeinfo() {
-        Ok(pti) => Ok(pti),
-        Err(e) => bail!("{:?}", e),
-    }
-}
-
 /// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
 fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
     match lpfs::proc::buddyinfo::buddyinfo() {
@@ -567,18 +559,6 @@ pub fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
         .find(|z| z.zone().eq("Normal"))
         .context("Zone 'Normal' not found")?;
     return Ok(zone.free_areas().clone());
-    /*
-    fn add_acc<S: std::ops::AddAssign + Copy>(mut l: [S; 11], r: &[S; 11]) -> [S; 11] {
-        for i in 0..11 {
-            l[i] += r[i];
-        }
-        l
-    }
-    let pages = zones.iter().fold([0; 11], |mut acc, next| {
-        acc = add_acc(acc, next.free_areas());
-        acc
-    });
-    Ok(pages)*/
 }
 
 pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
