@@ -36,7 +36,7 @@ where
 #[macro_export]
 macro_rules! retry {
     ($f:expr) => {{
-        let f = $f;
+        let mut f = $f;
         loop {
             match f() {
                 Ok(x) => break x,

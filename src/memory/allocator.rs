@@ -105,7 +105,7 @@ impl ConsecAllocator for HugepageAllocator {
         *HUGEPAGE_SIZE as usize
     }
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         _progress_cb: &dyn Fn(),
     ) -> anyhow::Result<super::ConsecBlocks> {

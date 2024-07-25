@@ -145,9 +145,9 @@ enum ConsecCheck {
 }
 
 impl AllocChecker for ConsecCheck {
-    fn check(&self, block: &MemBlock, previous_blocks: &[MemBlock]) -> anyhow::Result<bool> {
+    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
         match self {
-            ConsecCheck::Pfn(c) => c.check(block, previous_blocks),
+            ConsecCheck::Pfn(c) => c.check(block),
         }
     }
 }
@@ -179,7 +179,7 @@ impl ConsecAllocator for ConsecAlloc {
     }
 
     unsafe fn alloc_consec_blocks(
-        &self,
+        &mut self,
         size: usize,
         progress_cb: &dyn Fn(),
     ) -> anyhow::Result<bs_poc::memory::ConsecBlocks> {
@@ -309,7 +309,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         alignment_checker,
         AllocCheckAnd::new(consec_checker, bank_checker),
     );
-    let alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
+    let mut alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
 
     let block_size = alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;
