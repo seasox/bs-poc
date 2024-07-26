@@ -11,11 +11,15 @@ PATTERN=39ad622b-3bfe-4161-b860-dad5f3e6dd68
 
 #ALLOC_STRATEGY=hugepage-rnd
 #ALLOC_STRATEGY=co-co
-ALLOC_STRATEGY=buddy-info
+#ALLOC_STRATEGY=buddy-info
+ALLOC_STRATEGY=mmap
+
+CONSEC_CHECK=bank-timing
 
 BS_FLAGS =--config=${CONFIG}
 BS_FLAGS+=--load-json=${FUZZ_CONF}
 BS_FLAGS+=--alloc-strategy=${ALLOC_STRATEGY}
+BS_FLAGS+=--consec-check=${CONSEC_CHECK}
 
 ifneq ($(PATTERN),)
 BS_FLAGS+=--pattern=${PATTERN}
@@ -31,7 +35,7 @@ ifeq ($(PROFILE),release)
 	CARGO_FLAGS=--release
 endif
 
-LOG_LEVEL=info
+LOG_LEVEL=debug
 
 LOGGER=RUST_LOG=${LOG_LEVEL}
 
