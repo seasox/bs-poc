@@ -1,7 +1,8 @@
 use std::arch::x86_64::_mm_mfence;
 
 use anyhow::bail;
-use lpfs::proc::{buddyinfo::BuddyInfo, pagetypeinfo::PageTypeInfo};
+use bs_poc::util::{KB, MB};
+use lpfs::proc::pagetypeinfo::PageTypeInfo;
 
 /// A small wrapper around pagetypeinfo() from lpfs, which is not convertible to anyhow::Result
 fn pagetypeinfo() -> anyhow::Result<PageTypeInfo> {
@@ -10,24 +11,6 @@ fn pagetypeinfo() -> anyhow::Result<PageTypeInfo> {
         Err(e) => bail!("{:?}", e),
     }
 }
-
-/// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
-fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
-    match lpfs::proc::buddyinfo::buddyinfo() {
-        Ok(b) => Ok(b),
-        Err(e) => bail!("{:?}", e),
-    }
-}
-
-fn print_pti(pti: &PageTypeInfo) {
-    for (node, zone, typ, counts) in pti.free_pages() {
-        println!("{:<6} {:<12} {:?}", zone, typ, counts);
-    }
-}
-
-const GB: usize = 1 << 30;
-const MB: usize = 1 << 20;
-const KB: usize = 1 << 10;
 
 unsafe fn mmap(len: usize) -> *mut libc::c_void {
     let p = libc::mmap(
@@ -42,7 +25,7 @@ unsafe fn mmap(len: usize) -> *mut libc::c_void {
     p
 }
 
-unsafe fn measure_num_cpu_pages() -> anyhow::Result<u64> {
+unsafe fn _measure_num_cpu_pages() -> anyhow::Result<u64> {
     const LEN: usize = 4 * KB;
     const MAX_ALLOCS: usize = 50000;
     let mut pages = Vec::with_capacity(MAX_ALLOCS);
@@ -81,7 +64,7 @@ unsafe fn test_cpu_buddy_alloc() -> anyhow::Result<u64> {
             .iter()
             .find(|(_, z, t, _)| z == "Normal" && t == "Movable")
             .unwrap();
-        let p = mmap(LEN);
+        let _p = mmap(LEN);
         let pti = pagetypeinfo()?;
         let normal_after = pti
             .free_pages()
@@ -158,7 +141,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         //println!("{:?}", bi[2].free_areas());
         libc::munmap(p, LEN);
     }
-    Ok(())
 }
 
 const PAGE_SIZE: usize = 4096;
