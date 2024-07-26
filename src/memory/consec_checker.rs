@@ -221,11 +221,12 @@ impl AllocChecker for AllocCheckSameBank {
                     "Bank conflict check with block {} failed: timed {} < {}",
                     i, time, self.threshold
                 );
+                return Ok(false);
+            } else {
                 info!(
                     "Bank conflict check with block {} succeeded: timed {} < {}",
                     i, time, self.threshold
                 );
-                return Ok(false);
             }
         }
         self.previous_blocks.push(block.clone());
