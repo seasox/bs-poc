@@ -16,6 +16,14 @@ ALLOC_STRATEGY=mmap
 
 CONSEC_CHECK=bank-timing
 
+LOG_LEVEL=info
+
+PROFILE=release
+
+#########################
+#    END config block   #
+#########################
+
 BS_FLAGS =--config=${CONFIG}
 BS_FLAGS+=--load-json=${FUZZ_CONF}
 BS_FLAGS+=--alloc-strategy=${ALLOC_STRATEGY}
@@ -29,13 +37,9 @@ ifneq ($(MAPPING),)
 BS_FLAGS+=--mapping=${MAPPING}
 endif
 
-PROFILE=release
-
 ifeq ($(PROFILE),release)
 	CARGO_FLAGS=--release
 endif
-
-LOG_LEVEL=debug
 
 LOGGER=RUST_LOG=${LOG_LEVEL}
 
