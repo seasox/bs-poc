@@ -56,8 +56,6 @@ fn main() -> anyhow::Result<()> {
         let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 100000) };
         println!("{}", time);
     }
-    mem.dealloc();
-    Ok(())
 }
 
 fn mmap(size: usize) -> anyhow::Result<*mut libc::c_void> {
