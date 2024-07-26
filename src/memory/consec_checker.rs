@@ -1,10 +1,8 @@
 use anyhow::bail;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 
-use crate::{
-    memory::construct_memory_tuple_timer,
-    util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
-};
+use crate::util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS};
 
 use super::{DRAMAddr, MemBlock, MemoryTupleTimer};
 
@@ -44,6 +42,7 @@ pub struct ConsecCheckBankTiming {
     mem_config: MemConfiguration,
     timer: Box<dyn MemoryTupleTimer>,
     conflict_threshold: u64,
+    progress_bar: Option<MultiProgress>,
 }
 
 impl ConsecCheckBankTiming {
@@ -52,10 +51,19 @@ impl ConsecCheckBankTiming {
         timer: Box<dyn MemoryTupleTimer>,
         conflict_threshold: u64,
     ) -> Self {
+        Self::new_with_progress(mem_config, timer, conflict_threshold, None)
+    }
+    pub fn new_with_progress(
+        mem_config: MemConfiguration,
+        timer: Box<dyn MemoryTupleTimer>,
+        conflict_threshold: u64,
+        progress_bar: Option<MultiProgress>,
+    ) -> Self {
         Self {
             mem_config,
             timer,
             conflict_threshold,
+            progress_bar,
         }
     }
 }
@@ -70,38 +78,62 @@ impl AllocChecker for ConsecCheckBankTiming {
         }
         let num_rows = block.len / ROW_SIZE;
         let row_pairs = (0..num_rows).combinations(2);
-        /*
-        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
-        let all_progress = MultiProgress::new();
-            .try_init()
-            .unwrap();
-        let offset_progress = ProgressBar::new(row_offsets).with_style(
-            ProgressStyle::with_template(
-                "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-            )
-            .unwrap(),
-        );
-        let offset_progress = all_progress.add(offset_progress);
-        let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
-            ProgressStyle::with_template(
-                "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-            )
-            .unwrap(),
-        );
-        let pairs_progress = all_progress.add(pairs_progress);
-        */
+
+        // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
+        // consecutive allocation, this should always hold, since the RankBank function is periodic.
+        let addr1 = unsafe { block.ptr.byte_add(0 * ROW_SIZE) };
+        let addr2 = unsafe { block.ptr.byte_add(512 * ROW_SIZE) };
+        debug!("Doing quick pre-check for consecutive allocation");
+        let t = unsafe {
+            self.timer
+                .time_subsequent_access_from_ram(addr1, addr2, 1000)
+        };
+        if t < self.conflict_threshold {
+            debug!("Block is not consecutive");
+            return Ok(false);
+        }
+
+        struct Progress {
+            offset: ProgressBar,
+            pairs: ProgressBar,
+        }
+        let progress = if let Some(progress_bar) = &self.progress_bar {
+            let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
+            let offset_progress = ProgressBar::new(row_offsets).with_style(
+                ProgressStyle::with_template(
+                    "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+                )
+                .unwrap(),
+            );
+            let offset_progress = progress_bar.add(offset_progress);
+            let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
+                ProgressStyle::with_template(
+                    "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+                )
+                .unwrap(),
+            );
+            let pairs_progress = progress_bar.add(pairs_progress);
+            Some(Progress {
+                offset: offset_progress,
+                pairs: pairs_progress,
+            })
+        } else {
+            None
+        };
         'next_offset: for row_offset in 0..row_offsets {
             let addr_offset = (row_offset as usize * ROW_SIZE) as isize;
             debug!(
                 "Checking row offset {} (effective offset: 0x{:x})",
                 row_offset, addr_offset
             );
-            /*
-            offset_progress.inc(1);
-            pairs_progress.reset();
-            */
+            if let Some(progress) = &progress {
+                progress.offset.inc(1);
+                progress.pairs.reset();
+            }
             for row_pair in row_pairs.clone() {
-                //pairs_progress.inc(1);
+                if let Some(progress) = &progress {
+                    progress.pairs.inc(1);
+                }
                 let row1 = row_pair[0];
                 let row2 = row_pair[1];
                 let addr1 = unsafe {
@@ -194,13 +226,15 @@ impl AllocChecker for ConsecCheckPfn {
 
 pub struct AllocCheckSameBank {
     threshold: u64,
+    timer: Box<dyn MemoryTupleTimer>,
     previous_blocks: Vec<MemBlock>,
 }
 
 impl AllocCheckSameBank {
-    pub fn new(threshold: u64) -> Self {
+    pub fn new(threshold: u64, timer: Box<dyn MemoryTupleTimer>) -> Self {
         Self {
             threshold,
+            timer,
             previous_blocks: Vec::new(),
         }
     }
@@ -209,25 +243,32 @@ impl AllocCheckSameBank {
 impl AllocChecker for AllocCheckSameBank {
     /// bank check
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
-        let timer = construct_memory_tuple_timer()?;
         let a1 = block.ptr;
         for (i, previous_block) in self.previous_blocks.iter().enumerate() {
             let a2 = previous_block.ptr;
-            let time = unsafe { timer.time_subsequent_access_from_ram(a1, a2, TIMER_ROUNDS) };
+            let time = unsafe {
+                self.timer
+                    .time_subsequent_access_from_ram(a1, a2, TIMER_ROUNDS)
+            };
             if time < self.threshold {
-                error!(
+                info!(
                     "Bank conflict check with block {} failed: timed {} < {}",
                     i, time, self.threshold
                 );
                 return Ok(false);
             } else {
                 info!(
-                    "Bank conflict check with block {} succeeded: timed {} < {}",
+                    "Bank conflict check with block {} succeeded: timed {} > {}",
                     i, time, self.threshold
                 );
             }
         }
         self.previous_blocks.push(block.clone());
+        info!(
+            "Push block {:?}. {} blocks in total",
+            block,
+            self.previous_blocks.len()
+        );
         Ok(true)
     }
 }
