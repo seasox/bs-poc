@@ -161,14 +161,18 @@ fn create_consec_checker_from_cli(
     consec_check: ConsecCheckType,
     mem_config: MemConfiguration,
     conflict_threshold: u64,
+    progress: MultiProgress,
 ) -> anyhow::Result<ConsecCheck> {
     Ok(match consec_check {
         ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
-        ConsecCheckType::BankTiming => ConsecCheck::BankTiming(ConsecCheckBankTiming::new(
-            mem_config,
-            construct_memory_tuple_timer()?,
-            conflict_threshold,
-        )),
+        ConsecCheckType::BankTiming => {
+            ConsecCheck::BankTiming(ConsecCheckBankTiming::new_with_progress(
+                mem_config,
+                construct_memory_tuple_timer()?,
+                conflict_threshold,
+                Some(progress),
+            ))
+        }
     })
 }
 
@@ -322,11 +326,12 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     // get mapping size, round to nearest multiple of PAGE_SIZE
     let alignment_checker = AllocCheckPageAligned {};
     let consec_checker =
-        create_consec_checker_from_cli(args.consec_check, mem_config, config.threshold)?;
-    let bank_checker = AllocCheckSameBank::new(config.threshold);
+        create_consec_checker_from_cli(args.consec_check, mem_config, config.threshold, multi)?;
+    let bank_checker = AllocCheckSameBank::new(config.threshold, construct_memory_tuple_timer()?);
     let checker = AllocCheckAnd::new(
         alignment_checker,
         AllocCheckAnd::new(consec_checker, bank_checker),
+        // unfortunately, bank_checker has to be the last entry in the chain due to its statefulness. We could speed this up by making it resettable
     );
     let mut alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
 
