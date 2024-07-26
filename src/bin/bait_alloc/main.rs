@@ -16,9 +16,10 @@ use bs_poc::{
     forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern},
     jitter::AggressorPtr,
     memory::{
-        AllocCheckAnd, AllocCheckPageAligned, AllocCheckSameBank, AllocChecker,
-        ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd, ConsecAllocator,
-        ConsecCheckPfn, HugepageAllocator, LinuxPageMap, MemBlock, VirtToPhysResolver,
+        construct_memory_tuple_timer, AllocCheckAnd, AllocCheckPageAligned, AllocCheckSameBank,
+        AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
+        ConsecAllocMmap, ConsecAllocator, ConsecCheckBankTiming, ConsecCheckPfn, HugepageAllocator,
+        LinuxPageMap, MemBlock, VirtToPhysResolver,
     },
     retry,
     util::{BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
@@ -57,6 +58,7 @@ struct CliArgs {
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ConsecCheckType {
     Pfn,
+    BankTiming,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -66,6 +68,7 @@ pub enum ConsecAllocType {
     CoCo,
     Hugepage,
     HugepageRnd,
+    Mmap,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -142,20 +145,31 @@ fn make_vec<T>(n: usize, f: &dyn Fn(usize) -> T) -> Vec<T> {
  */
 enum ConsecCheck {
     Pfn(ConsecCheckPfn),
+    BankTiming(ConsecCheckBankTiming),
 }
 
 impl AllocChecker for ConsecCheck {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
         match self {
             ConsecCheck::Pfn(c) => c.check(block),
+            ConsecCheck::BankTiming(c) => c.check(block),
         }
     }
 }
 
-fn create_consec_checker_from_cli(consec_check: ConsecCheckType) -> ConsecCheck {
-    match consec_check {
+fn create_consec_checker_from_cli(
+    consec_check: ConsecCheckType,
+    mem_config: MemConfiguration,
+    conflict_threshold: u64,
+) -> anyhow::Result<ConsecCheck> {
+    Ok(match consec_check {
         ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
-    }
+        ConsecCheckType::BankTiming => ConsecCheck::BankTiming(ConsecCheckBankTiming::new(
+            mem_config,
+            construct_memory_tuple_timer()?,
+            conflict_threshold,
+        )),
+    })
 }
 
 /**
@@ -166,6 +180,7 @@ enum ConsecAlloc {
     CoCo(ConsecAllocCoCo),
     Hugepage(HugepageAllocator),
     HugepageRnd(ConsecAllocHugepageRnd),
+    Mmap(ConsecAllocMmap),
 }
 
 impl ConsecAllocator for ConsecAlloc {
@@ -175,6 +190,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::CoCo(alloc) => alloc.block_size(),
             ConsecAlloc::Hugepage(alloc) => alloc.block_size(),
             ConsecAlloc::HugepageRnd(alloc) => alloc.block_size(),
+            ConsecAlloc::Mmap(alloc) => alloc.block_size(),
         }
     }
 
@@ -188,6 +204,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
             ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
             ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+            ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
         }
     }
 }
@@ -201,6 +218,7 @@ fn create_allocator_from_cli(
             ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
         }
         ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
+        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
         ConsecAllocType::HugepageRnd => {
             let hugepages = make_vec(10, &|_| unsafe {
@@ -303,7 +321,8 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 
     // get mapping size, round to nearest multiple of PAGE_SIZE
     let alignment_checker = AllocCheckPageAligned {};
-    let consec_checker = create_consec_checker_from_cli(args.consec_check);
+    let consec_checker =
+        create_consec_checker_from_cli(args.consec_check, mem_config, config.threshold)?;
     let bank_checker = AllocCheckSameBank::new(config.threshold);
     let checker = AllocCheckAnd::new(
         alignment_checker,
