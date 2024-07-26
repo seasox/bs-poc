@@ -6,7 +6,7 @@ use bs_poc::{
     util::{BlacksmithConfig, MemConfiguration, MB},
 };
 use clap::Parser;
-use log::{error, info};
+use log::info;
 
 #[derive(Debug, Parser)]
 struct CliArgs {
@@ -84,7 +84,7 @@ unsafe fn _main() -> anyhow::Result<()> {
                 if is_consec {
                     info!("Found consecutive block after {} allocations", i);
                 } else {
-                    error!("Bank timing bug");
+                    panic!("Bank timing bug");
                 }
                 break;
             }
