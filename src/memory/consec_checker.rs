@@ -1,6 +1,4 @@
 use anyhow::bail;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use indicatif_log_bridge::LogWrapper;
 use itertools::Itertools;
 
 use crate::{
@@ -42,16 +40,16 @@ impl AllocChecker for AllocCheckPageAligned {
     }
 }
 
-pub struct ConsecCheckBankTiming<'a> {
+pub struct ConsecCheckBankTiming {
     mem_config: MemConfiguration,
-    timer: &'a dyn MemoryTupleTimer,
+    timer: Box<dyn MemoryTupleTimer>,
     conflict_threshold: u64,
 }
 
-impl<'a> ConsecCheckBankTiming<'a> {
+impl ConsecCheckBankTiming {
     pub fn new(
         mem_config: MemConfiguration,
-        timer: &'a dyn MemoryTupleTimer,
+        timer: Box<dyn MemoryTupleTimer>,
         conflict_threshold: u64,
     ) -> Self {
         Self {
@@ -62,7 +60,7 @@ impl<'a> ConsecCheckBankTiming<'a> {
     }
 }
 
-impl<'a> AllocChecker for ConsecCheckBankTiming<'a> {
+impl AllocChecker for ConsecCheckBankTiming {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
         // TODO: determine row offsets from RankBank function. Here, we repeat
         // bank orders after 512 rows (see bank_order.txt)
@@ -72,8 +70,8 @@ impl<'a> AllocChecker for ConsecCheckBankTiming<'a> {
         }
         let num_rows = block.len / ROW_SIZE;
         let row_pairs = (0..num_rows).combinations(2);
-        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
         /*
+        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
         let all_progress = MultiProgress::new();
             .try_init()
             .unwrap();
