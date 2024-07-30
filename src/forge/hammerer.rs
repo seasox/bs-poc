@@ -305,7 +305,7 @@ impl<'a> Hammerer<'a> {
             mapping
                 .code_jitter
                 .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
-        if cfg!(jitter_dump) {
+        if cfg!(feature = "jitter_dump") {
             program
                 .write("hammer_jit.o")
                 .with_context(|| "failed to write function to disk")?;
