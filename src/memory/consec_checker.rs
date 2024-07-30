@@ -189,14 +189,11 @@ impl AllocChecker for ConsecCheckPfn {
          * in the memory block. If the measured timings correspond to the address function, it is very likely that
          * this indeed is a consecutive memory block.
          */
-        use crate::memory::{LinuxPageMap, VirtToPhysResolver};
-        let mut resolver = LinuxPageMap::new()?;
         trace!("Get consecutive PFNs for vaddr 0x{:x}", block.ptr as u64);
-        let mut phys_prev = resolver.get_phys(block.ptr as u64)?;
+        let mut phys_prev = block.pfn()?;
         let mut consecs = vec![phys_prev];
         for offset in (PAGE_SIZE..block.len).step_by(PAGE_SIZE) {
-            let virt = unsafe { (block.ptr as *const u8).add(offset) };
-            let phys = resolver.get_phys(virt as u64)?;
+            let phys = block.byte_add(offset).pfn()?;
             if phys != phys_prev + PAGE_SIZE as u64 {
                 consecs.push(phys_prev + PAGE_SIZE as u64);
                 consecs.push(phys);
@@ -216,7 +213,7 @@ impl AllocChecker for ConsecCheckPfn {
                 "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
                 first_block_bytes / 1024,
                 block.ptr as u64,
-                unsafe { block.ptr.add(first_block_bytes) as u64 },
+                block.byte_add(first_block_bytes).ptr as u64,
             );
             info!("{}", pfns);
         }
