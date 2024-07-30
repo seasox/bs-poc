@@ -327,7 +327,11 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let alignment_checker = AllocCheckPageAligned {};
     let consec_checker =
         create_consec_checker_from_cli(args.consec_check, mem_config, config.threshold, multi)?;
-    let bank_checker = AllocCheckSameBank::new(config.threshold, construct_memory_tuple_timer()?);
+    let bank_checker = AllocCheckSameBank::new(
+        mem_config,
+        config.threshold,
+        construct_memory_tuple_timer()?,
+    );
     let checker = AllocCheckAnd::new(
         alignment_checker,
         AllocCheckAnd::new(consec_checker, bank_checker),
