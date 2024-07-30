@@ -2,9 +2,12 @@ use anyhow::bail;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 
-use crate::util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS};
+use crate::{
+    memory::{DRAMAddr, PfnResolver},
+    util::{MemConfiguration, PAGE_SIZE, ROW_SHIFT, ROW_SIZE, TIMER_ROUNDS},
+};
 
-use super::{DRAMAddr, MemBlock, MemoryTupleTimer};
+use super::{MemBlock, MemoryTupleTimer};
 
 pub trait AllocChecker {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool>;
@@ -68,58 +71,51 @@ impl ConsecCheckBankTiming {
     }
 }
 
-impl AllocChecker for ConsecCheckBankTiming {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
-        // TODO: determine row offsets from RankBank function. Here, we repeat
-        // bank orders after 512 rows (see bank_order.txt)
-        let row_offsets = 512;
-        if block.len % ROW_SIZE != 0 {
-            bail!("Block is not row-aligned")
+pub struct Progress {
+    offset: ProgressBar,
+    pairs: ProgressBar,
+}
+
+impl Progress {
+    pub fn from_multi(row_offsets: u64, num_rows: usize, progress_bar: MultiProgress) -> Self {
+        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
+        let offset_progress = ProgressBar::new(row_offsets).with_style(
+            ProgressStyle::with_template(
+                "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+            )
+            .unwrap(),
+        );
+        let offset_progress = progress_bar.add(offset_progress);
+        let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
+            ProgressStyle::with_template(
+                "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+            )
+            .unwrap(),
+        );
+        let pairs_progress = progress_bar.add(pairs_progress);
+        Progress {
+            offset: offset_progress,
+            pairs: pairs_progress,
         }
-        let num_rows = block.len / ROW_SIZE;
+    }
+}
+
+impl MemBlock {
+    /// Find the PFN-VA offset
+    ///
+    /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
+    /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
+    /// filtering for possible "bank periods" after each iteration, but this here should be fast enough for now.
+    pub fn pfn_offset(
+        &self,
+        mem_config: &MemConfiguration,
+        conflict_threshold: u64,
+        timer: &dyn MemoryTupleTimer,
+        progress: Option<Progress>,
+    ) -> Option<usize> {
+        let num_rows = self.len / ROW_SIZE;
+        let row_offsets = (1 << mem_config.max_bank_bit) / ROW_SIZE; // the number of rows to iterate before overflowing the bank function
         let row_pairs = (0..num_rows).combinations(2);
-
-        // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
-        // consecutive allocation, this should always hold, since the RankBank function is periodic.
-        let addr1 = unsafe { block.ptr.byte_add(0 * ROW_SIZE) };
-        let addr2 = unsafe { block.ptr.byte_add(512 * ROW_SIZE) };
-        debug!("Doing quick pre-check for consecutive allocation");
-        let t = unsafe {
-            self.timer
-                .time_subsequent_access_from_ram(addr1, addr2, 1000)
-        };
-        if t < self.conflict_threshold {
-            debug!("Block is not consecutive");
-            return Ok(false);
-        }
-
-        struct Progress {
-            offset: ProgressBar,
-            pairs: ProgressBar,
-        }
-        let progress = if let Some(progress_bar) = &self.progress_bar {
-            let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
-            let offset_progress = ProgressBar::new(row_offsets).with_style(
-                ProgressStyle::with_template(
-                    "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-                )
-                .unwrap(),
-            );
-            let offset_progress = progress_bar.add(offset_progress);
-            let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
-                ProgressStyle::with_template(
-                    "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-                )
-                .unwrap(),
-            );
-            let pairs_progress = progress_bar.add(pairs_progress);
-            Some(Progress {
-                offset: offset_progress,
-                pairs: pairs_progress,
-            })
-        } else {
-            None
-        };
         'next_offset: for row_offset in 0..row_offsets {
             let addr_offset = (row_offset as usize * ROW_SIZE) as isize;
             debug!(
@@ -137,24 +133,19 @@ impl AllocChecker for ConsecCheckBankTiming {
                 let row1 = row_pair[0];
                 let row2 = row_pair[1];
                 let addr1 = unsafe {
-                    (block.ptr as *mut u8)
-                        .add(((row_offset as usize + row1) * ROW_SIZE) % block.len)
+                    (self.ptr as *mut u8)
+                        .byte_add(((row_offset as usize + row1) * ROW_SIZE) % self.len)
                 };
                 let addr2 = unsafe {
-                    (block.ptr as *mut u8)
-                        .add(((row_offset as usize + row2) * ROW_SIZE) % block.len)
+                    (self.ptr as *mut u8)
+                        .byte_add(((row_offset as usize + row2) * ROW_SIZE) % self.len)
                 };
-                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &self.mem_config);
-                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &self.mem_config);
-                let bank1 = dram1.bank;
-                let bank2 = dram2.bank;
-                let same_bank = bank1 == bank2;
-                let time = unsafe {
-                    self.timer
-                        .time_subsequent_access_from_ram(addr1, addr2, 1000)
-                };
-                if (same_bank && time < self.conflict_threshold)
-                    || (!same_bank && time > self.conflict_threshold)
+                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
+                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
+                let same_bank = dram1.bank == dram2.bank;
+                let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
+                if (same_bank && time < conflict_threshold)
+                    || (!same_bank && time > conflict_threshold)
                 {
                     debug!(
                         "Expected {} banks for ({:?}, {:?}), but timed {} {} {}",
@@ -163,7 +154,7 @@ impl AllocChecker for ConsecCheckBankTiming {
                         row2,
                         time,
                         if same_bank { "<" } else { ">" },
-                        self.conflict_threshold
+                        conflict_threshold
                     );
                     debug!(
                         "rows: ({}, {}); addrs: (0x{:x}, 0x{:x}); DRAM: {:?}, {:?}",
@@ -172,9 +163,52 @@ impl AllocChecker for ConsecCheckBankTiming {
                     continue 'next_offset;
                 }
             }
-            return Ok(true);
+            return Some(row_offset);
         }
-        Ok(false)
+        None
+    }
+}
+
+impl AllocChecker for ConsecCheckBankTiming {
+    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+        if block.len % ROW_SIZE != 0 {
+            bail!("Block is not row-aligned")
+        }
+        let row_offsets = 1 << (self.mem_config.max_bank_bit - ROW_SHIFT as u64);
+        let num_rows = block.len / ROW_SIZE;
+
+        // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
+        // consecutive allocation, this should always hold, since the RankBank function is periodic.
+        if block.len >= row_offsets * ROW_SIZE {
+            let addr1 = block.byte_add(0 * ROW_SIZE).ptr;
+            let addr2 = block.byte_add(row_offsets * ROW_SIZE).ptr;
+            debug!("Doing quick pre-check for consecutive allocation");
+            let t = unsafe {
+                self.timer
+                    .time_subsequent_access_from_ram(addr1, addr2, 1000)
+            };
+            if t < self.conflict_threshold {
+                debug!("Block is not consecutive");
+                return Ok(false);
+            }
+        } else {
+            debug!("Skip pre-check, block is too small");
+        }
+
+        let progress = self
+            .progress_bar
+            .as_ref()
+            .map(|pb| Progress::from_multi(row_offsets as u64, num_rows, pb.clone()));
+        let offset = block.pfn_offset(
+            &self.mem_config,
+            self.conflict_threshold,
+            &*self.timer,
+            progress,
+        );
+        if offset.is_some() {
+            info!("VA offset: {:?}", offset);
+        }
+        Ok(offset.is_some())
     }
 }
 
@@ -222,14 +256,20 @@ impl AllocChecker for ConsecCheckPfn {
 }
 
 pub struct AllocCheckSameBank {
+    mem_config: MemConfiguration,
     threshold: u64,
     timer: Box<dyn MemoryTupleTimer>,
     previous_blocks: Vec<MemBlock>,
 }
 
 impl AllocCheckSameBank {
-    pub fn new(threshold: u64, timer: Box<dyn MemoryTupleTimer>) -> Self {
+    pub fn new(
+        mem_config: MemConfiguration,
+        threshold: u64,
+        timer: Box<dyn MemoryTupleTimer>,
+    ) -> Self {
         Self {
+            mem_config,
             threshold,
             timer,
             previous_blocks: Vec::new(),
@@ -240,12 +280,22 @@ impl AllocCheckSameBank {
 impl AllocChecker for AllocCheckSameBank {
     /// bank check
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
-        let a1 = block.ptr;
+        let offset = block.pfn_offset(&self.mem_config, self.threshold, &*self.timer, None);
+        if offset.is_none() {
+            bail!("Block is not consecutive");
+        }
+        info!("VA offset: {}", offset.unwrap());
+        let a1 = block.byte_add(offset.unwrap() as usize * ROW_SIZE);
         for (i, previous_block) in self.previous_blocks.iter().enumerate() {
-            let a2 = previous_block.ptr;
+            let offset =
+                previous_block.pfn_offset(&self.mem_config, self.threshold, &*self.timer, None);
+            if offset.is_none() {
+                bail!("Previous block is not consecutive");
+            }
+            let a2 = previous_block.byte_add(offset.unwrap() as usize * ROW_SIZE);
             let time = unsafe {
                 self.timer
-                    .time_subsequent_access_from_ram(a1, a2, TIMER_ROUNDS)
+                    .time_subsequent_access_from_ram(a1.ptr, a2.ptr, TIMER_ROUNDS)
             };
             if time < self.threshold {
                 info!(
