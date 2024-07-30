@@ -268,6 +268,27 @@ impl MemBlock {
 }
 
 impl MemBlock {
+    pub fn byte_add(&self, offset: usize) -> Self {
+        assert!(offset <= self.len);
+        MemBlock {
+            ptr: unsafe { self.ptr.byte_add(offset) },
+            len: self.len - offset,
+        }
+    }
+}
+
+pub trait PfnResolver {
+    fn pfn(&self) -> anyhow::Result<u64>;
+}
+
+impl PfnResolver for MemBlock {
+    fn pfn(&self) -> anyhow::Result<u64> {
+        let mut resolver = LinuxPageMap::new()?;
+        resolver.get_phys(self.ptr as u64)
+    }
+}
+
+impl MemBlock {
     unsafe fn buddyinfo_alloc(
         size: usize,
         consec_checker: &mut dyn AllocChecker,

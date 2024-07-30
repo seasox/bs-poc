@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bs_poc::forge::{Hammerer, Hammering, HammeringPattern};
-use bs_poc::memory::{LinuxPageMap, MemBlock, Memory, VictimMemory, VirtToPhysResolver};
+use bs_poc::memory::{MemBlock, Memory, PfnResolver, VictimMemory};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::{HammerVictim, HammerVictimMemCheck, HammerVictimRsa};
 use clap::Parser;
@@ -57,15 +57,15 @@ fn main() -> Result<()> {
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
     let memory = Memory::new(MEM_SIZE)?;
-    let block = vec![MemBlock {
+    let block = MemBlock {
         ptr: memory.addr(0) as *mut u8,
         len: MEM_SIZE,
-    }];
+    };
+    let blocks = vec![block];
 
     info!("allocated {} B of memory", MEM_SIZE);
 
-    let mut resolver = LinuxPageMap::new()?;
-    let phys = resolver.get_phys(memory.addr(0) as u64);
+    let phys = block.pfn();
     match phys {
         Ok(phys) => info!("phys base_msb: 0x{:02X}", phys),
         Err(err) => warn!("Failed to determine physical address: {}", err),
@@ -94,7 +94,9 @@ fn main() -> Result<()> {
         let addrs =
             mapping.get_hammering_addresses(&pattern.access_ids, memory.addr(0), mem_config);
 
-        Box::new(Hammerer::new(mem_config, pattern, mapping, &addrs, &block)?)
+        Box::new(Hammerer::new(
+            mem_config, pattern, mapping, &addrs, &blocks,
+        )?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),

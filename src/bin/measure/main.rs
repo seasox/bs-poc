@@ -3,8 +3,7 @@ use std::ptr::null_mut;
 use anyhow::{bail, Context};
 use bs_poc::{
     memory::{
-        construct_memory_tuple_timer, AllocChecker, ConsecCheckPfn, DRAMAddr, LinuxPageMap,
-        MemBlock, VirtToPhysResolver,
+        construct_memory_tuple_timer, AllocChecker, ConsecCheckPfn, DRAMAddr, MemBlock, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SIZE},
 };
@@ -27,7 +26,6 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let args = CliArgs::parse();
     let timer = construct_memory_tuple_timer()?;
-    let mut pagemap = LinuxPageMap::new()?;
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
@@ -36,24 +34,24 @@ fn main() -> anyhow::Result<()> {
     } else {
         alloc_4m_consec()?
     };
-    let addr1 = unsafe { mem.ptr.add(args.row1 * ROW_SIZE) };
-    let addr2 = unsafe { mem.ptr.add(args.row2 * ROW_SIZE) };
-    let dram1 = DRAMAddr::from_virt((addr1 as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
-    let dram2 = DRAMAddr::from_virt((addr2 as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
+    let addr1 = mem.byte_add(args.row1 * ROW_SIZE);
+    let addr2 = mem.byte_add(args.row2 * ROW_SIZE);
+    let dram1 = DRAMAddr::from_virt((addr1.ptr as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
+    let dram2 = DRAMAddr::from_virt((addr2.ptr as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
     println!("row1,row2,vaddr1,vaddr2,paddr1,paddr2,dram1,dram2");
     println!(
         "{},{},0x{:x},0x{:x},{:x},{:x},{:?},{:?}",
         args.row1,
         args.row2,
-        addr1 as usize,
-        addr2 as usize,
-        pagemap.get_phys(addr1 as u64)?,
-        pagemap.get_phys(addr2 as u64)?,
+        addr1.ptr as usize,
+        addr2.ptr as usize,
+        addr1.pfn()?,
+        addr2.pfn()?,
         dram1,
         dram2
     );
     loop {
-        let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 100000) };
+        let time = unsafe { timer.time_subsequent_access_from_ram(addr1.ptr, addr2.ptr, 100000) };
         println!("{}", time);
     }
 }

@@ -19,7 +19,7 @@ use bs_poc::{
         construct_memory_tuple_timer, AllocCheckAnd, AllocCheckPageAligned, AllocCheckSameBank,
         AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
         ConsecAllocMmap, ConsecAllocator, ConsecCheckBankTiming, ConsecCheckPfn, HugepageAllocator,
-        LinuxPageMap, MemBlock, VirtToPhysResolver,
+        MemBlock, PfnResolver,
     },
     retry,
     util::{BlacksmithConfig, MemConfiguration, MB, PAGE_SIZE},
@@ -390,8 +390,6 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 }
 
 unsafe fn mode_prey() -> anyhow::Result<()> {
-    let mut resolver = LinuxPageMap::new()?;
-
     env_logger::init();
     // setup signal handler
     let waiting = Arc::new(AtomicBool::new(true));
@@ -420,11 +418,9 @@ unsafe fn mode_prey() -> anyhow::Result<()> {
             -1,
             0,
         );
-        //let v = libc::malloc(PAGE_LEN);
+        let block = MemBlock::new(v as *mut u8, PAGE_SIZE);
         libc::memset(v, 0_i32, PAGE_SIZE);
-        let p = resolver
-            .get_phys(v as u64)
-            .context("virt_to_phys failed. Are we root?")?;
+        let p = block.pfn().context("PFN lookup failed. Are we root?")?;
         phys[i] = p;
         virt[i] = v;
     }
