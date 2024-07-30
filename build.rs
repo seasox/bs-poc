@@ -1,28 +1,6 @@
 use std::env;
 use std::path::PathBuf;
 
-use glob::glob;
-
-fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
-    bindings.header("lib/spoiler/include/spoiler.h")
-}
-
-fn build_spoiler() {
-    // build spoiler
-    let spoiler_srcs = glob("lib/spoiler/src/*.c")
-        .expect("Failed to glob lib/spoiler/src")
-        .filter_map(Result::ok);
-    let spoiler_incs = glob("lib/spoiler/include/*.h")
-        .expect("Failed to glob lib/spoiler/include")
-        .filter_map(Result::ok);
-    cc::Build::new()
-        .files(spoiler_srcs)
-        .files(spoiler_incs)
-        .flag("-g")
-        .flag("-O0")
-        .compile("libspoiler.a");
-}
-
 fn bind_rsa(bindings: bindgen::Builder) -> bindgen::Builder {
     println!("cargo:rerun-if-changed=lib/rsa/rsa_crt.h");
     // Link with OpenSSL library
@@ -90,18 +68,11 @@ fn main() {
 
     bindings = bind_rsa(bindings);
 
-    if cfg!(spoiler) {
-        bindings = bind_spoiler(bindings);
-    }
-
     bindings = bind_ptedit(bindings);
 
     let bindings = run_bindgen(bindings);
 
     build_rsa();
-    if cfg!(spoiler) {
-        build_spoiler()
-    }
     build_ptedit();
 
     write_bindings(bindings);
