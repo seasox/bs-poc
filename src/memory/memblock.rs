@@ -4,6 +4,7 @@ use std::{ffi::CString, io::Read, process::Command, ptr::null_mut};
 use crate::memory_addresses;
 
 use crate::{
+    memory::LinuxPageMap,
     retry,
     util::{MB, PAGE_SIZE},
 };
@@ -13,7 +14,7 @@ use rand::prelude::SliceRandom;
 use rand::Rng;
 use std::cmp::min;
 
-use super::{AllocChecker, VictimMemory};
+use super::{AllocChecker, VictimMemory, VirtToPhysResolver};
 
 pub trait ConsecAllocator {
     fn block_size(&self) -> usize;
