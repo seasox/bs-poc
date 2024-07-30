@@ -3,6 +3,9 @@ name = "bs_poc"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+jitter_dump = []
+
 [profile.release-with-debug]
 inherits = "release"
 debug = true
