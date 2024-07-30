@@ -70,6 +70,14 @@ impl MemConfiguration {
         out.col_mask = (1 << col_bits.len()) - 1;
         out.row_shift = MTX_SIZE - bank_bits.len() - col_bits.len() - row_bits.len();
         out.row_mask = (1 << row_bits.len()) - 1;
+        out.max_bank_bit = bank_bits
+            .iter()
+            .map(|b| match b {
+                BitDef::Single(bit) => *bit,
+                BitDef::Multi(bits) => *bits.iter().max().unwrap(),
+            })
+            .max()
+            .unwrap();
 
         // construct dram matrix
         let mut dram_mtx: [usize; MTX_SIZE] = [0; MTX_SIZE];
@@ -139,6 +147,7 @@ pub struct MemConfiguration {
     pub(crate) col_mask: usize,
     pub(crate) dram_mtx: [usize; MTX_SIZE],
     pub(crate) addr_mtx: [usize; MTX_SIZE],
+    pub max_bank_bit: u64,
 }
 
 impl MemConfiguration {
