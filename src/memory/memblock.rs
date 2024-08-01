@@ -1,17 +1,19 @@
-use std::{ffi::CString, io::Read, process::Command, ptr::null_mut};
+use std::{cell::RefCell, ffi::CString, io::Read, process::Command, ptr::null_mut};
 
 use crate::{
-    memory::LinuxPageMap,
+    memory::{DRAMAddr, LinuxPageMap},
     retry,
-    util::{MB, PAGE_SIZE},
+    util::{MemConfiguration, MB, PAGE_SIZE, ROW_SIZE},
 };
 use anyhow::{bail, Context};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use itertools::Itertools;
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::prelude::SliceRandom;
 use rand::Rng;
 use std::cmp::min;
 
-use super::{AllocChecker, VictimMemory, VirtToPhysResolver};
+use super::{AllocChecker, MemoryTupleTimer, VictimMemory, VirtToPhysResolver};
 
 pub trait ConsecAllocator {
     fn block_size(&self) -> usize;
@@ -248,17 +250,22 @@ impl ConsecAllocator for ConsecAllocBuddyInfo {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct MemBlock {
     /// block pointer
     pub ptr: *mut u8,
     /// block length in bytes
     pub len: usize,
+    pfn_offset: RefCell<Option<(Option<usize>, MemConfiguration, u64)>>,
 }
 
 impl MemBlock {
     pub fn new(ptr: *mut u8, len: usize) -> Self {
-        MemBlock { ptr, len }
+        MemBlock {
+            ptr,
+            len,
+            pfn_offset: RefCell::new(None),
+        }
     }
     pub fn dealloc(self) {
         unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
@@ -271,7 +278,121 @@ impl MemBlock {
         MemBlock {
             ptr: unsafe { self.ptr.byte_add(offset) },
             len: self.len - offset,
+            pfn_offset: RefCell::new(None),
         }
+    }
+}
+
+pub struct Progress {
+    offset: ProgressBar,
+    pairs: ProgressBar,
+}
+
+impl Progress {
+    pub fn from_multi(row_offsets: u64, num_rows: usize, progress_bar: MultiProgress) -> Self {
+        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
+        let offset_progress = ProgressBar::new(row_offsets).with_style(
+            ProgressStyle::with_template(
+                "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+            )
+            .unwrap(),
+        );
+        let offset_progress = progress_bar.add(offset_progress);
+        let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
+            ProgressStyle::with_template(
+                "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+            )
+            .unwrap(),
+        );
+        let pairs_progress = progress_bar.add(pairs_progress);
+        Progress {
+            offset: offset_progress,
+            pairs: pairs_progress,
+        }
+    }
+}
+
+impl MemBlock {
+    /// Find the PFN-VA offset
+    ///
+    /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
+    /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
+    /// filtering for possible "bank periods" after each iteration, but this here should be fast enough for now.
+    /// WARNING: This function initializes pfn_offset with the provided mem_config. Calling #pfn_offset(...) with
+    ///          different arguments afterwards WILL NOT reset the OnceCell, potentially causing unintended behavior.
+    pub fn pfn_offset(
+        &self,
+        mem_config: &MemConfiguration,
+        conflict_threshold: u64,
+        timer: &dyn MemoryTupleTimer,
+        progress: Option<Progress>,
+    ) -> Option<usize> {
+        // reuse cached value if applicable
+        let mut state = self.pfn_offset.borrow_mut();
+        if let Some((offset, cfg, thresh)) = state.as_ref() {
+            if cfg == mem_config && *thresh == conflict_threshold {
+                return *offset;
+            } else {
+                *state = None;
+            }
+        }
+        // find PFN offset
+        let num_rows = self.len / ROW_SIZE;
+        let row_offsets = (1 << mem_config.max_bank_bit) / ROW_SIZE; // the number of rows to iterate before overflowing the bank function
+        let row_pairs = (0..num_rows).combinations(2);
+        'next_offset: for row_offset in 0..row_offsets {
+            let addr_offset = (row_offset as usize * ROW_SIZE) as isize;
+            debug!(
+                "Checking row offset {} (effective offset: 0x{:x})",
+                row_offset, addr_offset
+            );
+            // update progress
+            if let Some(progress) = &progress {
+                progress.offset.inc(1);
+                progress.pairs.reset();
+            }
+            // iterate over row pairs
+            for row_pair in row_pairs.clone() {
+                if let Some(progress) = &progress {
+                    progress.pairs.inc(1);
+                }
+                let row1 = row_pair[0];
+                let row2 = row_pair[1];
+                let addr1 = unsafe {
+                    (self.ptr as *mut u8)
+                        .byte_add(((row_offset as usize + row1) * ROW_SIZE) % self.len)
+                };
+                let addr2 = unsafe {
+                    (self.ptr as *mut u8)
+                        .byte_add(((row_offset as usize + row2) * ROW_SIZE) % self.len)
+                };
+                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
+                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
+                let same_bank = dram1.bank == dram2.bank;
+                let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
+                if (same_bank && time < conflict_threshold)
+                    || (!same_bank && time > conflict_threshold)
+                {
+                    debug!(
+                        "Expected {} banks for ({:?}, {:?}), but timed {} {} {}",
+                        if same_bank { "same" } else { "differing" },
+                        row1,
+                        row2,
+                        time,
+                        if same_bank { "<" } else { ">" },
+                        conflict_threshold
+                    );
+                    debug!(
+                        "rows: ({}, {}); addrs: (0x{:x}, 0x{:x}); DRAM: {:?}, {:?}",
+                        row1, row2, addr1 as u64, addr2 as u64, dram1, dram2
+                    );
+                    continue 'next_offset;
+                }
+            }
+            *state = Some((Some(row_offset), mem_config.clone(), conflict_threshold));
+            return Some(row_offset);
+        }
+        None
     }
 }
 
@@ -411,10 +532,7 @@ impl MemBlock {
             // return
             match v1 {
                 Some(v) => {
-                    return Ok(MemBlock {
-                        ptr: v as *mut u8,
-                        len: 4 * MB,
-                    })
+                    return Ok(MemBlock::new(v as *mut u8, 4 * MB));
                 }
                 None => {
                     debug!("No block10 candidate found. Retrying...");

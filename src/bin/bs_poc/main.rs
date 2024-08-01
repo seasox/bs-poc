@@ -57,11 +57,7 @@ fn main() -> Result<()> {
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
     let memory = Memory::new(MEM_SIZE)?;
-    let block = MemBlock {
-        ptr: memory.addr(0) as *mut u8,
-        len: MEM_SIZE,
-    };
-    let blocks = vec![block];
+    let block = MemBlock::new(memory.addr(0), MEM_SIZE);
 
     info!("allocated {} B of memory", MEM_SIZE);
 
@@ -75,6 +71,7 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let offset = 0x17B31343;
+    let blocks = vec![block];
     let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
         todo!("dummy hammerer not implemented")
         /*Box::new(DummyHammerer::new(

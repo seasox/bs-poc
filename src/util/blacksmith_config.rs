@@ -137,7 +137,7 @@ impl BlacksmithConfig {
     }
 }
 
-#[derive(Deserialize, Debug, Copy, Clone, Default)]
+#[derive(Deserialize, Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct MemConfiguration {
     pub(crate) bk_shift: usize,
     pub(crate) bk_mask: usize,

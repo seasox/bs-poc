@@ -1,13 +1,12 @@
 use anyhow::bail;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use itertools::Itertools;
+use indicatif::MultiProgress;
 
 use crate::{
-    memory::{DRAMAddr, PfnResolver},
+    memory::PfnResolver,
     util::{MemConfiguration, PAGE_SIZE, ROW_SHIFT, ROW_SIZE, TIMER_ROUNDS},
 };
 
-use super::{MemBlock, MemoryTupleTimer};
+use super::{MemBlock, MemoryTupleTimer, Progress};
 
 pub trait AllocChecker {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool>;
@@ -68,104 +67,6 @@ impl ConsecCheckBankTiming {
             conflict_threshold,
             progress_bar,
         }
-    }
-}
-
-pub struct Progress {
-    offset: ProgressBar,
-    pairs: ProgressBar,
-}
-
-impl Progress {
-    pub fn from_multi(row_offsets: u64, num_rows: usize, progress_bar: MultiProgress) -> Self {
-        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
-        let offset_progress = ProgressBar::new(row_offsets).with_style(
-            ProgressStyle::with_template(
-                "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-            )
-            .unwrap(),
-        );
-        let offset_progress = progress_bar.add(offset_progress);
-        let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
-            ProgressStyle::with_template(
-                "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-            )
-            .unwrap(),
-        );
-        let pairs_progress = progress_bar.add(pairs_progress);
-        Progress {
-            offset: offset_progress,
-            pairs: pairs_progress,
-        }
-    }
-}
-
-impl MemBlock {
-    /// Find the PFN-VA offset
-    ///
-    /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
-    /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
-    /// filtering for possible "bank periods" after each iteration, but this here should be fast enough for now.
-    pub fn pfn_offset(
-        &self,
-        mem_config: &MemConfiguration,
-        conflict_threshold: u64,
-        timer: &dyn MemoryTupleTimer,
-        progress: Option<Progress>,
-    ) -> Option<usize> {
-        let num_rows = self.len / ROW_SIZE;
-        let row_offsets = (1 << mem_config.max_bank_bit) / ROW_SIZE; // the number of rows to iterate before overflowing the bank function
-        let row_pairs = (0..num_rows).combinations(2);
-        'next_offset: for row_offset in 0..row_offsets {
-            let addr_offset = (row_offset as usize * ROW_SIZE) as isize;
-            debug!(
-                "Checking row offset {} (effective offset: 0x{:x})",
-                row_offset, addr_offset
-            );
-            if let Some(progress) = &progress {
-                progress.offset.inc(1);
-                progress.pairs.reset();
-            }
-            for row_pair in row_pairs.clone() {
-                if let Some(progress) = &progress {
-                    progress.pairs.inc(1);
-                }
-                let row1 = row_pair[0];
-                let row2 = row_pair[1];
-                let addr1 = unsafe {
-                    (self.ptr as *mut u8)
-                        .byte_add(((row_offset as usize + row1) * ROW_SIZE) % self.len)
-                };
-                let addr2 = unsafe {
-                    (self.ptr as *mut u8)
-                        .byte_add(((row_offset as usize + row2) * ROW_SIZE) % self.len)
-                };
-                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
-                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
-                let same_bank = dram1.bank == dram2.bank;
-                let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
-                if (same_bank && time < conflict_threshold)
-                    || (!same_bank && time > conflict_threshold)
-                {
-                    debug!(
-                        "Expected {} banks for ({:?}, {:?}), but timed {} {} {}",
-                        if same_bank { "same" } else { "differing" },
-                        row1,
-                        row2,
-                        time,
-                        if same_bank { "<" } else { ">" },
-                        conflict_threshold
-                    );
-                    debug!(
-                        "rows: ({}, {}); addrs: (0x{:x}, 0x{:x}); DRAM: {:?}, {:?}",
-                        row1, row2, addr1 as u64, addr2 as u64, dram1, dram2
-                    );
-                    continue 'next_offset;
-                }
-            }
-            return Some(row_offset);
-        }
-        None
     }
 }
 
@@ -282,10 +183,10 @@ impl AllocChecker for AllocCheckSameBank {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
         let offset = block.pfn_offset(&self.mem_config, self.threshold, &*self.timer, None);
         if offset.is_none() {
-            bail!("Block is not consecutive");
+            bail!("PFN Offset check failed.");
         }
         info!("VA offset: {}", offset.unwrap());
-        let a1 = block.byte_add(offset.unwrap() as usize * ROW_SIZE);
+        let a1 = block.byte_add((256 - offset.unwrap()) as usize * ROW_SIZE); // todo row offsets from mem_config
         for (i, previous_block) in self.previous_blocks.iter().enumerate() {
             let offset =
                 previous_block.pfn_offset(&self.mem_config, self.threshold, &*self.timer, None);
