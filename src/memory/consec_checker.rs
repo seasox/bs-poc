@@ -3,7 +3,7 @@ use indicatif::MultiProgress;
 
 use crate::{
     memory::PfnResolver,
-    util::{MemConfiguration, PAGE_SIZE, ROW_SHIFT, ROW_SIZE, TIMER_ROUNDS},
+    util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
 };
 
 use super::{MemBlock, MemoryTupleTimer, Progress};
@@ -99,7 +99,7 @@ impl AllocChecker for ConsecCheckBankTiming {
         let progress = self
             .progress_bar
             .as_ref()
-            .map(|pb| Progress::from_multi(row_offsets as u64, num_rows, pb.clone()));
+            .map(|pb| Progress::from_multi(row_offsets as u64, num_rows, pb));
         let offset = block.pfn_offset(
             &self.mem_config,
             self.conflict_threshold,
