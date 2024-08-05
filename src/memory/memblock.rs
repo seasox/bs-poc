@@ -8,6 +8,7 @@ use crate::{
 use anyhow::{bail, Context};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
+use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_HUGE_2MB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::prelude::SliceRandom;
 use rand::Rng;
@@ -286,7 +287,7 @@ pub struct Progress {
 }
 
 impl Progress {
-    pub fn from_multi(row_offsets: u64, num_rows: usize, progress_bar: MultiProgress) -> Self {
+    pub fn from_multi(row_offsets: u64, num_rows: usize, progress_bar: &MultiProgress) -> Self {
         let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
         let offset_progress = ProgressBar::new(row_offsets).with_style(
             ProgressStyle::with_template(
@@ -310,7 +311,7 @@ impl Progress {
 }
 
 impl MemBlock {
-    /// Find the PFN-VA offset
+    /// Find the PFN-VA offset in rows.
     ///
     /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
     /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
@@ -327,18 +328,22 @@ impl MemBlock {
         // reuse cached value if applicable
         let mut state = self.pfn_offset.borrow_mut();
         if let Some((offset, cfg, thresh)) = state.as_ref() {
-            if cfg == mem_config && *thresh == conflict_threshold {
+            if offset.is_some() && cfg == mem_config && *thresh == conflict_threshold {
+                info!("Reuse cached offset");
                 return *offset;
             } else {
+                info!("Resetting PFN offset state, parameter change detected");
                 *state = None;
             }
         }
+        drop(state);
         // find PFN offset
         let num_rows = self.len / ROW_SIZE;
-        let row_offsets = (1 << mem_config.max_bank_bit) / ROW_SIZE; // the number of rows to iterate before overflowing the bank function
+        let max_rows = mem_config.bank_function_period() as usize;
+        let num_rows = min(num_rows, max_rows);
         let row_pairs = (0..num_rows).combinations(2);
-        'next_offset: for row_offset in 0..row_offsets {
-            let addr_offset = (row_offset as usize * ROW_SIZE) as isize;
+        'next_offset: for row_offset in 0..num_rows {
+            let addr_offset = (row_offset * ROW_SIZE) as isize;
             debug!(
                 "Checking row offset {} (effective offset: 0x{:x})",
                 row_offset, addr_offset
@@ -353,16 +358,10 @@ impl MemBlock {
                 if let Some(progress) = &progress {
                     progress.pairs.inc(1);
                 }
-                let row1 = row_pair[0];
-                let row2 = row_pair[1];
-                let addr1 = unsafe {
-                    (self.ptr as *mut u8)
-                        .byte_add(((row_offset as usize + row1) * ROW_SIZE) % self.len)
-                };
-                let addr2 = unsafe {
-                    (self.ptr as *mut u8)
-                        .byte_add(((row_offset as usize + row2) * ROW_SIZE) % self.len)
-                };
+                let offset1 = row_pair[0] * ROW_SIZE;
+                let offset2 = row_pair[1] * ROW_SIZE;
+                let addr1 = self.byte_add(offset1).ptr;
+                let addr2 = self.byte_add(offset2).ptr;
                 let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
                 let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
                 let same_bank = dram1.bank == dram2.bank;
@@ -373,19 +372,25 @@ impl MemBlock {
                     debug!(
                         "Expected {} banks for ({:?}, {:?}), but timed {} {} {}",
                         if same_bank { "same" } else { "differing" },
-                        row1,
-                        row2,
+                        offset1 / ROW_SIZE,
+                        offset2 / ROW_SIZE,
                         time,
                         if same_bank { "<" } else { ">" },
                         conflict_threshold
                     );
                     debug!(
                         "rows: ({}, {}); addrs: (0x{:x}, 0x{:x}); DRAM: {:?}, {:?}",
-                        row1, row2, addr1 as u64, addr2 as u64, dram1, dram2
+                        offset1 / ROW_SIZE,
+                        offset2 / ROW_SIZE,
+                        addr1 as u64,
+                        addr2 as u64,
+                        dram1,
+                        dram2
                     );
                     continue 'next_offset;
                 }
             }
+            let mut state = self.pfn_offset.borrow_mut();
             *state = Some((Some(row_offset), mem_config.clone(), conflict_threshold));
             return Some(row_offset);
         }
@@ -480,15 +485,10 @@ impl MemBlock {
         log_pagetypeinfo();
         loop {
             let mut pages = vec![];
-            let mut v1 = None;
-            let mut diff: [i64; 11]; // = [0; 11];
+            let mut b1 = None;
 
             compact_mem()?;
             do_random_allocations();
-
-            //trace!("will alloc hugeblock");
-            //let hb = mmap_block(null_mut(), HUGEBLOCK_SIZE);
-            //trace!("hugeblock allocated");
 
             for _ in 0..MAX_ALLOCS {
                 log_pagetypeinfo();
@@ -499,13 +499,13 @@ impl MemBlock {
                 info!("Free blocks:   {}", fmt_arr(free_blocks));
                 let low_order_bytes = Self::low_order_bytes(&free_blocks, 9);
                 info!("Allocating {} bytes", low_order_bytes);
-                let v = mmap_block(std::ptr::null_mut(), low_order_bytes);
-                pages.push(MemBlock::new(v as *mut u8, low_order_bytes));
+                let block = MemBlock::mmap(low_order_bytes)?;
+                pages.push(block);
                 let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
-                let v = mmap_block(std::ptr::null_mut(), 4 * MB);
+                let b = MemBlock::mmap(4 * MB)?;
                 log_pagetypeinfo();
                 let blocks_after = get_normal_page_nums()?;
-                diff = diff_arrs(&blocks_before, &blocks_after);
+                let diff = diff_arrs(&blocks_before, &blocks_after);
                 //debug!("  {:?}", blocks_before);
                 //debug!("- {:?}", blocks_after);
                 if diff[10] != 0 {
@@ -513,23 +513,22 @@ impl MemBlock {
                 }
                 if MemBlock::is_block_candidate(&diff, 10) {
                     debug!("allocated block from order 10 block");
-                    v1 = Some(v);
+                    b1 = Some(b);
                     break;
                 } else {
-                    pages.push(MemBlock::new(v as *mut u8, 4 * MB));
+                    pages.push(b);
                 }
             }
 
             // cleanup
-            //libc::munmap(hb, HUGEBLOCK_SIZE);
-            for a in pages {
-                a.dealloc();
+            for b in pages {
+                b.dealloc();
             }
 
             // return
-            match v1 {
-                Some(v) => {
-                    return Ok(MemBlock::new(v as *mut u8, 4 * MB));
+            match b1 {
+                Some(b) => {
+                    return Ok(b);
                 }
                 None => {
                     debug!("No block10 candidate found. Retrying...");
@@ -606,7 +605,7 @@ unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
     v
 }
 
-fn compact_mem() -> anyhow::Result<()> {
+pub fn compact_mem() -> anyhow::Result<()> {
     Command::new("sh")
         .arg("-c")
         .arg("echo 1 | sudo tee /proc/sys/vm/compact_memory")
@@ -729,4 +728,140 @@ pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
         i += 1;
     }
     diffs
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        memory::{DRAMAddr, MemBlock, MemoryTupleTimer},
+        util::{BlacksmithConfig, MemConfiguration, MB, ROW_SIZE},
+    };
+
+    #[test]
+    fn test_pfn_offset_mock_timer() -> anyhow::Result<()> {
+        struct TestTimer<'a> {
+            callback: &'a dyn Fn((*const u8, *const u8)) -> u64,
+        }
+
+        impl<'a> MemoryTupleTimer for TestTimer<'a> {
+            unsafe fn time_subsequent_access_from_ram(
+                &self,
+                a: *const u8,
+                b: *const u8,
+                _rounds: usize,
+            ) -> u64 {
+                (self.callback)((a, b))
+            }
+        }
+
+        let config = BlacksmithConfig::from_jsonfile(
+            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+        )?;
+        let mem_config =
+            MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+        const ADDR: *mut u8 = 0x200000000 as *mut u8;
+
+        // it is not possible to determine the highest bank bit by only using one single memblock.
+        let row_offsets = mem_config.bank_function_period() as usize / 2;
+        for row_offset in 0..row_offsets {
+            let base_addr = ADDR as usize + row_offset * ROW_SIZE;
+            let timer = TestTimer {
+                callback: &|(a, b)| {
+                    let a = a as usize - ADDR as usize;
+                    let a = base_addr + a;
+                    let b = b as usize - ADDR as usize;
+                    let b = base_addr + b;
+                    let a = DRAMAddr::from_virt(a as *mut u8, &mem_config);
+                    let b = DRAMAddr::from_virt(b as *mut u8, &mem_config);
+                    if a.bank == b.bank {
+                        config.threshold + 100
+                    } else {
+                        config.threshold - 100
+                    }
+                },
+            };
+
+            let block = MemBlock::new(ADDR, 4 * MB);
+            let offset = block.pfn_offset(&mem_config, config.threshold, &timer, None);
+
+            assert!(offset.is_some());
+            assert_eq!(offset.unwrap(), row_offset);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pfn_offset_mmap() -> anyhow::Result<()> {
+        let config = BlacksmithConfig::from_jsonfile(
+            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+        )?;
+        let mem_config =
+            MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+        let block = MemBlock::mmap(4 * MB)?;
+        let timer = construct_memory_tuple_timer()?;
+        let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
+        assert!(pfn_offset.is_none());
+        block.dealloc();
+        Ok(())
+    }
+
+    #[test]
+    fn test_pfn_offset_hugepage() -> anyhow::Result<()> {
+        env_logger::init();
+        let config = BlacksmithConfig::from_jsonfile(
+            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+        )
+        .unwrap();
+        let mem_config =
+            MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+        let block = MemBlock::hugepage(HugepageSize::ONE_GB)?;
+        let timer = construct_memory_tuple_timer()?;
+        let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
+        println!("VA: 0x{:02x}", block.ptr as usize);
+        println!("PFN: 0x{:02x}", block.pfn()?);
+        assert_eq!(pfn_offset, Some(0));
+        block.dealloc();
+        Ok(())
+    }
+
+    #[test]
+    fn test_virt_offset() {
+        let config = BlacksmithConfig::from_jsonfile(
+            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+        )
+        .unwrap();
+        let mem_config =
+            MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+        let bank_bits_mask = (mem_config.bank_function_period() as usize * ROW_SIZE - 1) as isize;
+        //let row_offsets = (1 << (mem_config.max_bank_bit + 1 - ROW_SHIFT as u64)) as u64;
+        //let mut rng = thread_rng();
+        const NUM_TESTCASES: usize = 1_000_000;
+        let mut test_cases: Vec<(usize, usize)> = Vec::with_capacity(NUM_TESTCASES);
+        test_cases.push((0x79acade00000, 0x419df9000));
+        test_cases.push((0x77c537a00000, 0x19bd000));
+        test_cases.push((0x7ffef6f36000, 0x4a1a0000));
+        test_cases.push((0x7ffef6a00000, 0x4c111000));
+        test_cases.push((0x7ffeca600000, 0x2033000));
+        /*
+        for _ in 0..NUM_TESTCASES {
+            let v: usize = rng.gen();
+            let p: usize = rng.gen();
+            test_cases.push((v, p));
+        } */
+        for (v, p) in test_cases {
+            println!("VA,PA");
+            println!("0x{:02x},0x{:02x}", v, p);
+            let byte_offset = (p as isize & bank_bits_mask) - (v as isize & bank_bits_mask);
+            let byte_offset = byte_offset.rem_euclid(4 * MB as isize) as usize;
+            println!("Byte offset 0x{:02x}", byte_offset);
+            println!("Row offset: {}", byte_offset >> ROW_SHIFT);
+            let dramv =
+                DRAMAddr::from_virt_offset(v as *const u8, byte_offset as isize, &mem_config);
+            let dramp = DRAMAddr::from_virt(p as *const u8, &mem_config);
+            println!("{:?}", dramv);
+            println!("{:?}", dramp);
+            assert_eq!(dramv.bank, dramp.bank);
+        }
+    }
 }
