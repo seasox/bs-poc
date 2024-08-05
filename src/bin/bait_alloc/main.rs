@@ -26,7 +26,7 @@ use bs_poc::{
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use log::{info, warn};

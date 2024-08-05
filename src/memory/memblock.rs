@@ -57,6 +57,21 @@ impl VictimMemory for ConsecBlocks {
     }
 }
 
+impl ConsecBlocks {
+    pub fn pfn_align(
+        self,
+        mem_config: &MemConfiguration,
+        conflict_threshold: u64,
+        timer: &dyn MemoryTupleTimer,
+    ) -> anyhow::Result<Self> {
+        let mut blocks = vec![];
+        for block in self.blocks {
+            blocks.extend(block.pfn_align(mem_config, conflict_threshold, timer)?);
+        }
+        Ok(ConsecBlocks::new(blocks))
+    }
+}
+
 pub struct ConsecAllocHugepageRnd {
     hugepages: Vec<ConsecBlocks>,
 }
@@ -396,6 +411,28 @@ impl MemBlock {
             return Some(row_offset);
         }
         None
+    }
+}
+
+impl MemBlock {
+    pub fn pfn_align(
+        mut self,
+        mem_config: &MemConfiguration,
+        threshold: u64,
+        timer: &dyn MemoryTupleTimer,
+    ) -> anyhow::Result<Vec<MemBlock>> {
+        let mut blocks = vec![];
+        let offset = self.pfn_offset(mem_config, threshold, timer, None);
+        match offset {
+            None => bail!("no offset"),
+            Some(offset) => {
+                let block = self.byte_add(offset * ROW_SIZE);
+                blocks.push(block);
+                self.len = offset * ROW_SIZE;
+                blocks.push(self);
+            }
+        }
+        Ok(blocks)
     }
 }
 
