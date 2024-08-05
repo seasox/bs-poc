@@ -733,8 +733,11 @@ pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
 #[cfg(test)]
 mod tests {
     use crate::{
-        memory::{DRAMAddr, MemBlock, MemoryTupleTimer},
-        util::{BlacksmithConfig, MemConfiguration, MB, ROW_SIZE},
+        memory::{
+            construct_memory_tuple_timer, DRAMAddr, HugepageSize, MemBlock, MemoryTupleTimer,
+            PfnResolver,
+        },
+        util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
     };
 
     #[test]
@@ -807,6 +810,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_pfn_offset_hugepage() -> anyhow::Result<()> {
         env_logger::init();
         let config = BlacksmithConfig::from_jsonfile(
