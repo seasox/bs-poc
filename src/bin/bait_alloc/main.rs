@@ -243,7 +243,6 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 
     LogWrapper::new(multi.clone(), logger).try_init()?;
 
-    let pg = multi.add(ProgressBar::new(10));
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
@@ -325,8 +324,12 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 
     // get mapping size, round to nearest multiple of PAGE_SIZE
     let alignment_checker = AllocCheckPageAligned {};
-    let consec_checker =
-        create_consec_checker_from_cli(args.consec_check, mem_config, config.threshold, multi)?;
+    let consec_checker = create_consec_checker_from_cli(
+        args.consec_check,
+        mem_config,
+        config.threshold,
+        multi.clone(),
+    )?;
     let bank_checker = AllocCheckSameBank::new(
         mem_config,
         config.threshold,
@@ -342,6 +345,16 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     let block_size = alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;
     let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
+    let num_blocks = num_sets * block_size;
+
+    let pg = ProgressBar::new(num_blocks as u64).with_style(
+        ProgressStyle::with_template(
+            "Blocks: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+        )
+        .unwrap(),
+    );
+    let pg = multi.add(pg);
+
     pg.set_length(num_sets as u64);
 
     loop {
