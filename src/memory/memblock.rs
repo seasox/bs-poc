@@ -21,7 +21,7 @@ pub trait ConsecAllocator {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks>;
 }
 
@@ -75,7 +75,7 @@ impl ConsecAllocator for ConsecAllocHugepageRnd {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
         let hp_size = 1024 * MB;
         let chunk_size = self.block_size();
@@ -113,7 +113,7 @@ impl ConsecAllocator for ConsecAllocCoCo {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
         const mod_path: &str = "/dev/coco_dec_mem";
         let c_mod_path = CString::new(mod_path)?;
@@ -168,7 +168,7 @@ impl ConsecAllocator for ConsecAllocMmap {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
         assert_eq!(size % self.block_size(), 0);
         let num_blocks = size / self.block_size();
@@ -221,7 +221,7 @@ impl ConsecAllocator for ConsecAllocBuddyInfo {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<ConsecBlocks> {
         let block_size = self.block_size();
         if size % block_size != 0 {

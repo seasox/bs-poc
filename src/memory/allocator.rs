@@ -107,7 +107,7 @@ impl ConsecAllocator for HugepageAllocator {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        _progress_cb: &dyn Fn(),
+        _progress_cb: impl Fn(),
     ) -> anyhow::Result<super::ConsecBlocks> {
         let ptr = self.alloc(Layout::from_size_align(size, 1)?);
         if ptr.is_null() {

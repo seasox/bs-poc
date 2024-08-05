@@ -131,7 +131,7 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     Ok(pattern)
 }
 
-fn make_vec<T>(n: usize, f: &dyn Fn(usize) -> T) -> Vec<T> {
+fn make_vec<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
         let val = f(i);
@@ -201,7 +201,7 @@ impl ConsecAllocator for ConsecAlloc {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: &dyn Fn(),
+        progress_cb: impl Fn(),
     ) -> anyhow::Result<bs_poc::memory::ConsecBlocks> {
         match self {
             ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
@@ -225,9 +225,9 @@ fn create_allocator_from_cli(
         ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
         ConsecAllocType::HugepageRnd => {
-            let hugepages = make_vec(10, &|_| unsafe {
+            let hugepages = make_vec(10, |_| unsafe {
                 HugepageAllocator::new()
-                    .alloc_consec_blocks(1024 * MB, &|| {})
+                    .alloc_consec_blocks(1024 * MB, || {})
                     .expect("hugepage alloc")
             });
             ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(hugepages))
@@ -346,7 +346,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 
     loop {
         pg.set_position(0);
-        let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, &|| pg.inc(1))?;
+        let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, || pg.inc(1))?;
         pg.finish_and_clear();
         let hammering_addrs = mapping.get_hammering_addresses_relocate(
             &pattern.access_ids,
