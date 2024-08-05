@@ -145,10 +145,10 @@ impl AllocChecker for ConsecCheckPfn {
         let is_consec = first_block_bytes >= block.len;
         if is_consec {
             info!(
-                "Allocated a consecutive {} KB block at [{:#02x}, {:#02x}]",
+                "Allocated a consecutive {} KB block at [{:#02x}, {:#02x})",
                 first_block_bytes / 1024,
                 block.ptr as u64,
-                block.byte_add(first_block_bytes).ptr as u64,
+                block.byte_add(first_block_bytes - PAGE_SIZE).ptr as usize + PAGE_SIZE, // subtrace one page from byte_add call to circumvent overflow
             );
             info!("{}", pfns);
         }
