@@ -1,12 +1,13 @@
 use anyhow::Context;
 use bs_poc::{
     memory::{
-        construct_memory_tuple_timer, AllocCheckSameBank, AllocChecker, ConsecAllocMmap,
-        ConsecAllocator, ConsecCheckPfn, DRAMAddr, PfnResolver,
+        compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecAllocMmap, ConsecAllocator,
+        ConsecCheckPfn, DRAMAddr, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
 };
 use clap::Parser;
+use log::info;
 use lpfs::proc::buddyinfo::buddyinfo;
 
 #[derive(Debug, Parser)]
@@ -22,72 +23,50 @@ fn main() -> anyhow::Result<()> {
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-    println!("{:?}", mem_config);
-    let mut alloc = ConsecAllocMmap::new(Box::new(ConsecCheckPfn {}));
-    let mut blocks = Vec::new();
-    let mut offsets = Vec::new();
+    info!("{:?}", mem_config);
+    let mut pfn_checker = ConsecCheckPfn {};
     loop {
+        compact_mem()?;
         let buddy = buddyinfo().map_err(|e| anyhow::anyhow!("{:?}", e))?;
         if buddy[2].free_areas()[10] == 0 {
             panic!("No 4 MB blocks in normal zone. Goodbye.")
         }
-        let mut consecs = unsafe { alloc.alloc_consec_blocks(4 * MB, &|| {}) }?;
+        let mut alloc = ConsecAllocMmap::new(Box::new(ConsecCheckPfn {}));
+        let mut consecs = unsafe { alloc.alloc_consec_blocks(4 * MB, || {}) }?;
+        //let block = MemBlock::hugepage(bs_poc::memory::HugepageSize::ONE_GB)?;
+        //let block = MemBlock::mmap(4 * MB)?;
+        //let mut consecs = ConsecBlocks::new(vec![block]);
         assert_eq!(consecs.blocks.len(), 1);
         let block = consecs.blocks.pop().unwrap();
         let pfn = block.pfn()?;
         let timer = construct_memory_tuple_timer()?;
         let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
-        let row_offsets = (1 << (mem_config.max_bank_bit - ROW_SHIFT as u64)) as u64;
+        let row_offsets = mem_config.bank_function_period() as isize / 2;
         let expected_pfn_offset =
-            (((pfn & (0x3FFFFF)) - (block.ptr as u64 & (0x3FFFFF))) >> ROW_SHIFT) % row_offsets;
-        match pfn_offset {
-            Some(pfn_offset) => {
-                println!(
-                    "0x{:02x},0x{:02x},{},{}",
-                    block.ptr as usize, pfn, pfn_offset, expected_pfn_offset,
-                );
-                blocks.push(block);
-                offsets.push(pfn_offset);
-                if blocks.len() == 2 {
-                    let block1 = blocks.pop().unwrap();
-                    let block2 = blocks.pop().unwrap();
-                    let offset1 = 256 - offsets.pop().unwrap();
-                    let offset2 = 256 - offsets.pop().unwrap();
-                    let block1 = block1.byte_add(offset1 * ROW_SIZE);
-                    let block2 = block2.byte_add(offset2 * ROW_SIZE);
-                    //let block2 = block1.byte_add(2 * MB);
-                    println!("Block1 aligned PFN: 0x{:02x}", block1.pfn()?);
-                    let vaddr = DRAMAddr::from_virt(block1.ptr, &mem_config);
-                    let paddr = DRAMAddr::from_virt(block1.pfn()? as *const u8, &mem_config);
-                    println!("VA: {:?}", vaddr);
-                    println!("PA: {:?}", paddr);
-                    println!("Block2 aligned PFN: 0x{:02x}", block2.pfn()?);
-                    let vaddr = DRAMAddr::from_virt(block2.ptr, &mem_config);
-                    let paddr = DRAMAddr::from_virt(block2.pfn()? as *const u8, &mem_config);
-                    println!("VA: {:?}", vaddr);
-                    println!("PA: {:?}", paddr);
-                    let timer = construct_memory_tuple_timer()?;
-                    let time = unsafe {
-                        timer.time_subsequent_access_from_ram(block1.ptr, block2.ptr, 10000)
-                    };
-                    println!("Time: {}", time);
-                    let mut bank_check = AllocCheckSameBank::new(
-                        mem_config,
-                        config.threshold,
-                        construct_memory_tuple_timer()?,
-                    );
-                    _ = bank_check.check(&block1)?;
-                    let success = bank_check.check(&block2)?;
-                    println!("Bank Check: {}", success);
-                }
-            }
-            None => {
-                println!(
-                    "0x{:02x},0x{:02x},?,{}",
-                    block.ptr as usize, pfn, expected_pfn_offset
-                );
-                block.dealloc();
-            }
+            ((pfn as isize & (0x3FFFFF)) - (block.ptr as isize & (0x3FFFFF))) >> ROW_SHIFT;
+        let expected_pfn_offset = expected_pfn_offset.rem_euclid(row_offsets);
+        println!(
+            "0x{:02x},0x{:02x},{},{}",
+            block.ptr as usize,
+            pfn,
+            pfn_offset.map_or("?".to_string(), |x| format!("{}", x)),
+            expected_pfn_offset,
+        );
+        let is_consec = pfn_checker.check(&block)?;
+        assert_eq!(is_consec, pfn_offset.is_some());
+        if let Some(pfn_offset) = pfn_offset {
+            //assert_eq!(pfn_offset, expected_pfn_offset as usize);
+            let byte_offset = pfn_offset * ROW_SIZE;
+            let byte_offset = byte_offset.rem_euclid(block.len);
+            let dramv = DRAMAddr::from_virt_offset(block.ptr, byte_offset as isize, &mem_config);
+            let dramp = DRAMAddr::from_virt(block.pfn()? as *const u8, &mem_config);
+            info!(
+                "VA: 0x{:16x}, {:?} (offset {})",
+                block.ptr as usize, dramv, byte_offset
+            );
+            info!("PA: 0x{:16x}, {:?}", block.pfn()?, dramp);
+            assert_eq!(dramv.bank | 0b1, dramp.bank | 0b1);
         }
+        block.dealloc();
     }
 }
