@@ -179,11 +179,12 @@ impl ConsecAllocator for ConsecAllocMmap {
         let buf = MemBlock::mmap(DUMMY_ALLOC_SIZE)?;
         allocs.push(buf);
         'next_block: for _ in 0..num_blocks {
-            for _ in 0..MAX_ALLOCS {
+            for i in 0..MAX_ALLOCS {
                 let m = mmap_block(null_mut(), self.block_size());
                 let block = MemBlock::new(m as *mut u8, self.block_size());
                 let is_consec = self.consec_checker.check(&block)?;
                 if is_consec {
+                    info!("Found consecutive block after {} allocations.", i);
                     blocks.push(block);
                     progress_cb();
                     continue 'next_block;
