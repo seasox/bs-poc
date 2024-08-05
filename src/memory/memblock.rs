@@ -175,10 +175,7 @@ impl ConsecAllocator for ConsecAllocMmap {
         const MAX_ALLOCS: usize = 5000;
         let mut allocs: Vec<MemBlock> = Vec::with_capacity(MAX_ALLOCS * num_blocks + 1);
         const DUMMY_ALLOC_SIZE: usize = 4 * 1024 * MB;
-        let buf = MemBlock::new(
-            mmap_block(null_mut(), DUMMY_ALLOC_SIZE) as *mut u8,
-            DUMMY_ALLOC_SIZE,
-        );
+        let buf = MemBlock::mmap(DUMMY_ALLOC_SIZE)?;
         allocs.push(buf);
         'next_block: for _ in 0..num_blocks {
             for _ in 0..MAX_ALLOCS {
@@ -539,6 +536,57 @@ impl MemBlock {
                 }
             };
         }
+    }
+}
+
+pub enum HugepageSize {
+    TWO_MB,
+    ONE_GB,
+}
+
+impl MemBlock {
+    pub fn mmap(size: usize) -> anyhow::Result<Self> {
+        let p = unsafe {
+            libc::mmap(
+                null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
+                -1,
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            bail!("mmap failed: {}", std::io::Error::last_os_error());
+        }
+        unsafe { libc::memset(p, 0x00, size) };
+        Ok(MemBlock::new(p as *mut u8, size))
+    }
+
+    pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
+        const ADDR: usize = 0x2000000000;
+        let hp_size = match size {
+            HugepageSize::TWO_MB => 2 * MB,
+            HugepageSize::ONE_GB => 1024 * MB,
+        };
+        let hp_size_flag = match size {
+            HugepageSize::TWO_MB => MAP_HUGE_2MB,
+            HugepageSize::ONE_GB => MAP_HUGE_1GB,
+        };
+        let p = unsafe {
+            libc::mmap(
+                ADDR as *mut libc::c_void,
+                hp_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB | hp_size_flag,
+                -1,
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            bail!("mmap failed: {}", std::io::Error::last_os_error());
+        }
+        Ok(MemBlock::new(p as *mut u8, hp_size))
     }
 }
 
