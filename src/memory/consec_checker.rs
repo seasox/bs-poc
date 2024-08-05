@@ -75,7 +75,7 @@ impl AllocChecker for ConsecCheckBankTiming {
         if block.len % ROW_SIZE != 0 {
             bail!("Block is not row-aligned")
         }
-        let row_offsets = 1 << (self.mem_config.max_bank_bit - ROW_SHIFT as u64);
+        let row_offsets = self.mem_config.bank_function_period() as usize / 2;
         let num_rows = block.len / ROW_SIZE;
 
         // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
