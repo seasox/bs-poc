@@ -355,7 +355,7 @@ impl MemBlock {
         drop(state);
         // find PFN offset
         let num_rows = self.len / ROW_SIZE;
-        let max_rows = mem_config.bank_function_period() as usize;
+        let max_rows = mem_config.bank_function_period() as usize / 2; // TODO: check if it is valid for all bank functions to divide by two here (I think it is)
         let num_rows = min(num_rows, max_rows);
         let row_pairs = (0..num_rows).combinations(2);
         let progress = progress.map(|p| Progress::from_multi(num_rows as u64, num_rows, p));
