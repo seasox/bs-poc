@@ -274,11 +274,11 @@ impl MemBlock {
 
 impl MemBlock {
     pub fn byte_add(&self, offset: usize) -> Self {
-        assert!(offset <= self.len);
+        assert!(offset < self.len, "{} >= {}", offset, self.len);
         MemBlock {
             ptr: unsafe { self.ptr.byte_add(offset) },
             len: self.len - offset,
-            pfn_offset: RefCell::new(None),
+            pfn_offset: self.pfn_offset.clone(),
         }
     }
 }
