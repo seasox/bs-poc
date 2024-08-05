@@ -52,10 +52,8 @@ fn main() -> anyhow::Result<()> {
             pfn_offset.map_or("?".to_string(), |x| format!("{}", x)),
             expected_pfn_offset,
         );
-        let is_consec = pfn_checker.check(&block)?;
-        assert_eq!(is_consec, pfn_offset.is_some());
         if let Some(pfn_offset) = pfn_offset {
-            //assert_eq!(pfn_offset, expected_pfn_offset as usize);
+            assert_eq!(pfn_offset, expected_pfn_offset as usize);
             let byte_offset = pfn_offset * ROW_SIZE;
             let byte_offset = byte_offset.rem_euclid(block.len);
             let dramv = DRAMAddr::from_virt_offset(block.ptr, byte_offset as isize, &mem_config);
