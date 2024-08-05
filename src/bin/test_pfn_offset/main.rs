@@ -1,7 +1,7 @@
 use anyhow::Context;
 use bs_poc::{
     memory::{
-        compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecAllocMmap, ConsecAllocator,
+        compact_mem, construct_memory_tuple_timer, ConsecAllocMmap, ConsecAllocator,
         ConsecCheckPfn, DRAMAddr, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
@@ -30,7 +30,6 @@ fn main() -> anyhow::Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     info!("{:?}", mem_config);
-    let mut pfn_checker = ConsecCheckPfn {};
     loop {
         compact_mem()?;
         let buddy = buddyinfo().map_err(|e| anyhow::anyhow!("{:?}", e))?;
