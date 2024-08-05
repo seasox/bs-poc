@@ -10,6 +10,8 @@ use std::io::Read;
 use std::path::Path;
 use std::vec::Vec;
 
+use super::ROW_SHIFT;
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum BitDef {
@@ -127,6 +129,14 @@ impl MemConfiguration {
     }
 }
 
+impl MemConfiguration {
+    /// The periodicity of the bank function in rows, i.e., how many rows have to
+    /// be iterated until the bank function repeats.
+    pub fn bank_function_period(&self) -> u64 {
+        1 << (self.max_bank_bit + 1 - ROW_SHIFT as u64)
+    }
+}
+
 impl BlacksmithConfig {
     pub fn from_jsonfile(filepath: &str) -> Result<BlacksmithConfig> {
         let mut file = File::open(Path::new(filepath))?;
@@ -147,7 +157,7 @@ pub struct MemConfiguration {
     pub(crate) col_mask: usize,
     pub(crate) dram_mtx: [usize; MTX_SIZE],
     pub(crate) addr_mtx: [usize; MTX_SIZE],
-    pub max_bank_bit: u64,
+    max_bank_bit: u64,
 }
 
 impl MemConfiguration {
@@ -156,5 +166,19 @@ impl MemConfiguration {
     }
     pub fn get_row_count(&self) -> usize {
         1_usize << (self.row_mask.count_ones() as usize)
+    }
+}
+
+mod test {
+    #[test]
+    fn test_bank_function_period() {
+        use super::*;
+        let config = BlacksmithConfig::from_jsonfile(
+            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
+        )
+        .expect("failed to read config file");
+        let mem_config =
+            MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+        assert_eq!(mem_config.bank_function_period(), 512);
     }
 }
