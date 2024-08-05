@@ -7,6 +7,8 @@ use bs_poc::{
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
 };
 use clap::Parser;
+use indicatif::MultiProgress;
+use indicatif_log_bridge::LogWrapper;
 use log::info;
 use lpfs::proc::buddyinfo::buddyinfo;
 
@@ -18,7 +20,11 @@ struct CliArgs {
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    // wrap logger for indicatif
+    let logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+    let multi = MultiProgress::new();
+    LogWrapper::new(multi.clone(), logger).try_init()?;
     let args = CliArgs::parse();
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =

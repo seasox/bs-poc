@@ -297,7 +297,7 @@ impl MemBlock {
     }
 }
 
-pub struct Progress {
+struct Progress {
     offset: ProgressBar,
     pairs: ProgressBar,
 }
@@ -339,7 +339,7 @@ impl MemBlock {
         mem_config: &MemConfiguration,
         conflict_threshold: u64,
         timer: &dyn MemoryTupleTimer,
-        progress: Option<Progress>,
+        progress: Option<&MultiProgress>,
     ) -> Option<usize> {
         // reuse cached value if applicable
         let mut state = self.pfn_offset.borrow_mut();
@@ -358,6 +358,7 @@ impl MemBlock {
         let max_rows = mem_config.bank_function_period() as usize;
         let num_rows = min(num_rows, max_rows);
         let row_pairs = (0..num_rows).combinations(2);
+        let progress = progress.map(|p| Progress::from_multi(num_rows as u64, num_rows, p));
         'next_offset: for row_offset in 0..num_rows {
             let addr_offset = (row_offset * ROW_SIZE) as isize;
             debug!(

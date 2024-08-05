@@ -6,7 +6,7 @@ use crate::{
     util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
 };
 
-use super::{MemBlock, MemoryTupleTimer, Progress};
+use super::{MemBlock, MemoryTupleTimer};
 
 pub trait AllocChecker {
     fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool>;
@@ -76,7 +76,6 @@ impl AllocChecker for ConsecCheckBankTiming {
             bail!("Block is not row-aligned")
         }
         let row_offsets = self.mem_config.bank_function_period() as usize / 2;
-        let num_rows = block.len / ROW_SIZE;
 
         // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
         // consecutive allocation, this should always hold, since the RankBank function is periodic.
@@ -96,15 +95,11 @@ impl AllocChecker for ConsecCheckBankTiming {
             debug!("Skip pre-check, block is too small");
         }
 
-        let progress = self
-            .progress_bar
-            .as_ref()
-            .map(|pb| Progress::from_multi(row_offsets as u64, num_rows, pb));
         let offset = block.pfn_offset(
             &self.mem_config,
             self.conflict_threshold,
             &*self.timer,
-            progress,
+            self.progress_bar.as_ref(),
         );
         if offset.is_some() {
             info!("VA offset: {:?}", offset);
