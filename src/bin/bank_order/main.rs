@@ -4,6 +4,7 @@ use bs_poc::{
     util::{BlacksmithConfig, MemConfiguration, KB},
 };
 use clap::Parser;
+use log::info;
 
 #[derive(Parser, Debug)]
 struct CliArgs {
@@ -12,16 +13,18 @@ struct CliArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    env_logger::init();
     let args = CliArgs::parse();
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let addr = 0x2000000000 as *mut u8;
-    // 1024 rows = 8 MiB
-    for row_offset in 0..1024 {
-        let ptr = unsafe { addr.add(row_offset * 8 * KB) };
+    let row_offsets = mem_config.bank_function_period() as usize;
+    info!("Row offsets: {}", row_offsets);
+    for row_offset in 0..row_offsets {
+        let ptr = unsafe { addr.byte_add(row_offset * 8 * KB) };
         let dram = DRAMAddr::from_virt(ptr, &mem_config);
-        if dram.bank == 0 && row_offset != 0 {
+        if row_offset != 0 && row_offset % 256 == 0 {
             println!();
         } else if row_offset != 0 {
             print!(",");
