@@ -16,7 +16,7 @@ use bs_poc::{
     forge::{FuzzSummary, Hammerer, Hammering, HammeringPattern},
     jitter::AggressorPtr,
     memory::{
-        construct_memory_tuple_timer, AllocCheckAnd, AllocCheckPageAligned, AllocCheckSameBank,
+        compact_mem, construct_memory_tuple_timer, AllocCheckAnd, AllocCheckPageAligned,
         AllocChecker, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
         ConsecAllocMmap, ConsecAllocator, ConsecCheckBankTiming, ConsecCheckPfn, HugepageAllocator,
         MemBlock, PfnResolver,
@@ -330,16 +330,13 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         config.threshold,
         multi.clone(),
     )?;
-    let bank_checker = AllocCheckSameBank::new(
+    /*let bank_checker = AllocCheckSameBank::new(
         mem_config,
         config.threshold,
         construct_memory_tuple_timer()?,
-    );
-    let checker = AllocCheckAnd::new(
-        alignment_checker,
-        AllocCheckAnd::new(consec_checker, bank_checker),
+    );*/
         // unfortunately, bank_checker has to be the last entry in the chain due to its statefulness. We could speed this up by making it resettable
-    );
+    let checker = AllocCheckAnd::new(alignment_checker, consec_checker);
     let mut alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
 
     let block_size = alloc_strategy.block_size();
@@ -358,6 +355,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
     pg.set_length(num_sets as u64);
 
     loop {
+compact_mem()?;
         pg.set_position(0);
         let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, || pg.inc(1))?;
         pg.finish_and_clear();
