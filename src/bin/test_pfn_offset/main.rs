@@ -1,8 +1,8 @@
 use anyhow::Context;
 use bs_poc::{
     memory::{
-        compact_mem, construct_memory_tuple_timer, ConsecAllocMmap, ConsecAllocator,
-        ConsecCheckPfn, DRAMAddr, PfnResolver,
+        compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecAllocMmap, ConsecAllocator,
+        ConsecCheckBankTiming, ConsecCheckPfnBank, DRAMAddr, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
 };
@@ -36,7 +36,13 @@ fn main() -> anyhow::Result<()> {
         if buddy[2].free_areas()[10] == 0 {
             panic!("No 4 MB blocks in normal zone. Goodbye.")
         }
-        let mut alloc = ConsecAllocMmap::new(Box::new(ConsecCheckPfn {}));
+        let checker = ConsecCheckBankTiming::new_with_progress(
+            mem_config.clone(),
+            construct_memory_tuple_timer()?,
+            config.threshold,
+            Some(multi.clone()),
+        );
+        let mut alloc = ConsecAllocMmap::new(Box::new(checker));
         let mut consecs = unsafe { alloc.alloc_consec_blocks(4 * MB, || {}) }?;
         //let block = MemBlock::hugepage(bs_poc::memory::HugepageSize::ONE_GB)?;
         //let block = MemBlock::mmap(4 * MB)?;
@@ -58,6 +64,8 @@ fn main() -> anyhow::Result<()> {
             expected_pfn_offset,
         );
         if let Some(pfn_offset) = pfn_offset {
+            let mut pfn_checker = ConsecCheckPfnBank::new(mem_config.clone());
+            assert!(pfn_checker.check(&block)?, "PFN check failed");
             assert_eq!(pfn_offset, expected_pfn_offset as usize);
             let byte_offset = pfn_offset * ROW_SIZE;
             let byte_offset = byte_offset.rem_euclid(block.len);
