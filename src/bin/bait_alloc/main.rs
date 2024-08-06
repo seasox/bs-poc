@@ -9,6 +9,7 @@ use std::{
         Arc,
     },
     thread,
+time::Duration,
 };
 
 use anyhow::{bail, Context};
@@ -354,6 +355,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         .unwrap(),
     );
     let pg = multi.add(pg);
+pg.enable_steady_tick(Duration::from_secs(1));
 
     pg.set_length(num_sets as u64);
 
