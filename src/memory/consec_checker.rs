@@ -118,6 +118,40 @@ impl AllocChecker for ConsecCheckPfn {
     }
 }
 
+/// An AllocChecker which tests for consistent memory banks.
+///
+/// As it turns out, we don't *really* need consecutive PFNs. What we do need is dram addressing with a bank order consistent with consecutive PFNs.
+/// This is what this check does.
+pub struct ConsecCheckPfnBank {
+    mem_config: MemConfiguration,
+}
+
+impl ConsecCheckPfnBank {
+    pub fn new(mem_config: MemConfiguration) -> Self {
+        Self { mem_config }
+    }
+}
+
+impl AllocChecker for ConsecCheckPfnBank {
+    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+        let pfns = block.consec_pfns()?.format_pfns();
+        info!("PFNs: {}", pfns);
+        let first_pfn = block.pfn()? as *mut u8;
+        for row in (0..block.len).step_by(ROW_SIZE) {
+            let pfn = block.byte_add(row).pfn()? as *mut u8;
+            // compare the actual PFN bank with the expected bank if the observed block were consecutive
+            let dram = DRAMAddr::from_virt(pfn, &self.mem_config);
+            let expected_dram =
+                DRAMAddr::from_virt(unsafe { first_pfn.byte_add(row) }, &self.mem_config);
+            if dram.bank != expected_dram.bank {
+                info!("Bank check failed: {:?} != {:?}", dram, expected_dram);
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
 pub struct AllocCheckSameBank {
     mem_config: MemConfiguration,
     threshold: u64,
