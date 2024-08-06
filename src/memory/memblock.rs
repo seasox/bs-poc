@@ -313,14 +313,14 @@ impl Progress {
         let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
         let offset_progress = ProgressBar::new(num_rows).with_style(
             ProgressStyle::with_template(
-                "Offset: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+                "Offset: [{elapsed_precise} ({eta:02} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
             )
             .unwrap(),
         );
         let offset_progress = progress_bar.add(offset_progress);
         let pairs_progress = ProgressBar::new(row_pairs_len).with_style(
             ProgressStyle::with_template(
-                "Pairs: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
+                "Pairs:  [{elapsed_precise} ({eta:02} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
             )
             .unwrap(),
         );
