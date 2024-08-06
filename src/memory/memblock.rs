@@ -427,11 +427,20 @@ impl MemBlock {
                     continue 'next_offset;
                 }
             }
-            let mut state = self.pfn_offset.borrow_mut();
-            *state = Some((Some(row_offset), mem_config.clone(), conflict_threshold));
-            return Some(row_offset);
+            return self.retain_state(Some(row_offset), mem_config, conflict_threshold);
         }
-        None
+        self.retain_state(None, mem_config, conflict_threshold)
+    }
+
+    fn retain_state(
+        &self,
+        offset: Option<usize>,
+        mem_config: &MemConfiguration,
+        threshold: u64,
+    ) -> Option<usize> {
+        let mut state = self.pfn_offset.borrow_mut();
+        *state = Some((offset, mem_config.clone(), threshold));
+        offset
     }
 }
 
