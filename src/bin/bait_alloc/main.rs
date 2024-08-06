@@ -334,12 +334,6 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         config.threshold,
         Some(multi.clone()),
     )?;
-    /*let bank_checker = AllocCheckSameBank::new(
-        mem_config,
-        config.threshold,
-        construct_memory_tuple_timer()?,
-    );*/
-        // unfortunately, bank_checker has to be the last entry in the chain due to its statefulness. We could speed this up by making it resettable
     let checker = AllocCheckAnd::new(alignment_checker, consec_checker);
     let mut alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(checker));
 
