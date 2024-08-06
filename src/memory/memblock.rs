@@ -219,14 +219,14 @@ impl ConsecAllocator for ConsecAllocMmap {
                     progress_cb();
                 } else {
                     candidate.dealloc();
-            }
+                }
             }
             if blocks.len() < num_blocks && !found_consec {
                 warn!(
                     "Failed to find consecutive block in {} candidates. Retrying with new candidates...",
                     CANDIDATE_COUNT
                 );
-        }
+            }
         }
         buf.dealloc();
         assert_eq!(blocks.len(), num_blocks);
