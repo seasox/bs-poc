@@ -188,33 +188,39 @@ impl ConsecAllocator for ConsecAllocMmap {
         assert_eq!(size % self.block_size(), 0);
         let num_blocks = size / self.block_size();
         let mut blocks = Vec::with_capacity(num_blocks);
-        const MAX_ALLOCS: usize = 5000;
-        let mut allocs: Vec<MemBlock> = Vec::with_capacity(MAX_ALLOCS * num_blocks + 1);
+        const CANDIDATE_COUNT: usize = 1000; // 1000 * 4 MB = 4 GB
         const DUMMY_ALLOC_SIZE: usize = 4 * 1024 * MB;
         let buf = MemBlock::mmap(DUMMY_ALLOC_SIZE)?;
-        allocs.push(buf);
-        'next_block: for _ in 0..num_blocks {
-            for i in 0..MAX_ALLOCS {
-                let m = mmap_block(null_mut(), self.block_size());
-                let block = MemBlock::new(m as *mut u8, self.block_size());
-                let is_consec = self.consec_checker.check(&block)?;
-                if is_consec {
-                    info!("Found consecutive block after {} allocations.", i);
-                    blocks.push(block);
-                    progress_cb();
-                    continue 'next_block;
-                } else {
-                    allocs.push(block);
+        while blocks.len() < num_blocks {
+            let mut candidates = (0..CANDIDATE_COUNT)
+                .map(|_| MemBlock::mmap(self.block_size()).context("mmap").unwrap())
+                .collect_vec();
+            candidates.shuffle(&mut rand::thread_rng());
+            let mut found_consec = false;
+            for candidate in candidates {
+                if blocks.len() >= num_blocks {
+                    candidate.dealloc();
+                    continue;
                 }
+                let is_consec = self.consec_checker.check(&candidate)?;
+                if is_consec {
+                    blocks.push(candidate);
+                    found_consec = true;
+                    info!("Found consecutive block");
+                    progress_cb();
+                } else {
+                    candidate.dealloc();
             }
-            for alloc in allocs {
-                alloc.dealloc();
             }
-            bail!("Failed to allocate consecutive blocks");
+            if blocks.len() < num_blocks && !found_consec {
+                warn!(
+                    "Failed to find consecutive block in {} candidates. Retrying with new candidates...",
+                    CANDIDATE_COUNT
+                );
         }
-        for alloc in allocs {
-            alloc.dealloc();
         }
+        buf.dealloc();
+        assert_eq!(blocks.len(), num_blocks);
         Ok(ConsecBlocks::new(blocks))
     }
 }
