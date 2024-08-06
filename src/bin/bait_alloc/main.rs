@@ -38,20 +38,23 @@ struct CliArgs {
     #[clap(long = "mode", default_value = "bait")]
     mode: BaitMode,
     ///The BlacksmithConfig
-    #[clap(long = "config")]
+    #[clap(long = "config", default_value = "config/bs-config.json")]
     config: String,
     /// The JSON file containing hammering patterns to load
-    #[clap(long = "load-json", default_value = "fuzz-summary.json")]
+    #[clap(long = "load-json", default_value = "config/fuzz-summary.json")]
     load_json: String,
     /// The pattern ID to load from the JSON file
-    #[clap(long = "pattern")]
+    #[clap(
+        long = "pattern",
+        default_value = "39ad622b-3bfe-4161-b860-dad5f3e6dd68"
+    )]
     pattern: Option<String>,
     /// The mapping ID to load from the JSON file (optional, will determine most optimal pattern if omitted)
     #[clap(long = "mapping")]
     mapping: Option<String>,
-    #[clap(long = "consec-check", default_value = "pfn")]
+    #[clap(long = "consec-check", default_value = "bank-timing")]
     consec_check: ConsecCheckType,
-    #[clap(long = "alloc-strategy", default_value = "hugepage")]
+    #[clap(long = "alloc-strategy", default_value = "mmap")]
     alloc_strategy: ConsecAllocType,
 }
 
