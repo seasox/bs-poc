@@ -173,10 +173,8 @@ mod test {
     #[test]
     fn test_bank_function_period() {
         use super::*;
-        let config = BlacksmithConfig::from_jsonfile(
-            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-        )
-        .expect("failed to read config file");
+        let config = BlacksmithConfig::from_jsonfile("config/bs-config.json")
+            .expect("failed to read config file");
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
         assert_eq!(mem_config.bank_function_period(), 512);

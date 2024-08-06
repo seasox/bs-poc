@@ -852,6 +852,8 @@ mod tests {
         util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
     };
 
+    const CONFIG_FILE: &str = "config/bs-config.json";
+
     #[test]
     fn test_pfn_offset_mock_timer() -> anyhow::Result<()> {
         struct TestTimer<'a> {
@@ -869,9 +871,7 @@ mod tests {
             }
         }
 
-        let config = BlacksmithConfig::from_jsonfile(
-            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-        )?;
+        let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
         const ADDR: *mut u8 = 0x200000000 as *mut u8;
@@ -908,9 +908,7 @@ mod tests {
 
     #[test]
     fn test_pfn_offset_mmap() -> anyhow::Result<()> {
-        let config = BlacksmithConfig::from_jsonfile(
-            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-        )?;
+        let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
         let block = MemBlock::mmap(4 * MB)?;
@@ -925,10 +923,7 @@ mod tests {
     #[ignore]
     fn test_pfn_offset_hugepage() -> anyhow::Result<()> {
         env_logger::init();
-        let config = BlacksmithConfig::from_jsonfile(
-            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-        )
-        .unwrap();
+        let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
         let block = MemBlock::hugepage(HugepageSize::ONE_GB)?;
@@ -942,11 +937,8 @@ mod tests {
     }
 
     #[test]
-    fn test_virt_offset() {
-        let config = BlacksmithConfig::from_jsonfile(
-            "config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-        )
-        .unwrap();
+    fn test_virt_offset() -> anyhow::Result<()> {
+        let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
         let bank_bits_mask = (mem_config.bank_function_period() as usize * ROW_SIZE - 1) as isize;
@@ -979,5 +971,17 @@ mod tests {
             println!("{:?}", dramp);
             assert_eq!(dramv.bank, dramp.bank);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_virt_zero_gap() -> anyhow::Result<()> {
+        const MASK: usize = 0x3FFFFF;
+        let (v, p) = (0x79acade00000, 0x419df9000);
+        let offset = (p & MASK) as isize - (v & MASK) as isize;
+        let offset = offset.rem_euclid(4 * MB as isize);
+        println!("{}", offset);
+        panic!("fail");
+        Ok(())
     }
 }
