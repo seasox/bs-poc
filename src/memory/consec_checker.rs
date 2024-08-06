@@ -75,25 +75,6 @@ impl AllocChecker for ConsecCheckBankTiming {
         if block.len % ROW_SIZE != 0 {
             bail!("Block is not row-aligned")
         }
-        let row_offsets = self.mem_config.bank_function_period() as usize / 2;
-
-        // as a first quick test, we check whether rows (0, row_offsets) are in the same bank. For a
-        // consecutive allocation, this should always hold, since the RankBank function is periodic.
-        if block.len >= row_offsets * ROW_SIZE {
-            let addr1 = block.byte_add(0 * ROW_SIZE).ptr;
-            let addr2 = block.byte_add(row_offsets * ROW_SIZE).ptr;
-            debug!("Doing quick pre-check for consecutive allocation");
-            let t = unsafe {
-                self.timer
-                    .time_subsequent_access_from_ram(addr1, addr2, 1000)
-            };
-            if t < self.conflict_threshold {
-                debug!("Block is not consecutive");
-                return Ok(false);
-            }
-        } else {
-            debug!("Skip pre-check, block is too small");
-        }
 
         let offset = block.pfn_offset(
             &self.mem_config,
