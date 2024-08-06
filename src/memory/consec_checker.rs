@@ -2,7 +2,7 @@ use anyhow::bail;
 use indicatif::MultiProgress;
 
 use crate::{
-    memory::PfnResolver,
+    memory::{DRAMAddr, FormatPfns, PfnResolver},
     util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
 };
 
@@ -119,23 +119,9 @@ impl AllocChecker for ConsecCheckPfn {
          * in the memory block. If the measured timings correspond to the address function, it is very likely that
          * this indeed is a consecutive memory block.
          */
-        trace!("Get consecutive PFNs for vaddr 0x{:x}", block.ptr as u64);
-        let mut phys_prev = block.pfn()?;
-        let mut consecs = vec![phys_prev];
-        for offset in (PAGE_SIZE..block.len).step_by(PAGE_SIZE) {
-            let phys = block.byte_add(offset).pfn()?;
-            if phys != phys_prev + PAGE_SIZE as u64 {
-                consecs.push(phys_prev + PAGE_SIZE as u64);
-                consecs.push(phys);
-            }
-            phys_prev = phys;
-        }
-        consecs.push(phys_prev + PAGE_SIZE as u64);
-        trace!("PFN check done");
-        let mut pfns = String::from("PFNs: ");
-        for (p1, p2) in consecs.windows(2).map(|w| (w[0], w[1])).step_by(2) {
-            pfns += &format!("{:x}..[{} KB]..{:x} ", p1, (p2 - p1 as u64) / 1024, p2);
-        }
+        let consecs = block.consec_pfns()?;
+        let pfns = consecs.format_pfns();
+        info!("PFNs: {}", pfns);
         let first_block_bytes = (consecs[1] - consecs[0]) as usize;
         let is_consec = first_block_bytes >= block.len;
         if is_consec {

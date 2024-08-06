@@ -70,6 +70,15 @@ impl ConsecBlocks {
         }
         Ok(ConsecBlocks::new(blocks))
     }
+
+    pub fn log_pfns(&self) -> anyhow::Result<()> {
+        for block in &self.blocks {
+            let pfns = block.consec_pfns()?;
+            let pfns = pfns.format_pfns();
+            info!("PFNs: {}", pfns);
+        }
+        Ok(())
+    }
 }
 
 pub struct ConsecAllocHugepageRnd {
@@ -441,6 +450,41 @@ impl MemBlock {
         let mut state = self.pfn_offset.borrow_mut();
         *state = Some((offset, mem_config.clone(), threshold));
         offset
+    }
+}
+
+type ConsecPfns = Vec<u64>;
+
+impl MemBlock {
+    pub fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
+        trace!("Get consecutive PFNs for vaddr 0x{:x}", self.ptr as u64);
+        let mut phys_prev = self.pfn()?;
+        let mut consecs = vec![phys_prev];
+        for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
+            let phys = self.byte_add(offset).pfn()?;
+            if phys != phys_prev + PAGE_SIZE as u64 {
+                consecs.push(phys_prev + PAGE_SIZE as u64);
+                consecs.push(phys);
+            }
+            phys_prev = phys;
+        }
+        consecs.push(phys_prev + PAGE_SIZE as u64);
+        trace!("PFN check done");
+        Ok(consecs)
+    }
+}
+
+pub trait FormatPfns {
+    fn format_pfns(&self) -> String;
+}
+
+impl FormatPfns for ConsecPfns {
+    fn format_pfns(&self) -> String {
+        let mut pfns = String::from("");
+        for (p1, p2) in self.windows(2).map(|w| (w[0], w[1])).step_by(2) {
+            pfns += &format!("{:x}..[{} KB]..{:x} ", p1, (p2 - p1 as u64) / 1024, p2);
+        }
+        pfns
     }
 }
 
