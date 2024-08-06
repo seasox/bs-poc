@@ -365,6 +365,20 @@ impl MemBlock {
         let num_rows = min(num_rows, max_rows);
         let row_pairs = (0..num_rows).combinations(2);
         let progress = progress.map(|p| Progress::from_multi(num_rows as u64, p));
+
+        // do a quick pre-check. Toggling the uppermost bit in the bank function should result in a fast timing.
+        if self.len >= num_rows * ROW_SIZE {
+            let addr1 = self.ptr;
+            let addr2 = self.byte_add(num_rows * ROW_SIZE).ptr;
+            let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
+            if time > conflict_threshold {
+                info!("Pre-check failed. Block is not consecutive");
+                return self.retain_state(None, mem_config, conflict_threshold);
+            }
+        } else {
+            debug!("Skip pre-check, block is too small");
+        }
+
         'next_offset: for row_offset in 0..num_rows {
             let addr_offset = (row_offset * ROW_SIZE) as isize;
             debug!(
