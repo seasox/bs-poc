@@ -9,7 +9,7 @@ use std::{
         Arc,
     },
     thread,
-time::Duration,
+    time::Duration,
 };
 
 use anyhow::{bail, Context};
@@ -165,7 +165,7 @@ fn create_consec_checker_from_cli(
     consec_check: ConsecCheckType,
     mem_config: MemConfiguration,
     conflict_threshold: u64,
-    progress: MultiProgress,
+    progress: Option<MultiProgress>,
 ) -> anyhow::Result<ConsecCheck> {
     Ok(match consec_check {
         ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
@@ -174,7 +174,7 @@ fn create_consec_checker_from_cli(
                 mem_config,
                 construct_memory_tuple_timer()?,
                 conflict_threshold,
-                Some(progress),
+                progress,
             ))
         }
     })
@@ -332,7 +332,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         args.consec_check,
         mem_config,
         config.threshold,
-        multi.clone(),
+        Some(multi.clone()),
     )?;
     /*let bank_checker = AllocCheckSameBank::new(
         mem_config,
@@ -355,7 +355,7 @@ unsafe fn mode_bait(args: CliArgs) -> anyhow::Result<()> {
         .unwrap(),
     );
     let pg = multi.add(pg);
-pg.enable_steady_tick(Duration::from_secs(1));
+    pg.enable_steady_tick(Duration::from_secs(1));
 
     pg.set_length(num_sets as u64);
 
