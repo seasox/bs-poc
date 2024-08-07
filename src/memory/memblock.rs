@@ -8,7 +8,7 @@ use crate::{
 use anyhow::{bail, Context};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
-use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_HUGE_2MB, MAP_POPULATE, MAP_SHARED};
+use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::prelude::SliceRandom;
 use rand::Rng;
@@ -236,6 +236,7 @@ impl ConsecAllocator for ConsecAllocMmap {
         }
         buf.dealloc();
         assert_eq!(blocks.len(), num_blocks);
+        todo!("align blocks to PFN");
         Ok(ConsecBlocks::new(blocks))
     }
 }
@@ -291,7 +292,13 @@ pub struct MemBlock {
     pub ptr: *mut u8,
     /// block length in bytes
     pub len: usize,
-    pfn_offset: RefCell<Option<(Option<usize>, MemConfiguration, u64)>>,
+    pfn_offset: PfnOffset,
+}
+
+#[derive(Clone, Debug)]
+enum PfnOffset {
+    Fixed(usize),
+    Dynamic(RefCell<Option<(Option<usize>, MemConfiguration, u64)>>),
 }
 
 impl MemBlock {
@@ -299,7 +306,14 @@ impl MemBlock {
         MemBlock {
             ptr,
             len,
-            pfn_offset: RefCell::new(None),
+            pfn_offset: PfnOffset::Dynamic(RefCell::new(None)),
+        }
+    }
+    pub fn new_with_offset(ptr: *mut u8, len: usize, offset: usize) -> Self {
+        MemBlock {
+            ptr,
+            len,
+            pfn_offset: PfnOffset::Fixed(offset),
         }
     }
     pub fn dealloc(self) {
@@ -309,7 +323,12 @@ impl MemBlock {
 
 impl MemBlock {
     pub fn byte_add(&self, offset: usize) -> Self {
-        assert!(offset < self.len, "{} >= {}", offset, self.len);
+        assert!(
+            offset <= self.len,
+            "MemBlock::byte_add failed. Offset {} > {}",
+            offset,
+            self.len
+        );
         MemBlock {
             ptr: unsafe { self.ptr.byte_add(offset) },
             len: self.len - offset,
@@ -363,17 +382,21 @@ impl MemBlock {
         progress: Option<&MultiProgress>,
     ) -> Option<usize> {
         // reuse cached value if applicable
-        let mut state = self.pfn_offset.borrow_mut();
-        if let Some((offset, cfg, thresh)) = state.as_ref() {
-            if offset.is_some() && cfg == mem_config && *thresh == conflict_threshold {
-                info!("Reuse cached offset");
-                return *offset;
-            } else {
-                info!("Resetting PFN offset state, parameter change detected");
-                *state = None;
+        match &self.pfn_offset {
+            PfnOffset::Fixed(offset) => return Some(*offset),
+            PfnOffset::Dynamic(pfn_offset) => {
+                let mut state = pfn_offset.borrow_mut();
+                if let Some((offset, cfg, thresh)) = state.as_ref() {
+                    if offset.is_some() && cfg == mem_config && *thresh == conflict_threshold {
+                        info!("Reuse cached offset");
+                        return *offset;
+                    } else {
+                        info!("Resetting PFN offset state, parameter change detected");
+                        *state = None;
+                    }
+                }
             }
         }
-        drop(state);
         // find PFN offset
         let num_rows = self.len / ROW_SIZE;
         let max_rows = mem_config.bank_function_period() as usize / 2; // TODO: check if it is valid for all bank functions to divide by two here (I think it is)
@@ -453,9 +476,16 @@ impl MemBlock {
         mem_config: &MemConfiguration,
         threshold: u64,
     ) -> Option<usize> {
-        let mut state = self.pfn_offset.borrow_mut();
-        *state = Some((offset, mem_config.clone(), threshold));
-        offset
+        match &self.pfn_offset {
+            PfnOffset::Dynamic(pfn_offset) => {
+                let mut state = pfn_offset.borrow_mut();
+                *state = Some((offset, mem_config.clone(), threshold));
+                offset
+            }
+            PfnOffset::Fixed(_) => {
+                panic!("Fixed offset should not be set");
+            }
+        }
     }
 }
 
@@ -657,7 +687,7 @@ impl MemBlock {
 }
 
 pub enum HugepageSize {
-    TWO_MB,
+    //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
     ONE_GB,
 }
 
@@ -683,11 +713,9 @@ impl MemBlock {
     pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
         const ADDR: usize = 0x2000000000;
         let hp_size = match size {
-            HugepageSize::TWO_MB => 2 * MB,
             HugepageSize::ONE_GB => 1024 * MB,
         };
         let hp_size_flag = match size {
-            HugepageSize::TWO_MB => MAP_HUGE_2MB,
             HugepageSize::ONE_GB => MAP_HUGE_1GB,
         };
         let p = unsafe {
@@ -703,7 +731,7 @@ impl MemBlock {
         if p == libc::MAP_FAILED {
             bail!("mmap failed: {}", std::io::Error::last_os_error());
         }
-        Ok(MemBlock::new(p as *mut u8, hp_size))
+        Ok(MemBlock::new_with_offset(p as *mut u8, hp_size, 0))
     }
 }
 
@@ -850,6 +878,8 @@ pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
 
 #[cfg(test)]
 mod tests {
+    use rand::{thread_rng, Rng};
+
     use crate::{
         memory::{
             construct_memory_tuple_timer, DRAMAddr, HugepageSize, MemBlock, MemoryTupleTimer,
@@ -982,12 +1012,39 @@ mod tests {
 
     #[test]
     fn test_virt_zero_gap() -> anyhow::Result<()> {
-        const MASK: usize = 0x3FFFFF;
-        let (v, p) = (0x79acade00000, 0x419df9000);
-        let offset = (p & MASK) as isize - (v & MASK) as isize;
-        let offset = offset.rem_euclid(4 * MB as isize);
-        println!("{}", offset);
-        panic!("fail");
+        let config = BlacksmithConfig::from_jsonfile("config/bs-config.json")?;
+        let mem_config = MemConfiguration::from_blacksmith(&config);
+        const MASK: isize = 0x3FFFFF;
+        let mut rand = thread_rng();
+        for _ in 0..1000000 {
+            let v = rand.gen::<isize>() << 12;
+            let p = rand.gen::<isize>() << 12;
+            let vbase = v & MASK;
+            let pbase = p & MASK;
+            let offset = pbase as isize - vbase as isize;
+            //let offset = offset.rem_euclid(2 * MB as isize);
+
+            let zero_gap = offset + vbase as isize;
+            let pdram_zero = DRAMAddr::from_virt((p - zero_gap) as *mut u8, &mem_config);
+            assert_eq!(pdram_zero.bank, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_delta() -> anyhow::Result<()> {
+        const BASE: *mut u8 = 0x2000000000 as *mut u8;
+        let config = BlacksmithConfig::from_jsonfile("config/bs-config.json")?;
+        let mem_config = MemConfiguration::from_blacksmith(&config);
+        let a1 = DRAMAddr::from_virt(BASE, &mem_config);
+        let a2 = a1.clone();
+        for _ in 0..100 {
+            let a2 = a2.add(0, 2, 0);
+            let a1 = a1.to_virt(BASE, mem_config) as isize;
+            let a2 = a2.to_virt(BASE, mem_config) as isize;
+            println!("{}", a2 - a1);
+        }
+        assert!(false);
         Ok(())
     }
 }

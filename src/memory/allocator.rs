@@ -12,7 +12,10 @@ use std::{
     ptr::null_mut,
 };
 
-use crate::util::PAGE_SHIFT;
+use crate::{
+    memory::HugepageSize,
+    util::{MB, PAGE_SHIFT},
+};
 
 use super::{memblock::ConsecAllocator, ConsecBlocks, MemBlock};
 
@@ -109,13 +112,15 @@ impl ConsecAllocator for HugepageAllocator {
         size: usize,
         _progress_cb: impl Fn(),
     ) -> anyhow::Result<super::ConsecBlocks> {
-        let ptr = self.alloc(Layout::from_size_align(size, 1)?);
-        if ptr.is_null() {
-            bail!("Alloc failed");
+        if size > self.block_size() {
+            bail!(
+                "Only support allocations up to 0x{:x} bytes",
+                self.block_size()
+            );
         }
-        let block = MemBlock::new(ptr, size);
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        std::ptr::write_bytes(block.ptr, 0, block.len);
+        assert_eq!(self.block_size(), 1024 * MB);
+        let block = MemBlock::hugepage(HugepageSize::ONE_GB)?;
+        unsafe { libc::memset(block.ptr as *mut c_void, 0x00, self.block_size()) };
         Ok(ConsecBlocks::new(vec![block]))
     }
 }
