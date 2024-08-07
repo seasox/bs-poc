@@ -216,3 +216,11 @@ impl AllocChecker for AllocCheckSameBank {
         Ok(true)
     }
 }
+
+pub struct ConsecCheckNone {}
+
+impl AllocChecker for ConsecCheckNone {
+    fn check(&mut self, _block: &MemBlock) -> anyhow::Result<bool> {
+        Ok(true)
+    }
+}
