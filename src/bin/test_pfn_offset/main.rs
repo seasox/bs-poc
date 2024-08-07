@@ -63,21 +63,24 @@ fn main() -> anyhow::Result<()> {
             pfn_offset.map_or("?".to_string(), |x| format!("{}", x)),
             expected_pfn_offset,
         );
-        if let Some(pfn_offset) = pfn_offset {
-            let mut pfn_checker = ConsecCheckPfnBank::new(mem_config.clone());
-            assert!(pfn_checker.check(&block)?, "PFN check failed");
-            assert_eq!(pfn_offset, expected_pfn_offset as usize);
-            let byte_offset = pfn_offset * ROW_SIZE;
-            let byte_offset = byte_offset.rem_euclid(block.len);
-            let dramv = DRAMAddr::from_virt_offset(block.ptr, byte_offset as isize, &mem_config);
-            let dramp = DRAMAddr::from_virt(block.pfn()? as *const u8, &mem_config);
-            info!(
-                "VA: 0x{:16x}, {:?} (offset {})",
-                block.ptr as usize, dramv, byte_offset
-            );
-            info!("PA: 0x{:16x}, {:?}", block.pfn()?, dramp);
-            assert_eq!(dramv.bank | 0b1, dramp.bank | 0b1);
+        if pfn_offset.is_none() {
+            block.dealloc();
+            continue;
         }
+        let pfn_offset = pfn_offset.unwrap();
+        let mut pfn_checker = ConsecCheckPfnBank::new(mem_config.clone());
+        assert!(pfn_checker.check(&block)?, "PFN check failed");
+        assert_eq!(pfn_offset, expected_pfn_offset as usize);
+        let byte_offset = pfn_offset * ROW_SIZE;
+        let byte_offset = byte_offset.rem_euclid(block.len);
+        let dramv = DRAMAddr::from_virt_offset(block.ptr, byte_offset as isize, &mem_config);
+        let dramp = DRAMAddr::from_virt(block.pfn()? as *const u8, &mem_config);
+        info!(
+            "VA: 0x{:16x}, {:?} (offset {})",
+            block.ptr as usize, dramv, byte_offset
+        );
+        info!("PA: 0x{:16x}, {:?}", block.pfn()?, dramp);
+        assert_eq!(dramv.bank | 0b1, dramp.bank | 0b1);
         block.dealloc();
     }
 }
