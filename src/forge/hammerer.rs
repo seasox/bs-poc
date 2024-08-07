@@ -240,8 +240,8 @@ impl<'a> Hammering for DummyHammerer<'a> {
         unsafe {
             let flipped_byte = self.blocks.addr(self.flip_offset);
             debug!(
-                "Flip 0x{:02X} from {} to {} at offset {}",
-                flipped_byte as usize, *flipped_byte, !*flipped_byte, self.flip_offset
+                "Flip addressaddress 0x{:02X} from {} to {}",
+                flipped_byte as usize, *flipped_byte, !*flipped_byte
             );
             *flipped_byte = !*flipped_byte;
             _mm_clflush(flipped_byte);
@@ -299,7 +299,7 @@ impl<'a> Hammerer<'a> {
             .unique()
             .count();
 
-        info!("{} accessed addresses", num_accessed_addrs);
+        info!("Pattern contains {} accessed addresses", num_accessed_addrs);
 
         let program =
             mapping
