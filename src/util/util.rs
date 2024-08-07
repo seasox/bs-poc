@@ -17,21 +17,14 @@ where
     out
 }
 
-/*
-pub fn retry<F, T>(mut f: F) -> T
-where
-    F: FnMut() -> anyhow::Result<T>,
-{
-    loop {
-        match f() {
-            Ok(x) => return x,
-            Err(e) => {
-                error!("{:?}", e);
-            }
-        }
+pub fn make_vec<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
+    let mut v = Vec::with_capacity(n);
+    for i in 0..n {
+        let val = f(i);
+        v.push(val);
     }
+    v
 }
-*/
 
 #[macro_export]
 macro_rules! retry {

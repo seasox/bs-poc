@@ -12,7 +12,7 @@ use std::vec::Vec;
 
 use super::ROW_SHIFT;
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(untagged)]
 pub enum BitDef {
     Single(u64),
@@ -56,6 +56,13 @@ pub struct BlacksmithConfig {
 }
 
 impl MemConfiguration {
+    pub fn from_blacksmith(config: &BlacksmithConfig) -> Self {
+        MemConfiguration::from_bitdefs(
+            config.bank_bits.clone(),
+            config.row_bits.clone(),
+            config.col_bits.clone(),
+        )
+    }
     pub fn from_bitdefs(
         bank_bits: Vec<BitDef>,
         row_bits: Vec<BitDef>,
