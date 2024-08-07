@@ -373,7 +373,9 @@ fn inject_page(victim: &mut Option<Child>) -> anyhow::Result<()> {
             info!("Received signal {}", VICTIM_ALLOC_DONE);
             channel.close()?;
         }
-        None => info!("No target specified, skipping IPC."),
+        None => warn!(
+            "No target specified. Consider `./hammer --config [...] your_victim your_victim_args`"
+        ),
     }
     Ok(())
 }
