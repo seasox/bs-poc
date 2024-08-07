@@ -71,13 +71,19 @@ impl ConsecBlocks {
         Ok(ConsecBlocks::new(blocks))
     }
 
-    pub fn log_pfns(&self) -> anyhow::Result<()> {
+    pub fn log_pfns(&self) {
         for block in &self.blocks {
-            let pfns = block.consec_pfns()?;
-            let pfns = pfns.format_pfns();
-            info!("PFNs: {}", pfns);
+            let pfns = block.consec_pfns();
+            match pfns {
+                Ok(pfns) => {
+                    let pfns = pfns.format_pfns();
+                    info!("PFNs: {}", pfns);
+                }
+                Err(e) => {
+                    error!("Failed to get PFNs: {:?}", e);
+                }
+            }
         }
-        Ok(())
     }
 }
 

@@ -275,8 +275,7 @@ unsafe fn alloc_memory(
     compact_mem()?;
     pg.set_position(0);
     let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, || pg.inc(1))?;
-    let memory = memory.pfn_align(&mem_config, threshold, &*construct_memory_tuple_timer()?)?;
-    memory.log_pfns()?;
+    memory.log_pfns();
     pg.finish_and_clear();
     Ok(memory)
 }
