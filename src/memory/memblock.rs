@@ -474,7 +474,7 @@ impl MemBlock {
             }
             phys_prev = phys;
         }
-        consecs.push(phys_prev + PAGE_SIZE as u64);
+        consecs.push(self.byte_add(self.len).pfn()?);
         trace!("PFN check done");
         Ok(consecs)
     }
