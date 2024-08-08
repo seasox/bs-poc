@@ -7,16 +7,21 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use bs_poc::memory::ConsecCheck;
+use bs_poc::{
+    consec_alloc::{
+        ConsecAlloc, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
+        ConsecAllocMmap, ConsecAllocator,
+    },
+    memory::ConsecCheck,
+};
 use bs_poc::{
     forge::{
         FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
     },
     jitter::AggressorPtr,
     memory::{
-        compact_mem, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
-        ConsecAllocMmap, ConsecAllocator, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone,
-        ConsecCheckPfn, HugepageAllocator, MemBlock, PfnResolver,
+        compact_mem, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
+        HugepageAllocator, MemBlock, PfnResolver,
     },
     retry,
     util::{AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC, PAGE_SIZE},
@@ -68,6 +73,22 @@ pub enum ConsecAllocType {
     Hugepage,
     HugepageRnd,
     Mmap,
+}
+
+fn create_allocator_from_cli(
+    alloc_strategy: ConsecAllocType,
+    consec_checker: ConsecCheck,
+    progress: Option<MultiProgress>,
+) -> ConsecAlloc {
+    match alloc_strategy {
+        ConsecAllocType::BuddyInfo => {
+            ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
+        }
+        ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
+        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker, progress)),
+        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
+        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(1)),
+    }
 }
 
 fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
@@ -122,58 +143,6 @@ fn create_consec_checker_from_cli(
             ConsecCheckBankTiming::new_with_progress(mem_config, conflict_threshold, progress),
         ),
     })
-}
-
-/**
- * A helper enum to create an allocator from CLI arguments. This allows us to circumvent heap allocation
- */
-enum ConsecAlloc {
-    BuddyInfo(ConsecAllocBuddyInfo),
-    CoCo(ConsecAllocCoCo),
-    Hugepage(HugepageAllocator),
-    HugepageRnd(ConsecAllocHugepageRnd),
-    Mmap(ConsecAllocMmap),
-}
-
-impl ConsecAllocator for ConsecAlloc {
-    fn block_size(&self) -> usize {
-        match self {
-            ConsecAlloc::BuddyInfo(alloc) => alloc.block_size(),
-            ConsecAlloc::CoCo(alloc) => alloc.block_size(),
-            ConsecAlloc::Hugepage(alloc) => alloc.block_size(),
-            ConsecAlloc::HugepageRnd(alloc) => alloc.block_size(),
-            ConsecAlloc::Mmap(alloc) => alloc.block_size(),
-        }
-    }
-
-    unsafe fn alloc_consec_blocks(
-        &mut self,
-        size: usize,
-    ) -> anyhow::Result<bs_poc::memory::ConsecBlocks> {
-        match self {
-            ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size),
-            ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size),
-            ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size),
-            ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size),
-            ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size),
-        }
-    }
-}
-
-fn create_allocator_from_cli(
-    alloc_strategy: ConsecAllocType,
-    consec_checker: ConsecCheck,
-    progress: Option<MultiProgress>,
-) -> ConsecAlloc {
-    match alloc_strategy {
-        ConsecAllocType::BuddyInfo => {
-            ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
-        }
-        ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
-        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker, progress)),
-        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
-        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(1)),
-    }
 }
 
 struct LoadedPattern {

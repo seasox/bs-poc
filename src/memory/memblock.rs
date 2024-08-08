@@ -14,6 +14,7 @@ use std::{
     cell::RefCell,
     ffi::CString,
     io::Read,
+    ops::Add,
     process::Command,
     ptr::null_mut,
     sync::{atomic::Ordering, Arc, Mutex},
@@ -26,11 +27,6 @@ use super::{
     AllocChecker, ConsecCheck, HugepageAllocator, MemoryTupleTimer, VictimMemory,
     VirtToPhysResolver,
 };
-
-pub trait ConsecAllocator {
-    fn block_size(&self) -> usize;
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks>;
-}
 
 #[derive(Debug)]
 pub struct ConsecBlocks {
@@ -97,264 +93,6 @@ impl ConsecBlocks {
     }
 }
 
-pub struct ConsecAllocHugepageRnd {
-    hugepages: Vec<ConsecBlocks>,
-}
-
-impl ConsecAllocHugepageRnd {
-    pub fn new(num_hugepages: u8) -> Self {
-        let hugepages = make_vec(num_hugepages as usize, |_| unsafe {
-            HugepageAllocator::new()
-                .alloc_consec_blocks(1024 * MB)
-                .expect("hugepage alloc")
-        });
-        ConsecAllocHugepageRnd { hugepages }
-    }
-}
-
-impl ConsecAllocator for ConsecAllocHugepageRnd {
-    fn block_size(&self) -> usize {
-        4 * MB
-    }
-
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        let hp_size = 1024 * MB;
-        let chunk_size = self.block_size();
-        let num_chunks = hp_size / chunk_size;
-        let total_chunks = self.hugepages.len() * num_chunks;
-        let num_blocks = size / chunk_size;
-
-        let mut chunk_indices: Vec<usize> = (0..total_chunks).collect();
-        let mut rng = rand::thread_rng();
-        chunk_indices.shuffle(&mut rng);
-        let selected_indices = &chunk_indices[..num_blocks];
-        //let free_indices = &chunk_indices[num_blocks..];
-
-        let blocks = selected_indices
-            .iter()
-            .map(|index| {
-                info!("Hugepage {}", index / num_chunks);
-                self.hugepages[index / num_chunks].addr((index % num_chunks) * chunk_size)
-            })
-            .map(|ptr| MemBlock::new(ptr, chunk_size))
-            .collect::<Vec<_>>();
-        let consecs = ConsecBlocks::new(blocks);
-        Ok(consecs)
-    }
-}
-
-pub struct ConsecAllocCoCo {}
-
-impl ConsecAllocator for ConsecAllocCoCo {
-    fn block_size(&self) -> usize {
-        4 * MB
-    }
-
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        const mod_path: &str = "/dev/coco_dec_mem";
-        let c_mod_path = CString::new(mod_path)?;
-        let fd = libc::open(c_mod_path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
-        if fd == -1 {
-            bail!("Failed to open {}", mod_path);
-        }
-        let block_size: usize = self.block_size();
-        let block_count = (size as f32 / block_size as f32).ceil() as i32;
-        let blocks = (0..block_count)
-            .map(|_| {
-                let v = libc::mmap(
-                    std::ptr::null_mut(),
-                    block_size,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED | libc::MAP_POPULATE,
-                    fd,
-                    0,
-                );
-                if v == libc::MAP_FAILED {
-                    bail!("Failed to mmap");
-                }
-                let block = MemBlock::new(v as *mut u8, 4 * MB);
-                libc::memset(block.ptr as *mut libc::c_void, 0, block.len);
-                //consec_checker.check(&block)?;
-                Ok(block)
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        libc::close(fd);
-        Ok(ConsecBlocks::new(blocks))
-    }
-}
-
-pub struct ConsecAllocMmap {
-    consec_checker: ConsecCheck,
-    progress: Option<MultiProgress>,
-}
-
-impl ConsecAllocMmap {
-    pub fn new(consec_checker: ConsecCheck, progress: Option<MultiProgress>) -> Self {
-        ConsecAllocMmap {
-            consec_checker,
-            progress,
-        }
-    }
-}
-
-impl ConsecAllocator for ConsecAllocMmap {
-    fn block_size(&self) -> usize {
-        4 * MB
-    }
-
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        assert_eq!(size % self.block_size(), 0);
-        unsafe impl Send for MemBlock {}
-        let num_blocks = size / self.block_size();
-
-        let blocks: Vec<MemBlock> = Vec::with_capacity(num_blocks);
-        let blocks = Arc::new(Mutex::new(blocks));
-        let mem_lock = Arc::new(Mutex::new(()));
-        let stop = Arc::new(AtomicBool::new(false));
-
-        let loader_blocks = blocks.clone();
-        let loader_mem_lock = mem_lock.clone();
-        let loader_stop = Arc::clone(&stop);
-        let loader_thread = spawn(|| {
-            info!(target: "loader", "starting loader thread");
-            let blocks = loader_blocks;
-            let mem_lock = loader_mem_lock;
-            let stop = loader_stop;
-            while stop.load(Ordering::Relaxed) == false {
-                let blocks = blocks.lock().unwrap().clone();
-                for block in blocks {
-                    for offset in (0..block.len).step_by(ROW_SIZE) {
-                        let addr = block.byte_add(offset).ptr;
-                        let count = min(ROW_SIZE, block.len - offset);
-                        trace!(target: "loader", "Waiting for memory lock");
-                        let mem_lock = mem_lock.lock().unwrap();
-                        unsafe { std::ptr::write_bytes(addr as *mut u8, 0, count) };
-                        drop(mem_lock);
-                    }
-                }
-                sleep(Duration::from_millis(100));
-            }
-            info!(target: "loader", "goodbye");
-        });
-        let block_size = self.block_size();
-        let checker = self.consec_checker.clone();
-
-        let progress = match &mut self.progress {
-            Some(progress) => {
-                let pg = ProgressBar::new(num_blocks as u64)
-                    .with_style(ProgressStyle::named_bar("Blocks"));
-                let pg = progress.add(pg);
-                pg.enable_steady_tick(Duration::from_secs(1));
-                Some(pg)
-            }
-            None => None,
-        };
-
-        let allocator_mem_lock = Arc::clone(&mem_lock);
-        let allocator_blocks = Arc::clone(&blocks);
-        let allocator_progress = progress.clone();
-        let allocator_thread = spawn(move || {
-            let blocks = allocator_blocks;
-            let mem_lock = allocator_mem_lock;
-            let progress = allocator_progress;
-            const CANDIDATE_COUNT: usize = 1000; // 1000 * 4 MB = 4 GB
-            const DUMMY_ALLOC_SIZE: usize = 4 * 1024 * MB;
-            let buf = MemBlock::mmap(DUMMY_ALLOC_SIZE).unwrap();
-            let mut blocks_len = 0;
-            while blocks_len < num_blocks {
-                let mut candidates = (0..CANDIDATE_COUNT)
-                    .map(|_| MemBlock::mmap(block_size).context("mmap").unwrap())
-                    .collect_vec();
-                candidates.shuffle(&mut rand::thread_rng());
-                let mut found_consec = false;
-                for candidate in candidates {
-                    if blocks_len >= num_blocks {
-                        candidate.dealloc();
-                        continue;
-                    }
-                    trace!(target: "allocator", "Waiting for memory lock");
-                    let lock = mem_lock.lock().unwrap();
-                    let is_consec = checker.check(&candidate).unwrap();
-                    drop(lock);
-                    if is_consec {
-                        blocks.lock().unwrap().push(candidate);
-                        blocks_len += 1;
-                        found_consec = true;
-                        info!("Found consecutive block");
-                        if let Some(progress) = &progress {
-                            progress.inc(1);
-                        }
-                    } else {
-                        candidate.dealloc();
-                    }
-                }
-                if blocks_len < num_blocks && !found_consec {
-                    warn!(
-                    "Failed to find consecutive block in {} candidates. Retrying with new candidates...",
-                    CANDIDATE_COUNT
-                );
-                }
-            }
-            buf.dealloc();
-            assert_eq!(blocks_len, num_blocks);
-        });
-
-        allocator_thread.join().unwrap();
-        stop.store(true, Ordering::Relaxed);
-        loader_thread.join().unwrap();
-
-        let blocks = blocks.lock().unwrap().clone();
-
-        let consecs = ConsecBlocks::new(blocks);
-        progress.map(|p| p.finish());
-        Ok(consecs) /*.pfn_align(
-                        &self.mem_config,
-                        self.conflict_threshold,
-                        &*construct_memory_tuple_timer()?,
-                    )*/
-    }
-}
-
-pub struct ConsecAllocBuddyInfo {
-    consec_checker: ConsecCheck,
-}
-
-impl ConsecAllocBuddyInfo {
-    pub fn new(consec_checker: ConsecCheck) -> Self {
-        ConsecAllocBuddyInfo { consec_checker }
-    }
-}
-
-impl ConsecAllocator for ConsecAllocBuddyInfo {
-    fn block_size(&self) -> usize {
-        4 * MB
-    }
-
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        let block_size = self.block_size();
-        if size % block_size != 0 {
-            bail!(
-                "Size {} must be a multiple of block size {}",
-                size,
-                block_size
-            );
-        }
-        let num_blocks = size / block_size;
-        info!("Allocating {} blocks of size {}", num_blocks, block_size);
-        let mut blocks = vec![];
-        for _ in 0..num_blocks {
-            let block = unsafe { MemBlock::buddyinfo_alloc(block_size, &self.consec_checker)? };
-            info!("TODO implement progress bar");
-            blocks.push(block);
-        }
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        for block in &blocks {
-            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
-        }
-        Ok(ConsecBlocks::new(blocks))
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct MemBlock {
     /// block pointer
@@ -370,6 +108,11 @@ enum PfnOffset {
     Dynamic(RefCell<Option<(Option<usize>, MemConfiguration, u64)>>),
 }
 
+pub enum HugepageSize {
+    //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
+    ONE_GB,
+}
+
 impl MemBlock {
     pub fn new(ptr: *mut u8, len: usize) -> Self {
         MemBlock {
@@ -378,12 +121,50 @@ impl MemBlock {
             pfn_offset: PfnOffset::Dynamic(RefCell::new(None)),
         }
     }
-    pub fn new_with_offset(ptr: *mut u8, len: usize, offset: usize) -> Self {
-        MemBlock {
-            ptr,
-            len,
-            pfn_offset: PfnOffset::Fixed(offset),
+    pub fn mmap(size: usize) -> anyhow::Result<Self> {
+        let p = unsafe {
+            libc::mmap(
+                null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
+                -1,
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            bail!("mmap failed: {}", std::io::Error::last_os_error());
         }
+        unsafe { libc::memset(p, 0x00, size) };
+        Ok(MemBlock::new(p as *mut u8, size))
+    }
+
+    pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
+        const ADDR: usize = 0x2000000000;
+        let hp_size = match size {
+            HugepageSize::ONE_GB => 1024 * MB,
+        };
+        let hp_size_flag = match size {
+            HugepageSize::ONE_GB => MAP_HUGE_1GB,
+        };
+        let p = unsafe {
+            libc::mmap(
+                ADDR as *mut libc::c_void,
+                hp_size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB | hp_size_flag,
+                -1,
+                0,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            bail!("mmap failed: {}", std::io::Error::last_os_error());
+        }
+        Ok(MemBlock {
+            ptr: p as *mut u8,
+            len: hp_size,
+            pfn_offset: PfnOffset::Fixed(0),
+        })
     }
     pub fn dealloc(self) {
         unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
@@ -402,27 +183,6 @@ impl MemBlock {
             ptr: unsafe { self.ptr.byte_add(offset) },
             len: self.len - offset,
             pfn_offset: self.pfn_offset.clone(),
-        }
-    }
-}
-
-struct Progress {
-    offset: ProgressBar,
-    pairs: ProgressBar,
-}
-
-impl Progress {
-    pub fn from_multi(num_rows: u64, progress_bar: &MultiProgress) -> Self {
-        let row_pairs_len = (num_rows * (num_rows - 1) / 2) as u64;
-        let offset_progress =
-            ProgressBar::new(num_rows).with_style(ProgressStyle::named_bar("Offset"));
-        let offset_progress = progress_bar.add(offset_progress);
-        let pairs_progress =
-            ProgressBar::new(row_pairs_len).with_style(ProgressStyle::named_bar("Pairs"));
-        let pairs_progress = progress_bar.add(pairs_progress);
-        Progress {
-            offset: offset_progress,
-            pairs: pairs_progress,
         }
     }
 }
@@ -462,8 +222,17 @@ impl MemBlock {
         let num_rows = self.len / ROW_SIZE;
         let max_rows = mem_config.bank_function_period() as usize / 2; // TODO: check if it is valid for all bank functions to divide by two here (I think it is)
         let num_rows = min(num_rows, max_rows);
-        let row_pairs = (0..num_rows).combinations(2);
-        let progress = progress.map(|p| Progress::from_multi(num_rows as u64, p));
+        let offset = progress.map(|progress| {
+            progress.add(
+                ProgressBar::new(num_rows as u64).with_style(ProgressStyle::named_bar("Offset")),
+            )
+        });
+        let pairs = progress.map(|progress| {
+            progress.add(
+                ProgressBar::new((num_rows * (num_rows - 1) / 2) as u64)
+                    .with_style(ProgressStyle::named_bar("Pairs")),
+            )
+        });
 
         // do a quick pre-check. Toggling the uppermost bit in the bank function should result in a fast timing.
         if self.len >= num_rows * ROW_SIZE {
@@ -485,14 +254,14 @@ impl MemBlock {
                 row_offset, addr_offset
             );
             // update progress
-            if let Some(progress) = &progress {
-                progress.offset.inc(1);
-                progress.pairs.reset();
+            if let (Some(offset), Some(pairs)) = (&offset, &pairs) {
+                offset.inc(1);
+                pairs.reset();
             }
             // iterate over row pairs
-            for row_pair in row_pairs.clone() {
-                if let Some(progress) = &progress {
-                    progress.pairs.inc(1);
+            for row_pair in (0..num_rows).combinations(2) {
+                if let Some(pairs) = &pairs {
+                    pairs.inc(1);
                 }
                 let offset1 = row_pair[0] * ROW_SIZE;
                 let offset2 = row_pair[1] * ROW_SIZE;
@@ -619,7 +388,7 @@ impl PfnResolver for MemBlock {
 }
 
 impl MemBlock {
-    unsafe fn buddyinfo_alloc(
+    pub unsafe fn buddyinfo_alloc(
         size: usize,
         consec_checker: &dyn AllocChecker,
     ) -> anyhow::Result<MemBlock> {
@@ -744,55 +513,6 @@ impl MemBlock {
                 }
             };
         }
-    }
-}
-
-pub enum HugepageSize {
-    //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
-    ONE_GB,
-}
-
-impl MemBlock {
-    pub fn mmap(size: usize) -> anyhow::Result<Self> {
-        let p = unsafe {
-            libc::mmap(
-                null_mut(),
-                size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            bail!("mmap failed: {}", std::io::Error::last_os_error());
-        }
-        unsafe { libc::memset(p, 0x00, size) };
-        Ok(MemBlock::new(p as *mut u8, size))
-    }
-
-    pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
-        const ADDR: usize = 0x2000000000;
-        let hp_size = match size {
-            HugepageSize::ONE_GB => 1024 * MB,
-        };
-        let hp_size_flag = match size {
-            HugepageSize::ONE_GB => MAP_HUGE_1GB,
-        };
-        let p = unsafe {
-            libc::mmap(
-                ADDR as *mut libc::c_void,
-                hp_size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB | hp_size_flag,
-                -1,
-                0,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            bail!("mmap failed: {}", std::io::Error::last_os_error());
-        }
-        Ok(MemBlock::new_with_offset(p as *mut u8, hp_size, 0))
     }
 }
 
