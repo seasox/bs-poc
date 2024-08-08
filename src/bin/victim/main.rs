@@ -1,7 +1,5 @@
 use std::io::stdin;
 use std::io::stdout;
-use std::thread;
-use std::time::Duration;
 
 use bs_poc::memory::MemBlock;
 use bs_poc::memory::PfnResolver;

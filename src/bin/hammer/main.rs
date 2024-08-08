@@ -1,5 +1,4 @@
 use std::{
-    env,
     fmt::Debug,
     fs::File,
     io::{stdin, BufRead, BufReader},
