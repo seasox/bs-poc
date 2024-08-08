@@ -6,12 +6,33 @@ use crate::{
     util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
 };
 
-use super::{MemBlock, MemoryTupleTimer};
+use super::{construct_memory_tuple_timer, MemBlock, MemoryTupleTimer};
 
 pub trait AllocChecker {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool>;
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool>;
 }
 
+/**
+ * A helper enum to create a checker from CLI arguments. This allows us to circumvent heap allocation
+ */
+#[derive(Clone)]
+pub enum ConsecCheck {
+    Pfn(ConsecCheckPfn),
+    BankTiming(ConsecCheckBankTiming),
+    None(ConsecCheckNone),
+}
+
+impl AllocChecker for ConsecCheck {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+        match self {
+            ConsecCheck::Pfn(c) => c.check(block),
+            ConsecCheck::BankTiming(c) => c.check(block),
+            ConsecCheck::None(c) => c.check(block),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct AllocCheckAnd<A, B> {
     a: A,
     b: B,
@@ -24,15 +45,16 @@ impl<A: AllocChecker, B: AllocChecker> AllocCheckAnd<A, B> {
 }
 
 impl<A: AllocChecker, B: AllocChecker> AllocChecker for AllocCheckAnd<A, B> {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         Ok(self.a.check(block)? && self.b.check(block)?)
     }
 }
 
+#[derive(Clone)]
 pub struct AllocCheckPageAligned {}
 
 impl AllocChecker for AllocCheckPageAligned {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         if (block.ptr as u64) & 0xFFF != 0 {
             bail!("Address is not page-aligned: 0x{:x}", block.ptr as u64);
         }
@@ -40,30 +62,24 @@ impl AllocChecker for AllocCheckPageAligned {
     }
 }
 
+#[derive(Clone)]
 pub struct ConsecCheckBankTiming {
     mem_config: MemConfiguration,
-    timer: Box<dyn MemoryTupleTimer>,
     conflict_threshold: u64,
     progress_bar: Option<MultiProgress>,
 }
 
 impl ConsecCheckBankTiming {
-    pub fn new(
-        mem_config: MemConfiguration,
-        timer: Box<dyn MemoryTupleTimer>,
-        conflict_threshold: u64,
-    ) -> Self {
-        Self::new_with_progress(mem_config, timer, conflict_threshold, None)
+    pub fn new(mem_config: MemConfiguration, conflict_threshold: u64) -> Self {
+        Self::new_with_progress(mem_config, conflict_threshold, None)
     }
     pub fn new_with_progress(
         mem_config: MemConfiguration,
-        timer: Box<dyn MemoryTupleTimer>,
         conflict_threshold: u64,
         progress_bar: Option<MultiProgress>,
     ) -> Self {
         Self {
             mem_config,
-            timer,
             conflict_threshold,
             progress_bar,
         }
@@ -71,7 +87,7 @@ impl ConsecCheckBankTiming {
 }
 
 impl AllocChecker for ConsecCheckBankTiming {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         if block.len % ROW_SIZE != 0 {
             bail!("Block is not row-aligned")
         }
@@ -79,7 +95,7 @@ impl AllocChecker for ConsecCheckBankTiming {
         let offset = block.pfn_offset(
             &self.mem_config,
             self.conflict_threshold,
-            &*self.timer,
+            &*construct_memory_tuple_timer()?,
             self.progress_bar.as_ref(),
         );
         if offset.is_some() {
@@ -89,10 +105,11 @@ impl AllocChecker for ConsecCheckBankTiming {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct ConsecCheckPfn {}
 
 impl AllocChecker for ConsecCheckPfn {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         /*
          * Check whether the allocation is actually consecutive. The current implementation simply
          * checks for consecutive PFNs using the virt-to-phys pagemap. This needs root permissions.
@@ -133,7 +150,7 @@ impl ConsecCheckPfnBank {
 }
 
 impl AllocChecker for ConsecCheckPfnBank {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         let pfns = block.consec_pfns()?.format_pfns();
         info!("PFNs: {}", pfns);
         let first_pfn = block.pfn()? as *mut u8;
@@ -176,7 +193,8 @@ impl AllocCheckSameBank {
 
 impl AllocChecker for AllocCheckSameBank {
     /// bank check
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+        todo!("not implemented (and probably not even needed");
         let offset = block.pfn_offset(&self.mem_config, self.threshold, &*self.timer, None);
         if offset.is_none() {
             bail!("PFN Offset check failed.");
@@ -217,10 +235,11 @@ impl AllocChecker for AllocCheckSameBank {
     }
 }
 
+#[derive(Clone)]
 pub struct ConsecCheckNone {}
 
 impl AllocChecker for ConsecCheckNone {
-    fn check(&mut self, _block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, _block: &MemBlock) -> anyhow::Result<bool> {
         Ok(true)
     }
 }

@@ -2,7 +2,7 @@ use anyhow::Context;
 use bs_poc::{
     memory::{
         compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecAllocMmap, ConsecAllocator,
-        ConsecCheckBankTiming, ConsecCheckPfnBank, DRAMAddr, PfnResolver,
+        ConsecCheck, ConsecCheckBankTiming, ConsecCheckPfnBank, DRAMAddr, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
 };
@@ -27,8 +27,7 @@ fn main() -> anyhow::Result<()> {
     LogWrapper::new(multi.clone(), logger).try_init()?;
     let args = CliArgs::parse();
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
-    let mem_config =
-        MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
+    let mem_config = MemConfiguration::from_blacksmith(&config);
     info!("{:?}", mem_config);
     loop {
         compact_mem()?;
@@ -36,14 +35,13 @@ fn main() -> anyhow::Result<()> {
         if buddy[2].free_areas()[10] == 0 {
             panic!("No 4 MB blocks in normal zone. Goodbye.")
         }
-        let checker = ConsecCheckBankTiming::new_with_progress(
+        let checker = ConsecCheck::BankTiming(ConsecCheckBankTiming::new_with_progress(
             mem_config.clone(),
-            construct_memory_tuple_timer()?,
             config.threshold,
             Some(multi.clone()),
-        );
-        let mut alloc = ConsecAllocMmap::new(Box::new(checker));
-        let mut consecs = unsafe { alloc.alloc_consec_blocks(4 * MB, || {}) }?;
+        ));
+        let mut alloc = ConsecAllocMmap::new(checker, None);
+        let mut consecs = unsafe { alloc.alloc_consec_blocks(4 * MB) }?;
         //let block = MemBlock::hugepage(bs_poc::memory::HugepageSize::ONE_GB)?;
         //let block = MemBlock::mmap(4 * MB)?;
         //let mut consecs = ConsecBlocks::new(vec![block]);
@@ -68,7 +66,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
         let pfn_offset = pfn_offset.unwrap();
-        let mut pfn_checker = ConsecCheckPfnBank::new(mem_config.clone());
+        let pfn_checker = ConsecCheckPfnBank::new(mem_config.clone());
         assert!(pfn_checker.check(&block)?, "PFN check failed");
         assert_eq!(pfn_offset, expected_pfn_offset as usize);
         let byte_offset = pfn_offset * ROW_SIZE;

@@ -1,8 +1,6 @@
 use anyhow::{bail, Context};
 use bs_poc::{
-    memory::{
-        construct_memory_tuple_timer, AllocChecker, ConsecCheckBankTiming, ConsecCheckPfn, MemBlock,
-    },
+    memory::{AllocChecker, ConsecCheckBankTiming, ConsecCheckPfn, MemBlock},
     util::{BlacksmithConfig, MemConfiguration, MB},
 };
 use clap::Parser;
@@ -65,12 +63,11 @@ fn mmap(size: usize) -> anyhow::Result<*mut libc::c_void> {
 unsafe fn _main() -> anyhow::Result<()> {
     env_logger::init();
     let args = CliArgs::parse();
-    let timer = construct_memory_tuple_timer()?;
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-    let mut checker = ConsecCheckBankTiming::new(mem_config, timer, config.threshold);
-    let mut pfn_checker = ConsecCheckPfn {};
+    let checker = ConsecCheckBankTiming::new(mem_config, config.threshold);
+    let pfn_checker = ConsecCheckPfn {};
     info!("Let's go 🚀");
     loop {
         const SIZE: usize = 4 * MB;

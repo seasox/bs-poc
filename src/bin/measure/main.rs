@@ -78,7 +78,7 @@ fn mmap(size: usize) -> anyhow::Result<*mut libc::c_void> {
 
 fn alloc_4m_consec() -> anyhow::Result<MemBlock> {
     info!("Allocating a consecutive 4 MiB block. This might take some time...");
-    let mut pfn_checker = ConsecCheckPfn {};
+    let pfn_checker = ConsecCheckPfn {};
     let mut allocations: [*mut libc::c_void; 10000] = [null_mut(); 10000];
     for i in 0..10000 {
         let ptr = mmap(4 * MB)?;

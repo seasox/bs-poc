@@ -14,7 +14,7 @@ use std::{
 
 use crate::{
     memory::HugepageSize,
-    util::{MB, PAGE_SHIFT},
+    util::{BASE_MSB, MB, PAGE_SHIFT},
 };
 
 use super::{memblock::ConsecAllocator, ConsecBlocks, MemBlock};
@@ -84,7 +84,7 @@ impl HugepageAllocator {
 unsafe impl GlobalAlloc for HugepageAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
-        let mut p = 0x2000000000 as *mut c_void;
+        let mut p = BASE_MSB;
         let mut mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
         mmap_flags |= MAP_HUGETLB | MAP_HUGE_1GB;
         p = libc::mmap(p, len, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
@@ -107,11 +107,7 @@ impl ConsecAllocator for HugepageAllocator {
     fn block_size(&self) -> usize {
         *HUGEPAGE_SIZE as usize
     }
-    unsafe fn alloc_consec_blocks(
-        &mut self,
-        size: usize,
-        _progress_cb: impl Fn(),
-    ) -> anyhow::Result<super::ConsecBlocks> {
+    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<super::ConsecBlocks> {
         if size > self.block_size() {
             bail!(
                 "Only support allocations up to 0x{:x} bytes",

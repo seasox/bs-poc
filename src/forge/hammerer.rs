@@ -12,7 +12,7 @@ use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::{ConsecBlocks, DRAMAddr, MemBlock, VictimMemory};
-use crate::util::{group, MemConfiguration};
+use crate::util::{group, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
 
 pub trait Hammering {
@@ -90,6 +90,28 @@ impl PatternAddressMapper {
             virt
         });
         groups
+    }
+
+    pub fn get_bitflips_relocate(
+        &self,
+        mem_config: MemConfiguration,
+        blocks: &ConsecBlocks,
+    ) -> Vec<Vec<AggressorPtr>> {
+        self.bit_flips
+            .iter()
+            .map(|flips| {
+                flips
+                    .iter()
+                    .map(|flip| {
+                        let addr =
+                            flip.dram_addr.to_virt(BASE_MSB as *const u8, mem_config) as usize;
+                        let offset = addr - BASE_MSB as usize;
+                        let addr = blocks.addr(offset as usize);
+                        addr as *const u8
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     pub fn get_hammering_addresses_relocate(
@@ -222,15 +244,12 @@ pub struct HammerResult {
 
 pub struct DummyHammerer<'a> {
     blocks: &'a ConsecBlocks,
-    flip_offset: usize,
+    flip_addr: *mut u8,
 }
 
 impl<'a> DummyHammerer<'a> {
-    pub fn new(blocks: &'a ConsecBlocks, flip_offset: usize) -> Self {
-        DummyHammerer {
-            blocks,
-            flip_offset,
-        }
+    pub fn new(blocks: &'a ConsecBlocks, flip_addr: *mut u8) -> Self {
+        DummyHammerer { blocks, flip_addr }
     }
 }
 
@@ -238,13 +257,12 @@ impl<'a> Hammering for DummyHammerer<'a> {
     fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u64) -> Result<HammerResult> {
         victim.init();
         unsafe {
-            let flipped_byte = self.blocks.addr(self.flip_offset);
             debug!(
-                "Flip addressaddress 0x{:02X} from {} to {}",
-                flipped_byte as usize, *flipped_byte, !*flipped_byte
+                "Flip address 0x{:02X} from {} to {}",
+                self.flip_addr as usize, *self.flip_addr, !*self.flip_addr
             );
-            *flipped_byte = !*flipped_byte;
-            _mm_clflush(flipped_byte);
+            *self.flip_addr = !*self.flip_addr;
+            _mm_clflush(self.flip_addr);
         }
         let result = victim.check();
         if result {

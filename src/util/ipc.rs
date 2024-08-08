@@ -1,21 +1,22 @@
 use std::{
     ffi::CString,
+    fmt::Display,
     io::{Read, Write},
 };
 
 use anyhow::bail;
 use libc::{c_int, shm_open, O_APPEND, O_CREAT, O_RDWR, O_TRUNC, S_IRUSR, S_IWUSR};
 
-pub trait IPC<T: Eq> {
-    fn close(self) -> anyhow::Result<()>;
+use super::Anyhow;
+
+pub trait IPC<T: Eq + std::fmt::Debug> {
     fn send(&mut self, msg: T) -> anyhow::Result<()>;
     fn receive(&mut self) -> anyhow::Result<T>;
     fn wait_for(&mut self, msg: T) -> anyhow::Result<T> {
-        let mut r = self.receive()?;
-        while r != msg {
-            r = self.receive()?;
+        let r = self.receive()?;
+        if r != msg {
+            bail!("Expected message {:?}, got {:?}", msg, r);
         }
-        assert!(r == msg);
         Ok(r)
     }
 }
@@ -25,9 +26,30 @@ pub struct PipeIPC<R: Read, W: Write> {
     output: W,
 }
 
-pub const ATTACKER_READY: u8 = 1;
-pub const VICTIM_ALLOC_READY: u8 = 2;
-pub const VICTIM_ALLOC_DONE: u8 = 3;
+#[derive(Debug, PartialEq, Eq)]
+pub enum AttackState {
+    AttackerReady = 1,
+    VictimAllocReady = 2,
+    VictimWaitHammer = 3,
+    AttackerHammerDone = 4,
+    VictimHammerSuccess = 5,
+    VictimHammerFailed = 6,
+}
+
+impl TryFrom<u8> for AttackState {
+    type Error = u8;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(AttackState::AttackerReady),
+            2 => Ok(AttackState::VictimAllocReady),
+            3 => Ok(AttackState::VictimWaitHammer),
+            4 => Ok(AttackState::AttackerHammerDone),
+            5 => Ok(AttackState::VictimHammerSuccess),
+            6 => Ok(AttackState::VictimHammerFailed),
+            _ => Err(value),
+        }
+    }
+}
 
 impl<R: Read, W: Write> PipeIPC<R, W> {
     pub fn new(input: R, output: W) -> Self {
@@ -35,27 +57,31 @@ impl<R: Read, W: Write> PipeIPC<R, W> {
     }
 }
 
-impl<R: Read, W: Write> IPC<u8> for PipeIPC<R, W> {
-    fn send(&mut self, msg: u8) -> anyhow::Result<()> {
-        let success = self.output.write(&[msg]);
-        if success.is_err() {
-            bail!("write failed: {:?}", success.err().unwrap());
+impl<R: Read, W: Write> IPC<AttackState> for PipeIPC<R, W> {
+    fn send(&mut self, msg: AttackState) -> anyhow::Result<()> {
+        let success = self.output.write(&[msg as u8]);
+        match success {
+            Ok(nbytes) => {
+                if nbytes != 1 {
+                    bail!("write failed: wrote {} bytes", nbytes);
+                }
+                self.output.flush()?;
+                Ok(())
+            }
+            Err(e) => bail!("write failed: {:?}", e),
         }
-        Ok(())
     }
-    fn receive(&mut self) -> anyhow::Result<u8> {
+    fn receive(&mut self) -> anyhow::Result<AttackState> {
         let mut buf = [0u8; 1];
         let success = self.input.read(&mut buf);
         if success.is_err() {
             bail!("read failed: {:?}", success.err().unwrap());
         }
-        Ok(buf[0])
-    }
-    fn close(self) -> anyhow::Result<()> {
-        Ok(())
+        AttackState::try_from(buf[0]).anyhow()
     }
 }
 
+/*
 pub struct SharedMemIPC {
     name: CString,
     fd: i32,
@@ -83,7 +109,6 @@ impl SharedMemIPC {
         Ok(Self { name, fd })
     }
 }
-
 impl IPC<i8> for SharedMemIPC {
     fn send(&mut self, msg: i8) -> anyhow::Result<()> {
         const MSG_SIZE: usize = std::mem::size_of::<i8>();
@@ -128,3 +153,4 @@ impl IPC<i8> for SharedMemIPC {
         Ok(())
     }
 }
+*/

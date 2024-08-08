@@ -29,7 +29,7 @@ pub fn make_vec<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
 #[macro_export]
 macro_rules! retry {
     ($f:expr) => {{
-        let mut f = $f;
+        let f = $f;
         loop {
             match f() {
                 Ok(x) => break x,

