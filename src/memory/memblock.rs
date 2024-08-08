@@ -1,30 +1,25 @@
 use crate::{
     memory::{DRAMAddr, LinuxPageMap},
     retry,
-    util::{make_vec, MemConfiguration, NamedProgress, MB, PAGE_SIZE, ROW_SIZE},
+    util::{MemConfiguration, NamedProgress, MB, PAGE_SIZE, ROW_SIZE},
 };
 use anyhow::{bail, Context};
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
-use rand::prelude::SliceRandom;
 use rand::Rng;
 use std::{
     cell::RefCell,
-    ffi::CString,
     io::Read,
     ops::Add,
     process::Command,
     ptr::null_mut,
-    sync::{atomic::Ordering, Arc, Mutex},
-    thread::{sleep, spawn},
-    time::Duration,
 };
-use std::{cmp::min, sync::atomic::AtomicBool};
+use std::cmp::min;
 
 use super::{
-    AllocChecker, ConsecCheck, HugepageAllocator, MemoryTupleTimer, VictimMemory,
+    AllocChecker, MemoryTupleTimer, VictimMemory,
     VirtToPhysResolver,
 };
 
