@@ -13,12 +13,11 @@ use std::{
 };
 
 use crate::{
-    consec_alloc::ConsecAllocator,
     memory::HugepageSize,
     util::{BASE_MSB, MB, PAGE_SHIFT},
 };
 
-use super::{ConsecBlocks, MemBlock};
+use super::{consec_alloc::ConsecAllocator, ConsecBlocks, MemBlock};
 
 // https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
 //

@@ -3,10 +3,10 @@ use indicatif::MultiProgress;
 
 use crate::{
     memory::{DRAMAddr, FormatPfns, PfnResolver},
-    util::{MemConfiguration, PAGE_SIZE, ROW_SIZE, TIMER_ROUNDS},
+    util::{MemConfiguration, PAGE_SIZE, ROW_SIZE},
 };
 
-use super::{construct_memory_tuple_timer, MemBlock, MemoryTupleTimer};
+use super::{construct_memory_tuple_timer, MemBlock};
 
 pub trait AllocChecker {
     fn check(&self, block: &MemBlock) -> anyhow::Result<bool>;

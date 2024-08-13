@@ -9,19 +9,10 @@ use itertools::Itertools;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::Rng;
-use std::{
-    cell::RefCell,
-    io::Read,
-    ops::Add,
-    process::Command,
-    ptr::null_mut,
-};
 use std::cmp::min;
+use std::{cell::RefCell, io::Read, process::Command, ptr::null_mut};
 
-use super::{
-    AllocChecker, MemoryTupleTimer, VictimMemory,
-    VirtToPhysResolver,
-};
+use super::{AllocChecker, MemoryTupleTimer, VictimMemory, VirtToPhysResolver};
 
 #[derive(Debug)]
 pub struct ConsecBlocks {

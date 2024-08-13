@@ -5,6 +5,8 @@ mod memblock;
 mod memory;
 mod timer;
 
+pub mod consec_alloc;
+
 pub use self::allocator::{HugepageAllocator, LinuxPageMap, VirtToPhysResolver};
 pub use self::consec_checker::*;
 pub use self::dram_addr::DRAMAddr;

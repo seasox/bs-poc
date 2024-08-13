@@ -1,6 +1,6 @@
 use anyhow::Context;
 use bs_poc::{
-    consec_alloc::{ConsecAllocMmap, ConsecAllocator},
+    memory::consec_alloc::{ConsecAllocMmap, ConsecAllocator},
     memory::{
         compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecCheck,
         ConsecCheckBankTiming, ConsecCheckPfnBank, DRAMAddr, PfnResolver,

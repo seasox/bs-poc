@@ -8,13 +8,6 @@ use std::{
 
 use anyhow::{bail, Context};
 use bs_poc::{
-    consec_alloc::{
-        ConsecAlloc, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
-        ConsecAllocMmap, ConsecAllocator,
-    },
-    memory::ConsecCheck,
-};
-use bs_poc::{
     forge::{
         FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
     },
@@ -26,6 +19,13 @@ use bs_poc::{
     retry,
     util::{AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC, PAGE_SIZE},
     victim::{HammerVictim, HammerVictimMemCheck},
+};
+use bs_poc::{
+    memory::consec_alloc::{
+        ConsecAlloc, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
+        ConsecAllocMmap, ConsecAllocator,
+    },
+    memory::ConsecCheck,
 };
 use clap::Parser;
 use indicatif::MultiProgress;
