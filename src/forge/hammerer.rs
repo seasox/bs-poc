@@ -1,7 +1,5 @@
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
-use perfcnt::linux::PerfCounterBuilderLinux;
-use perfcnt::{AbstractPerfCounter, PerfCounter};
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
@@ -364,25 +362,6 @@ impl<'a> Hammering for Hammerer<'a> {
 
         const NUM_RETRIES: u8 = 100;
 
-        let walk_1g = x86::perfcnt::intel::events()
-            .unwrap()
-            .get("DTLB_LOAD_MISSES.WALK_COMPLETED_1G")
-            .unwrap();
-        let mut pc_1g: PerfCounter = PerfCounterBuilderLinux::from_intel_event_description(walk_1g)
-            .exclude_idle()
-            .exclude_kernel()
-            .finish()
-            .expect("Could not create counter");
-        let walk_4k = x86::perfcnt::intel::events()
-            .unwrap()
-            .get("DTLB_LOAD_MISSES.WALK_COMPLETED_4K")
-            .unwrap();
-        let mut pc_4k: PerfCounter = PerfCounterBuilderLinux::from_intel_event_description(walk_4k)
-            .exclude_idle()
-            .exclude_kernel()
-            .finish()
-            .expect("Could not create counter");
-
         for run in 0..max_runs {
             victim.init();
             info!("Hammering run {}", run);
@@ -409,11 +388,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     _mm_mfence();
                     let time = __rdtscp(&mut aux);
                     _mm_mfence();
-                    pc_1g.start().expect("Can not start the counter");
-                    pc_4k.start().expect("Can not start the counter");
                     let result = self.program.call();
-                    pc_1g.stop().expect("Can not stop the counter");
-                    pc_4k.stop().expect("Can not stop the counter");
                     _mm_mfence();
                     let time = __rdtscp(&mut aux) - time;
                     _mm_mfence();
@@ -423,13 +398,6 @@ impl<'a> Hammering for Hammerer<'a> {
                         result, run, attempt
                     );
                 }
-                info!(
-                    "1G/4K TLB walks: {:?}/{:?}",
-                    pc_1g.read().expect("Can not read counter"),
-                    pc_4k.read().expect("Can not read counter")
-                );
-                pc_1g.reset().expect("Can not reset the counter");
-                pc_4k.reset().expect("Can not reset the counter");
                 let result = victim.check();
                 if result {
                     return Ok(HammerResult { run, attempt });

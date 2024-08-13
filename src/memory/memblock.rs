@@ -25,7 +25,7 @@ impl ConsecBlocks {
     }
     pub fn dealloc(self) {
         for block in self.blocks {
-            unsafe { libc::munmap(block.ptr as *mut libc::c_void, block.len) };
+            block.dealloc();
         }
     }
 }
