@@ -109,7 +109,7 @@ fn main() -> Result<()> {
                     "Successful at run {} after {} attempts",
                     result.run, result.attempt,
                 );
-                victim.log_report(memory.addr(0));
+                victim.log_report();
             }
             Err(e) => println!("Hammering not successful: {:?} Retrying...", e),
         }

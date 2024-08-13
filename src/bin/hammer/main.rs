@@ -11,7 +11,6 @@ use bs_poc::{
     forge::{
         FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
     },
-    jitter::AggressorPtr,
     memory::{
         compact_mem, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
         HugepageAllocator, MemBlock, PfnResolver,
@@ -228,17 +227,7 @@ fn hammer(
     info!("Expected bitflips: {:?}", flips);
 
     info!("Hammering pattern. This might take a while...");
-    let res = hammerer.hammer(victim, 3);
-    match &res {
-        Ok(res) => {
-            info!("{:?}", res);
-            victim.log_report(0 as AggressorPtr);
-        }
-        Err(e) => {
-            warn!("Hammering not successful: {:?}", e);
-        }
-    }
-    res
+    hammerer.hammer(victim, 3)
 }
 
 /// spawn a thread to log the victim's stderr
@@ -319,7 +308,7 @@ impl<P: IPC<AttackState>> HammerVictim for VictimProcess<P> {
         state == AttackState::VictimHammerSuccess
     }
 
-    fn log_report(&self, _base_msb: AggressorPtr) {
+    fn log_report(&self) {
         info!("Victim process report");
     }
 }
@@ -371,8 +360,16 @@ unsafe fn _main() -> anyhow::Result<()> {
         mem_config,
         block_size,
         &memory,
-    )?;
-    info!("Hammering result: {:?}", result);
+    );
+    match result {
+        Ok(res) => {
+            info!("{:?}", res);
+            hammer_victim.log_report();
+        }
+        Err(e) => {
+            warn!("Hammering not successful: {:?}", e);
+        }
+    }
 
     drop(hammer_victim);
 
