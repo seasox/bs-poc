@@ -13,7 +13,7 @@ use bs_poc::{
     },
     memory::{
         compact_mem, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
-        HugepageAllocator, MemBlock, PfnResolver,
+        HugepageAllocator, MemBlock, PfnResolver, VictimMemory,
     },
     retry,
     util::{AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC, PAGE_SIZE},
@@ -334,7 +334,7 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     info!("Starting bait allocation");
     let memory = alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
-    info!("Memory allocated: {:?}", memory);
+    info!("Allocated {} bytes of memory", memory.len());
 
     let mut victim = spawn_victim(&args.target)?;
     log_victim_stderr(&mut victim)?;
