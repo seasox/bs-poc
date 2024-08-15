@@ -147,13 +147,17 @@ impl PatternAddressMapper {
             let virt = addr.to_virt(0 as *const u8, mem_config);
             let virt = virt as u64 & ((1 << block_shift) - 1);
             let virt = (base | virt) as *const u8;
-            let phys = pagemap.get_phys(virt as u64)?;
-            let paddr = DRAMAddr::from_virt(phys as *const u8, &mem_config);
-            if *addr != paddr {
-                info!("Relocate {:?} to {:?} (base: 0x{:x})", addr, paddr, base);
-            } else {
-                info!("No relocation for {:?}, address stays the same", addr);
-            }
+            let phys = pagemap
+                .get_phys(virt as u64)
+                .map(|p| DRAMAddr::from_virt(p as *const u8, &mem_config));
+            info!(
+                "Relocate {:?} to {:?}, phys {:?}, base: 0x{:x}, base_idx {}",
+                addr,
+                DRAMAddr::from_virt(virt, &mem_config),
+                phys,
+                base,
+                base_idx
+            );
             aggrs_relocated.push(virt);
         }
         Ok(aggrs_relocated)
