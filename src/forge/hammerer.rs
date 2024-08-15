@@ -9,7 +9,9 @@ use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::memory::{ConsecBlocks, DRAMAddr, MemBlock, VictimMemory};
+use crate::memory::{
+    ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
+};
 use crate::util::{group, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
 
@@ -119,6 +121,7 @@ impl PatternAddressMapper {
         block_shift: usize,
         blocks: &[MemBlock],
     ) -> anyhow::Result<Vec<AggressorPtr>> {
+        info!("Relocating aggressors with shift {}", block_shift);
         let addrs = &self.aggressor_to_addr;
         let sets = self.aggressor_sets(mem_config, block_shift);
 
@@ -132,17 +135,25 @@ impl PatternAddressMapper {
         debug!("{:?}", base_lookup);
 
         let mut aggrs_relocated = vec![];
+        let mut pagemap = LinuxPageMap::new()?;
         for agg in aggressors {
             let base_idx = base_lookup[agg];
             let base = match blocks.get(base_idx) {
                 Some(base) => base.ptr as u64,
                 None => bail!("No base found for {:?}", agg),
             };
+            let base = base & !((1 << block_shift) - 1);
             let addr = &addrs[agg];
             let virt = addr.to_virt(0 as *const u8, mem_config);
             let virt = virt as u64 & ((1 << block_shift) - 1);
             let virt = (base | virt) as *const u8;
-            debug!("Relocate {:?} to {:?} (base: {:?})", addr, virt, base);
+            let phys = pagemap.get_phys(virt as u64)?;
+            let paddr = DRAMAddr::from_virt(phys as *const u8, &mem_config);
+            if *addr != paddr {
+                info!("Relocate {:?} to {:?} (base: 0x{:x})", addr, paddr, base);
+            } else {
+                info!("No relocation for {:?}, address stays the same", addr);
+            }
             aggrs_relocated.push(virt);
         }
         Ok(aggrs_relocated)
@@ -289,15 +300,30 @@ impl<'a> Hammerer<'a> {
         info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr| {
-            let found = blocks
-                .iter()
-                .find(|base| unsafe {
-                    addr as u64 >= base.ptr as u64
-                        && (addr as u64) < (base.ptr.add(base.len) as u64)
-                })
-                .is_some();
+            let block_idx = blocks.iter().find_position(|base| unsafe {
+                addr as u64 >= base.ptr as u64 && (addr as u64) < (base.ptr.add(base.len) as u64)
+            });
+            let found = block_idx.is_some();
             if !found {
                 error!("OUT OF BOUNDS ACCESS: {:?}", addr);
+            }
+            if action == "ACCESS" {
+                let paddr = LinuxPageMap::new()
+                    .expect("pagemap open")
+                    .get_phys(addr as u64);
+                match paddr {
+                    Ok(paddr) => {
+                        let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
+                        info!(
+                            "{} {:02},{:04},{}",
+                            action,
+                            dram.bank,
+                            dram.row,
+                            block_idx.map(|(idx, _)| idx).unwrap_or(usize::MAX)
+                        )
+                    }
+                    Err(e) => warn!("Failed to get physical address: {}", e),
+                };
             }
             debug!(
                 "{} 0x{:016X} ({})",
