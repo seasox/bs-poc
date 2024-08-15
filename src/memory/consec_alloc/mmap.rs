@@ -14,8 +14,8 @@ use itertools::Itertools;
 use rand::prelude::SliceRandom;
 
 use crate::{
-    memory::{AllocChecker, ConsecBlocks, ConsecCheck, MemBlock},
-    util::{NamedProgress, MB, ROW_SIZE},
+    memory::{AllocChecker, ConsecBlocks, ConsecCheck, DRAMAddr, MemBlock, PfnResolver},
+    util::{BlacksmithConfig, MemConfiguration, NamedProgress, MB, ROW_SIZE},
 };
 
 use super::ConsecAllocator;
@@ -154,12 +154,32 @@ impl ConsecAllocator for ConsecAllocMmap {
 
         let blocks = blocks.lock().unwrap().clone();
 
+        let blocks = blocks
+            .into_iter()
+            .map(|block| block.pfn_align().expect("Failed to align block"))
+            .flatten()
+            .collect_vec();
+
+        let pfns: Vec<_> = blocks
+            .iter()
+            .map(|block| block.pfn().expect("Failed to get PFN"))
+            .map(|pfn| {
+                DRAMAddr::from_virt(
+                    pfn as *mut u8,
+                    &MemConfiguration::from_blacksmith(
+                        &BlacksmithConfig::from_jsonfile("config/bs-config.json").unwrap(),
+                    ),
+                )
+                .bank
+            })
+            .collect();
+
+        info!("{:?}", pfns);
+
         let consecs = ConsecBlocks::new(blocks);
-        progress.map(|p| p.finish());
-        Ok(consecs) /*.pfn_align(
-                        &self.mem_config,
-                        self.conflict_threshold,
-                        &*construct_memory_tuple_timer()?,
-                    )*/
+        if let Some(progress) = progress {
+            progress.finish();
+        }
+        Ok(consecs)
     }
 }

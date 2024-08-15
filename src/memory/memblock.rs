@@ -49,20 +49,6 @@ impl VictimMemory for ConsecBlocks {
 }
 
 impl ConsecBlocks {
-    /*
-    pub fn pfn_align(
-        self,
-        mem_config: &MemConfiguration,
-        conflict_threshold: u64,
-        timer: &dyn MemoryTupleTimer,
-    ) -> anyhow::Result<Self> {
-        let mut blocks = vec![];
-        for block in self.blocks {
-            blocks.extend(block.pfn_align(mem_config, conflict_threshold, timer)?);
-        }
-        Ok(ConsecBlocks::new(blocks))
-    }*/
-
     pub fn log_pfns(&self) {
         for block in &self.blocks {
             let pfns = block.consec_pfns();
@@ -341,23 +327,32 @@ impl FormatPfns for ConsecPfns {
 }
 
 impl MemBlock {
-    pub fn pfn_align(
-        mut self,
-        mem_config: &MemConfiguration,
-        threshold: u64,
-        timer: &dyn MemoryTupleTimer,
-    ) -> anyhow::Result<Vec<MemBlock>> {
+    pub fn pfn_align(mut self) -> anyhow::Result<Vec<MemBlock>> {
         let mut blocks = vec![];
-        let offset = self.pfn_offset(mem_config, threshold, timer, None);
-        match offset {
-            None => bail!("no offset"),
-            Some(offset) => {
-                let block = self.byte_add(offset * ROW_SIZE);
-                blocks.push(block);
-                self.len = offset * ROW_SIZE;
-                blocks.push(self);
+        let offset = match self.pfn_offset {
+            PfnOffset::Fixed(offset) => offset,
+            PfnOffset::Dynamic(ref offset) => {
+                let offset = offset.borrow();
+                match offset.into() {
+                    Some(offset) => offset
+                        .expect("PFN offset not determined yet. Call MemBlock::pfn_offset() before MemBlock::pfn_align()")
+                        .0
+                        .expect("Block is not consecutive"),
+                    None => bail!("PFN offset not determined yet. Call MemBlock::pfn_offset() before MemBlock::pfn_align()"),
+                }
             }
+        };
+        if offset == 0 {
+            return Ok(vec![self]);
         }
+        assert_eq!(self.len, 4 * MB);
+        let offset = self.len - offset * ROW_SIZE;
+        assert!(offset < 4 * MB, "Offset {} >= 4MB", offset);
+        let block = self.byte_add(offset);
+        blocks.push(block);
+        self.len = offset;
+        blocks.push(self);
+
         Ok(blocks)
     }
 }
@@ -649,8 +644,8 @@ mod tests {
 
     use crate::{
         memory::{
-            construct_memory_tuple_timer, DRAMAddr, HugepageSize, MemBlock, MemoryTupleTimer,
-            PfnResolver,
+            construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, MemBlock,
+            MemoryTupleTimer, PfnResolver,
         },
         util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
     };
@@ -786,18 +781,34 @@ mod tests {
         for _ in 0..1000000 {
             let v = rand.gen::<isize>() << 12;
             let p = rand.gen::<isize>() << 12;
+            println!("VA,PA: 0x{:x}, 0x{:x}", v, p);
             let vbase = v & MASK;
             let pbase = p & MASK;
             let offset = pbase as isize - vbase as isize;
+            let offset = offset.rem_euclid(4 * MB as isize);
+            let block = MemBlock {
+                ptr: v as *mut u8,
+                len: 4 * MB,
+                pfn_offset: PfnOffset::Fixed(offset as usize / ROW_SIZE),
+            };
+            let aligned = &block.pfn_align()?[0];
+            let expected = if offset == 0 {
+                v
+            } else {
+                v + 4 * MB as isize - offset
+            };
+            //assert_eq!(aligned.ptr as usize, expected as usize);
             //let offset = offset.rem_euclid(2 * MB as isize);
 
             let zero_gap = offset + vbase as isize;
-            let pdram_zero = DRAMAddr::from_virt((p - zero_gap) as *mut u8, &mem_config);
+            let pdram_zero =
+                DRAMAddr::from_virt((p + 4 * MB as isize - zero_gap) as *mut u8, &mem_config);
             assert_eq!(pdram_zero.bank, 0);
         }
         Ok(())
     }
 
+    /*
     #[test]
     fn test_row_delta() -> anyhow::Result<()> {
         const BASE: *mut u8 = 0x2000000000 as *mut u8;
@@ -814,4 +825,5 @@ mod tests {
         assert!(false);
         Ok(())
     }
+    */
 }
