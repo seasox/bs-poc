@@ -34,9 +34,7 @@ impl ConsecAllocMmap {
     }
 }
 
-/**
- * Spawn a thread that periodically writes 0s to the allocated memory blocks.
- */
+/// Spawn a thread that periodically writes 0s to the allocated memory blocks.
 fn spawn_loader_thread(
     blocks: Arc<Mutex<Vec<MemBlock>>>,
     mem_lock: Arc<Mutex<()>>,
@@ -62,7 +60,7 @@ fn spawn_loader_thread(
     })
 }
 
-/** Spawn a thread that allocates memory blocks and checks for consecutive blocks using the provided `checker`. */
+/// Spawn a thread that allocates memory blocks and checks for consecutive blocks using the provided `checker`.
 fn spawn_allocator_thread(
     blocks: Arc<Mutex<Vec<MemBlock>>>,
     mem_lock: Arc<Mutex<()>>,
