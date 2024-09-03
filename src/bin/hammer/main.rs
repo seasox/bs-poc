@@ -9,14 +9,18 @@ use std::{
 use anyhow::{bail, Context};
 use bs_poc::{
     forge::{
-        FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern, PatternAddressMapper,
+        DummyHammerer, FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern,
+        PatternAddressMapper,
     },
     memory::{
         compact_mem, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
         HugepageAllocator, MemBlock, PfnResolver, VictimMemory,
     },
     retry,
-    util::{AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC, PAGE_SIZE},
+    util::{
+        init_logging_with_progress, AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC,
+        PAGE_SIZE,
+    },
     victim::{HammerVictim, HammerVictimMemCheck},
 };
 use bs_poc::{
@@ -53,8 +57,16 @@ struct CliArgs {
     consec_check: ConsecCheckType,
     #[clap(long = "alloc-strategy", default_value = "mmap")]
     alloc_strategy: ConsecAllocType,
+    #[clap(long = "hammerer", default_value = "blacksmith")]
+    hammerer: HammerStrategy,
     /// The target to hammer
     target: Vec<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum HammerStrategy {
+    Dummy,
+    Blacksmith,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -190,6 +202,7 @@ unsafe fn alloc_memory(
 }
 
 fn hammer(
+    hammerer: HammerStrategy,
     pattern: HammeringPattern,
     mapping: PatternAddressMapper,
     victim: &mut dyn HammerVictim,
@@ -202,27 +215,31 @@ fn hammer(
         &pattern.access_ids,
         mem_config,
         block_shift as usize,
-        &memory.blocks,
+        memory,
     )?;
 
-    let hammerer = Hammerer::new(
-        mem_config,
-        pattern.clone(),
-        mapping.clone(),
-        &hammering_addrs,
-        &memory.blocks,
-    )?;
-    /*let flip = mapping.get_bitflips_relocate(mem_config, &memory);
-    let flip = flip
-        .concat()
-        .pop()
-        .unwrap_or(memory.blocks[0].byte_add(0x42).ptr) as *mut u8;
-    info!(
-        "Running dummy hammerer with flip at VA 0x{:02x}",
-        flip as usize
-    );
-    let hammerer = DummyHammerer::new(&memory, flip);*/
-
+    let hammerer: Box<dyn Hammering> = match hammerer {
+        HammerStrategy::Blacksmith => Box::new(Hammerer::new(
+            mem_config,
+            pattern.clone(),
+            mapping.clone(),
+            &hammering_addrs,
+            &memory.blocks,
+        )?),
+        HammerStrategy::Dummy => {
+            let flip = mapping.get_bitflips_relocate(mem_config, &memory);
+            let flip = flip
+                .concat()
+                .pop()
+                .unwrap_or(memory.blocks[0].byte_add(0x42).ptr) as *mut u8;
+            info!(
+                "Running dummy hammerer with flip at VA 0x{:02x}",
+                flip as usize
+            );
+            let hammerer = DummyHammerer::new(&memory, flip);
+            Box::new(hammerer)
+        }
+    };
     let flips = mapping.bit_flips;
     info!("Expected bitflips: {:?}", flips);
 
@@ -279,14 +296,6 @@ fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, Child
     let child_in = child.stdin.take().context("piped_channel stdin")?;
     let child_out = child.stdout.take().context("piped_channel stdout")?;
     Ok(PipeIPC::new(child_out, child_in))
-}
-
-fn init_logging_with_progress() -> anyhow::Result<MultiProgress> {
-    let logger =
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
-    let progress = MultiProgress::new();
-    LogWrapper::new(progress.clone(), logger).try_init()?;
-    Ok(progress)
 }
 
 struct VictimProcess<P> {
@@ -354,6 +363,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     };
 
     let result = hammer(
+        args.hammerer,
         pattern.pattern,
         pattern.mapping,
         &mut *hammer_victim,
