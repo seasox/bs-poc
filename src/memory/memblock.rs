@@ -1,3 +1,6 @@
+#[cfg(feature = "spoiler")]
+use crate::memory_addresses;
+
 use crate::{
     memory::{DRAMAddr, LinuxPageMap},
     retry,
@@ -494,6 +497,91 @@ impl MemBlock {
                 }
             };
         }
+    }
+}
+
+impl MemBlock {
+    #[cfg(feature = "spec_hammer")]
+    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
+        let locked_2mb_blocks = determine_locked_2mb_blocks()?;
+        info!("Locked 2MB blocks: {}", locked_2mb_blocks);
+        let mut available_2mb_blocks = usize::MAX;
+        let mut allocations = [null_mut(); 50000];
+        let mut i = 0;
+        while available_2mb_blocks > locked_2mb_blocks {
+            let buddy_before = get_normal_page_nums()?;
+            let v = mmap_block(2 * MB);
+            let buddy_after = get_normal_page_nums()?;
+            let diff = diff_arrs(&buddy_before, &buddy_after);
+            allocations[i] = v;
+            i += 1;
+            available_2mb_blocks = get_normal_page_nums()?[9];
+            if available_2mb_blocks <= locked_2mb_blocks {
+                log_pagetypeinfo();
+                debug!("  {:?}", buddy_before);
+                debug!("- {:?}", buddy_after);
+                debug!("= {:?}", diff);
+            }
+        }
+        debug!("hit thresh");
+        let buddy_before = get_normal_page_nums()?;
+        let v = mmap_block(2 * MB);
+        let buddy_after = get_normal_page_nums()?;
+        let diff = diff_arrs(&buddy_before, &buddy_after);
+        info!("  {:?}", buddy_before);
+        info!("- {:?}", buddy_after);
+        info!("= {:?}", diff);
+        for ptr in allocations {
+            libc::munmap(ptr, 2 * MB);
+        }
+        Ok(v)
+    }
+
+    #[cfg(feature = "spoiler")]
+    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
+        use crate::{auto_spoiler, util::MB};
+
+        const PAGE_COUNT: usize = 256 * 512;
+
+        //let hugeblock_len = 1 << 30;
+        //let v = mmap_block(null_mut(), hugeblock_len);
+
+        let search_buffer = unsafe {
+            let ptr = libc::mmap(
+                std::ptr::null_mut(),
+                PAGE_COUNT * PAGE_SIZE,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_POPULATE | libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                -1,
+                0,
+            );
+            if ptr == libc::MAP_FAILED {
+                panic!("Failed to mmap");
+            }
+            std::mem::transmute::<*mut libc::c_void, *mut u8>(ptr)
+        };
+        let mut ret = None;
+        while ret.is_none() {
+            compact_mem()?;
+            let x = unsafe { auto_spoiler(search_buffer) };
+            if !x.is_null() {
+                ret = Some(unsafe { &mut *x });
+                continue;
+            }
+        }
+
+        let ret = ret.unwrap();
+
+        println!("{:?}", ret);
+
+        let addr = memory_addresses(ret);
+
+        //libc::munmap(v, hugeblock_len);
+
+        Ok(MemBlock {
+            ptr: addr as *mut libc::c_void,
+            len: 8 * MB,
+        })
     }
 }
 
