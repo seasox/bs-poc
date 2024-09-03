@@ -12,7 +12,7 @@ use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::{
     ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
 };
-use crate::util::{group, MemConfiguration, BASE_MSB};
+use crate::util::{group, Anyhow, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
 
 pub trait Hammering {
@@ -119,9 +119,10 @@ impl PatternAddressMapper {
         aggressors: &Vec<Aggressor>,
         mem_config: MemConfiguration,
         block_shift: usize,
-        blocks: &[MemBlock],
+        memory: &ConsecBlocks,
     ) -> anyhow::Result<Vec<AggressorPtr>> {
         info!("Relocating aggressors with shift {}", block_shift);
+        let block_size = 1 << block_shift;
         let addrs = &self.aggressor_to_addr;
         let sets = self.aggressor_sets(mem_config, block_shift);
 
@@ -134,30 +135,34 @@ impl PatternAddressMapper {
         }
         debug!("{:?}", base_lookup);
 
+        assert_eq!(sets.len() * block_size, memory.len());
+
         let mut aggrs_relocated = vec![];
         let mut pagemap = LinuxPageMap::new()?;
         for agg in aggressors {
             let base_idx = base_lookup[agg];
-            let base = match blocks.get(base_idx) {
-                Some(base) => base.ptr as u64,
-                None => bail!("No base found for {:?}", agg),
-            };
+            let base = memory.addr(base_idx * block_size) as u64;
             let base = base & !((1 << block_shift) - 1);
             let addr = &addrs[agg];
             let virt = addr.to_virt(0 as *const u8, mem_config);
             let virt = virt as u64 & ((1 << block_shift) - 1);
             let virt = (base | virt) as *const u8;
-            let phys = pagemap
-                .get_phys(virt as u64)
-                .map(|p| DRAMAddr::from_virt(p as *const u8, &mem_config));
-            info!(
-                "Relocate {:?} to {:?}, phys {:?}, base: 0x{:x}, base_idx {}",
-                addr,
-                DRAMAddr::from_virt(virt, &mem_config),
-                phys,
-                base,
-                base_idx
-            );
+            let p = pagemap.get_phys(virt as u64);
+            match p {
+                Ok(p) => {
+                    let phys = DRAMAddr::from_virt(p as *const u8, &mem_config);
+                    info!(
+                        "Relocate {:?} to {:?}, phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
+                        addr,
+                        DRAMAddr::from_virt(virt, &mem_config),
+                        phys,
+                        p,
+                        base,
+                        base_idx
+                    );
+                }
+                Err(e) => warn!("Failed to get physical address: {}", e),
+            }
             aggrs_relocated.push(virt);
         }
         Ok(aggrs_relocated)
@@ -311,30 +316,23 @@ impl<'a> Hammerer<'a> {
             if !found {
                 error!("OUT OF BOUNDS ACCESS: {:?}", addr);
             }
-            if action == "ACCESS" {
-                let paddr = LinuxPageMap::new()
-                    .expect("pagemap open")
-                    .get_phys(addr as u64);
-                match paddr {
-                    Ok(paddr) => {
-                        let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
-                        info!(
-                            "{} {:02},{:04},{}",
-                            action,
-                            dram.bank,
-                            dram.row,
-                            block_idx.map(|(idx, _)| idx).unwrap_or(usize::MAX)
-                        )
-                    }
-                    Err(e) => warn!("Failed to get physical address: {}", e),
-                };
-            }
-            debug!(
-                "{} 0x{:016X} ({})",
-                action,
-                addr as usize,
-                DRAMAddr::from_virt(addr, &mem_config)
-            );
+            let paddr = LinuxPageMap::new()
+                .expect("pagemap open")
+                .get_phys(addr as u64);
+            match paddr {
+                Ok(paddr) => {
+                    let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
+                    info!(
+                        "{:>06} {:02},{:04},0x{:02x},{}",
+                        action,
+                        dram.bank,
+                        dram.row,
+                        paddr,
+                        block_idx.map(|(idx, _)| idx).unwrap_or(usize::MAX)
+                    )
+                }
+                Err(e) => warn!("Failed to get physical address: {}", e),
+            };
         };
 
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
