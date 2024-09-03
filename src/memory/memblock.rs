@@ -786,6 +786,7 @@ mod tests {
             let pbase = p & MASK;
             let offset = pbase as isize - vbase as isize;
             let offset = offset.rem_euclid(4 * MB as isize);
+            //let offset = offset.rem_euclid(2 * MB as isize);
             let block = MemBlock {
                 ptr: v as *mut u8,
                 len: 4 * MB,
@@ -797,8 +798,7 @@ mod tests {
             } else {
                 v + 4 * MB as isize - offset
             };
-            //assert_eq!(aligned.ptr as usize, expected as usize);
-            //let offset = offset.rem_euclid(2 * MB as isize);
+            assert_eq!(aligned.ptr as usize, expected as usize);
 
             let zero_gap = offset + vbase as isize;
             let pdram_zero =
