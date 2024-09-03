@@ -1,5 +1,16 @@
 use std::collections::HashMap;
 
+use indicatif::MultiProgress;
+use indicatif_log_bridge::LogWrapper;
+
+pub fn init_logging_with_progress() -> anyhow::Result<MultiProgress> {
+    let logger =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).build();
+    let progress = MultiProgress::new();
+    LogWrapper::new(progress.clone(), logger).try_init()?;
+    Ok(progress)
+}
+
 pub fn group<F, K: std::hash::Hash + std::cmp::Eq, T>(addrs: Vec<T>, f: F) -> Vec<Vec<T>>
 where
     F: Fn(&T) -> K,
