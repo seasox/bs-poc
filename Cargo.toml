@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 jitter_dump = []
+spoiler = []
 
 [profile.release-with-debug]
 inherits = "release"
