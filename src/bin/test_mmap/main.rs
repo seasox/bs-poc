@@ -9,7 +9,7 @@ use log::info;
 #[derive(Debug, Parser)]
 struct CliArgs {
     /// The JSON file containing the memory config
-    #[clap(long = "config", default_value = "config.json")]
+    #[clap(long = "config", default_value = "config/bs-config.json")]
     config: String,
 }
 

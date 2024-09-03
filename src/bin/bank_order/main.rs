@@ -8,7 +8,7 @@ use log::info;
 
 #[derive(Parser, Debug)]
 struct CliArgs {
-    #[clap(long = "config", default_value = "config.json")]
+    #[clap(long = "config", default_value = "config/bs-config.json")]
     config: String,
 }
 
