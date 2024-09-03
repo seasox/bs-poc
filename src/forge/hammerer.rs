@@ -12,7 +12,7 @@ use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::{
     ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
 };
-use crate::util::{group, Anyhow, MemConfiguration, BASE_MSB};
+use crate::util::{group, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
 
 pub trait Hammering {

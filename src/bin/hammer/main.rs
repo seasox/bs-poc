@@ -32,7 +32,6 @@ use bs_poc::{
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use indicatif_log_bridge::LogWrapper;
 use log::{info, warn};
 
 /// Search for a pattern in a file and display the lines that contain it.
