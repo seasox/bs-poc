@@ -14,6 +14,7 @@ use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::Rng;
 use std::cmp::min;
 use std::{cell::RefCell, io::Read, process::Command, ptr::null_mut};
+use std::{cmp::min, collections::VecDeque};
 
 use super::{AllocChecker, MemoryTupleTimer, VictimMemory, VirtToPhysResolver};
 
@@ -53,18 +54,25 @@ impl VictimMemory for ConsecBlocks {
 
 impl ConsecBlocks {
     pub fn log_pfns(&self) {
+        let mut pfns = vec![];
         for block in &self.blocks {
-            let pfns = block.consec_pfns();
-            match pfns {
-                Ok(pfns) => {
-                    let pfns = pfns.format_pfns();
-                    info!("PFNs: {}", pfns);
-                }
+            let block_pfns = match block.consec_pfns() {
+                Ok(pfns) => pfns,
                 Err(e) => {
                     error!("Failed to get PFNs: {:?}", e);
+                    return;
                 }
+            };
+            let mut block_pfns = VecDeque::from(block_pfns);
+            let is_cons = pfns.last().map_or(false, |last| *last == block_pfns[0]);
+            if is_cons {
+                pfns.pop();
+                block_pfns.pop_front();
             }
+            pfns.extend(block_pfns);
         }
+        let pfns = pfns.format_pfns();
+        info!("PFNs: {}", pfns);
     }
 }
 
