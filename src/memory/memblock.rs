@@ -12,7 +12,6 @@ use itertools::Itertools;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::Rng;
-use std::cmp::min;
 use std::{cell::RefCell, io::Read, process::Command, ptr::null_mut};
 use std::{cmp::min, collections::VecDeque};
 
@@ -543,53 +542,6 @@ impl MemBlock {
             libc::munmap(ptr, 2 * MB);
         }
         Ok(v)
-    }
-
-    #[cfg(feature = "spoiler")]
-    unsafe fn alloc_consec_block(size: usize) -> anyhow::Result<MemBlock> {
-        use crate::{auto_spoiler, util::MB};
-
-        const PAGE_COUNT: usize = 256 * 512;
-
-        //let hugeblock_len = 1 << 30;
-        //let v = mmap_block(null_mut(), hugeblock_len);
-
-        let search_buffer = unsafe {
-            let ptr = libc::mmap(
-                std::ptr::null_mut(),
-                PAGE_COUNT * PAGE_SIZE,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_POPULATE | libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-                -1,
-                0,
-            );
-            if ptr == libc::MAP_FAILED {
-                panic!("Failed to mmap");
-            }
-            std::mem::transmute::<*mut libc::c_void, *mut u8>(ptr)
-        };
-        let mut ret = None;
-        while ret.is_none() {
-            compact_mem()?;
-            let x = unsafe { auto_spoiler(search_buffer) };
-            if !x.is_null() {
-                ret = Some(unsafe { &mut *x });
-                continue;
-            }
-        }
-
-        let ret = ret.unwrap();
-
-        println!("{:?}", ret);
-
-        let addr = memory_addresses(ret);
-
-        //libc::munmap(v, hugeblock_len);
-
-        Ok(MemBlock {
-            ptr: addr as *mut libc::c_void,
-            len: 8 * MB,
-        })
     }
 }
 

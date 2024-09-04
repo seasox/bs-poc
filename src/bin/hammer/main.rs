@@ -13,8 +13,8 @@ use bs_poc::{
         PatternAddressMapper,
     },
     memory::{
-        compact_mem, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
-        HugepageAllocator, MemBlock, PfnResolver, VictimMemory,
+        compact_mem, consec_alloc::ConsecAllocSpoiler, ConsecBlocks, ConsecCheckBankTiming,
+        ConsecCheckNone, ConsecCheckPfn, HugepageAllocator, MemBlock, PfnResolver, VictimMemory,
     },
     retry,
     util::{
@@ -83,6 +83,7 @@ pub enum ConsecAllocType {
     Hugepage,
     HugepageRnd,
     Mmap,
+    Spoiler,
 }
 
 fn create_allocator_from_cli(
@@ -98,6 +99,7 @@ fn create_allocator_from_cli(
         ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker, progress)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
         ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(1)),
+        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(ConsecAllocSpoiler::new()),
     }
 }
 

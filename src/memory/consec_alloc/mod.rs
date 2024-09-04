@@ -2,11 +2,13 @@ mod buddyinfo;
 mod coco;
 mod hugepage_rnd;
 mod mmap;
+mod spoiler;
 
 pub use buddyinfo::ConsecAllocBuddyInfo;
 pub use coco::ConsecAllocCoCo;
 pub use hugepage_rnd::ConsecAllocHugepageRnd;
 pub use mmap::ConsecAllocMmap;
+pub use spoiler::ConsecAllocSpoiler;
 
 use crate::memory::{ConsecBlocks, HugepageAllocator};
 
@@ -24,6 +26,7 @@ pub enum ConsecAlloc {
     Hugepage(HugepageAllocator),
     HugepageRnd(ConsecAllocHugepageRnd),
     Mmap(ConsecAllocMmap),
+    Spoiler(ConsecAllocSpoiler),
 }
 
 impl ConsecAllocator for ConsecAlloc {
@@ -34,6 +37,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::Hugepage(alloc) => alloc.block_size(),
             ConsecAlloc::HugepageRnd(alloc) => alloc.block_size(),
             ConsecAlloc::Mmap(alloc) => alloc.block_size(),
+            ConsecAlloc::Spoiler(alloc) => alloc.block_size(),
         }
     }
 
@@ -44,6 +48,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::Spoiler(alloc) => alloc.alloc_consec_blocks(size),
         }
     }
 }

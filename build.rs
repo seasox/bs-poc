@@ -89,19 +89,14 @@ fn main() {
     let mut bindings = bindgen::Builder::default();
 
     bindings = bind_rsa(bindings);
-
-    if cfg!(spoiler) {
-        bindings = bind_spoiler(bindings);
-    }
+    bindings = bind_spoiler(bindings);
 
     bindings = bind_ptedit(bindings);
 
     let bindings = run_bindgen(bindings);
 
     build_rsa();
-    if cfg!(spoiler) {
-        build_spoiler()
-    }
+    build_spoiler();
     build_ptedit();
 
     write_bindings(bindings);
