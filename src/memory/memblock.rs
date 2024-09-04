@@ -562,14 +562,21 @@ unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
 }
 
 pub fn compact_mem() -> anyhow::Result<()> {
-    Command::new("sh")
+    let output = Command::new("sh")
         .arg("-c")
-        .arg("echo 1 | sudo tee /proc/sys/vm/compact_memory")
+        .arg("echo 1 | tee /proc/sys/vm/compact_memory")
         .output()?;
-    Command::new("sh")
+    if !output.status.success() {
+        bail!("Failed to compact memory. Are we root?");
+    }
+
+    let output = Command::new("sh")
         .arg("-c")
-        .arg("echo 0 | sudo tee /proc/sys/kernel/randomize_va_space")
+        .arg("echo 0 | tee /proc/sys/kernel/randomize_va_space")
         .output()?;
+    if !output.status.success() {
+        bail!("Failed to disable ASLR. Are we root?");
+    }
     Ok(())
 }
 
