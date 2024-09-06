@@ -20,7 +20,7 @@ impl ConsecAllocSpoiler {
 
 impl ConsecAllocator for ConsecAllocSpoiler {
     fn block_size(&self) -> usize {
-        8 * MB
+        1 * MB
     }
 
     unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
@@ -32,7 +32,8 @@ impl ConsecAllocator for ConsecAllocSpoiler {
         //let v = mmap_block(null_mut(), hugeblock_len);
 
         let mut blocks = vec![];
-        for _ in 0..size.div_ceil(self.block_size()) {
+        const BLOCK_SIZE: usize = 8 * MB;
+        for _ in 0..size.div_ceil(BLOCK_SIZE) {
             let addr_space = retry!(|| {
                 compact_mem()?;
                 let search_buffer = unsafe {
