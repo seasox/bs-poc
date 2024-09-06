@@ -66,6 +66,7 @@ struct CliArgs {
 pub enum HammerStrategy {
     Dummy,
     Blacksmith,
+    None,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -212,21 +213,22 @@ fn hammer(
     memory: &ConsecBlocks,
 ) -> anyhow::Result<HammerResult> {
     let block_shift = block_size.ilog2();
-    let hammering_addrs = mapping.get_hammering_addresses_relocate(
-        &pattern.access_ids,
-        mem_config,
-        block_shift as usize,
-        memory,
-    )?;
-
     let hammerer: Box<dyn Hammering> = match hammerer {
-        HammerStrategy::Blacksmith => Box::new(Hammerer::new(
-            mem_config,
-            pattern.clone(),
-            mapping.clone(),
-            &hammering_addrs,
-            &memory.blocks,
-        )?),
+        HammerStrategy::Blacksmith => {
+            let hammering_addrs = mapping.get_hammering_addresses_relocate(
+                &pattern.access_ids,
+                mem_config,
+                block_shift as usize,
+                memory,
+            )?;
+            Box::new(Hammerer::new(
+                mem_config,
+                pattern.clone(),
+                mapping.clone(),
+                &hammering_addrs,
+                &memory.blocks,
+            )?)
+        }
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, &memory);
             let flip = flip
@@ -239,6 +241,10 @@ fn hammer(
             );
             let hammerer = DummyHammerer::new(&memory, flip);
             Box::new(hammerer)
+        }
+        HammerStrategy::None => {
+            warn!("No hammerer specified. Exiting.");
+            return Ok(HammerResult { run: 0, attempt: 0 });
         }
     };
     let flips = mapping.bit_flips;
