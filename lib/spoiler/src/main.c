@@ -45,6 +45,10 @@ int main(int argc, char *argv[])
 		uint8_t *search_buffer = mmap(NULL, PAGE_COUNT * PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_POPULATE | MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
 		struct addr_space *cont_memory = auto_spoiler(search_buffer);
+		if (cont_memory == NULL)
+		{
+			continue;
+		}
 		// struct addr_space *cont_memory = spoiler(search_buffer);
 		struct addr_space *cont_bank = rowconflict(cont_memory);
 		// struct addr_space *cont_bank = getContinuousDrama(search_buffer);
