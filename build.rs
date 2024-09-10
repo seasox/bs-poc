@@ -4,23 +4,26 @@ use std::path::PathBuf;
 use glob::glob;
 
 fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
+    println!("cargo:rustc-link-lib=spoiler");
+    println!("cargo:rerun-if-changed=lib/spoiler/include/spoiler.h");
     bindings.header("lib/spoiler/include/spoiler.h")
 }
 
 fn build_spoiler() {
     // build spoiler
-    let spoiler_srcs = glob("lib/spoiler/src/*.c")
-        .expect("Failed to glob lib/spoiler/src")
-        .filter_map(Result::ok);
-    let spoiler_incs = glob("lib/spoiler/include/*.h")
-        .expect("Failed to glob lib/spoiler/include")
-        .filter_map(Result::ok);
+    let spoiler_srcs = vec![
+        "lib/spoiler/src/spoiler.c",
+        "lib/spoiler/src/drama.c",
+        "lib/spoiler/src/misc.c",
+    ];
     cc::Build::new()
-        .files(spoiler_srcs)
-        .files(spoiler_incs)
+        .files(spoiler_srcs.clone())
         .flag("-g")
         .flag("-O0")
         .compile("libspoiler.a");
+    for src in spoiler_srcs {
+        println!("cargo:rerun-if-changed={}", src);
+    }
 }
 
 fn bind_rsa(bindings: bindgen::Builder) -> bindgen::Builder {
