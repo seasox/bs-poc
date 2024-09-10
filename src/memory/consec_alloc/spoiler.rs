@@ -48,7 +48,7 @@ impl ConsecAllocator for ConsecAllocSpoiler {
                     if ptr == libc::MAP_FAILED {
                         panic!("Failed to mmap");
                     }
-                    std::mem::transmute::<*mut libc::c_void, *mut u8>(ptr)
+                    ptr as *mut u8
                 };
                 let a = auto_spoiler(search_buffer);
                 if a.is_null() {
