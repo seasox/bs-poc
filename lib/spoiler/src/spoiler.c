@@ -217,7 +217,7 @@ void analyze_and_print_cluster(uint8_t *buffer, int cluster_index)
 	fprintf(file, "index,diffBuffer,cluster\n");
 	for (int i = 0; i < size; i++)
 	{
-		fprintf(file, "%d,%llu,%llu\n", i, diffBuffer[i], clusters[i]);
+		fprintf(file, "%d,%lu,%lu\n", i, diffBuffer[i], clusters[i]);
 	}
 	fclose(file);
 
@@ -348,7 +348,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	fprintf(file, "index,diffBuffer,cluster\n");
 	for (int i = 0; i < search_space; i++)
 	{
-		fprintf(file, "%d,%llu,%llu\n", i, diffBuffer[i], clusters[i]);
+		fprintf(file, "%d,%lu,%lu\n", i, diffBuffer[i], clusters[i]);
 	}
 	fclose(file);
 
