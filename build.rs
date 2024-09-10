@@ -1,8 +1,6 @@
 use std::env;
 use std::path::PathBuf;
 
-use glob::glob;
-
 fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
     println!("cargo:rustc-link-lib=spoiler");
     println!("cargo:rerun-if-changed=lib/spoiler/include/spoiler.h");
@@ -18,6 +16,9 @@ fn build_spoiler() {
     ];
     cc::Build::new()
         .files(spoiler_srcs.clone())
+        .flag("-Wno-sign-compare")
+        .flag("-Wno-unused-parameter")
+        .flag("-Wno-unused-variable")
         .flag("-g")
         .flag("-O0")
         .compile("libspoiler.a");
