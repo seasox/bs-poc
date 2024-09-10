@@ -8,7 +8,8 @@ use itertools::Itertools;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use lpfs::proc::buddyinfo::BuddyInfo;
 use rand::Rng;
-use std::{cell::RefCell, io::Read, process::Command, ptr::null_mut};
+use std::io::Write;
+use std::{cell::RefCell, fs::OpenOptions, io::Read, process::Command, ptr::null_mut};
 use std::{cmp::min, collections::VecDeque};
 
 use super::{MemoryTupleTimer, VictimMemory, VirtToPhysResolver};
@@ -67,7 +68,13 @@ impl ConsecBlocks {
             pfns.extend(block_pfns);
         }
         let pfns = pfns.format_pfns();
-        info!("PFNs: {}", pfns);
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("pfns.txt")
+            .expect("Failed to open pfns.txt");
+        write!(f, "\nConsecutive PFNs:\n{}\n", pfns).expect("Failed to write to pfns.txt");
+        info!("PFNs:\n{}", pfns);
     }
 }
 
@@ -326,7 +333,12 @@ impl FormatPfns for ConsecPfns {
     fn format_pfns(&self) -> String {
         let mut pfns = String::from("");
         for (p1, p2) in self.windows(2).map(|w| (w[0], w[1])).step_by(2) {
-            pfns += &format!("{:x}..[{} KB]..{:x} ", p1, (p2 - p1 as u64) / 1024, p2);
+            pfns += &format!(
+                "{:09x}..[{:04} KB]..{:09x}\n",
+                p1,
+                (p2 - p1 as u64) / 1024,
+                p2
+            );
         }
         pfns
     }

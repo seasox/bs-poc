@@ -55,11 +55,24 @@ impl ConsecAllocator for ConsecAllocSpoiler {
                     libc::munmap(search_buffer as *mut libc::c_void, PAGE_COUNT * PAGE_SIZE);
                     Err(anyhow::anyhow!("Failed to get address space"))
                 } else {
+                    let base = MemBlock::new(search_buffer, 512 * MB);
+                    let pfns = (0..512 * MB - 4 * KB)
+                        .step_by(4 * KB)
+                        .map(|i| base.byte_add(i).pfn().unwrap())
+                        .sorted()
+                        .collect_vec();
+                    let pfns = pfns.format_pfns();
+                    info!("PFN ranges: {}", pfns);
+                    let mut f = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("pfns.txt")
+                        .expect("Failed to open pfns.txt");
+                    writeln!(f, "PFN ranges:\n{}", pfns).expect("Failed to write to pfns.txt");
                     Ok(a)
                 }
             });
 
-            println!("{:?}", addr_space);
             let addrs = memory_addresses(addr_space);
             let addrs_len = length(addr_space) as usize;
 
@@ -68,6 +81,8 @@ impl ConsecAllocator for ConsecAllocSpoiler {
             let addrs_blocks = (0..addrs_len)
                 .map(|i| MemBlock::new(*addrs.add(i), 4 * KB))
                 .collect_vec();
+            let cons = ConsecBlocks::new(addrs_blocks.clone());
+            cons.log_pfns();
             blocks.extend(addrs_blocks);
         }
 
