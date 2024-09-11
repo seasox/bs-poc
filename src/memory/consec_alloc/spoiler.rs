@@ -59,9 +59,15 @@ impl ConsecAllocator for ConsecAllocSpoiler {
                     let pfns = (0..512 * MB - 4 * KB)
                         .step_by(4 * KB)
                         .map(|i| base.byte_add(i).pfn().unwrap())
-                        .sorted()
                         .collect_vec();
-                    let pfns = pfns.format_pfns();
+                    let mut filtered_pfns = vec![];
+                    for (p1, p2) in pfns.windows(2).map(|w| (w[0], w[1])).step_by(2) {
+                        filtered_pfns.push(p1);
+                        if p2 != p1 + PAGE_SIZE as u64 {
+                            filtered_pfns.push(p2);
+                        }
+                    }
+                    let pfns = filtered_pfns.format_pfns();
                     info!("PFN ranges: {}", pfns);
                     let mut f = OpenOptions::new()
                         .create(true)
