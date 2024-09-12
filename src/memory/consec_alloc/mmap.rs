@@ -14,7 +14,9 @@ use itertools::Itertools;
 use rand::prelude::SliceRandom;
 
 use crate::{
-    memory::{AllocChecker, ConsecBlocks, ConsecCheck, DRAMAddr, MemBlock, PfnResolver},
+    memory::{
+        AllocChecker, BytePointer, ConsecBlocks, ConsecCheck, DRAMAddr, MemBlock, PfnResolver,
+    },
     util::{BlacksmithConfig, MemConfiguration, NamedProgress, MB, ROW_SIZE},
 };
 

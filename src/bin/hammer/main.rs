@@ -13,8 +13,9 @@ use bs_poc::{
         PatternAddressMapper,
     },
     memory::{
-        compact_mem, consec_alloc::ConsecAllocSpoiler, ConsecBlocks, ConsecCheckBankTiming,
-        ConsecCheckNone, ConsecCheckPfn, HugepageAllocator, MemBlock, PfnResolver, VictimMemory,
+        compact_mem, consec_alloc::ConsecAllocSpoiler, BytePointer, ConsecBlocks,
+        ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn, HugepageAllocator, MemBlock,
+        PfnResolver, VictimMemory,
     },
     retry,
     util::{

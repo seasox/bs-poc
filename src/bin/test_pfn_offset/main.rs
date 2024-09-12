@@ -1,9 +1,10 @@
 use anyhow::Context;
 use bs_poc::{
-    memory::consec_alloc::{ConsecAllocMmap, ConsecAllocator},
     memory::{
-        compact_mem, construct_memory_tuple_timer, AllocChecker, ConsecCheck,
-        ConsecCheckBankTiming, ConsecCheckPfnBank, DRAMAddr, PfnResolver,
+        compact_mem,
+        consec_alloc::{ConsecAllocMmap, ConsecAllocator},
+        construct_memory_tuple_timer, AllocChecker, ConsecCheck, ConsecCheckBankTiming,
+        ConsecCheckPfnBank, DRAMAddr, PfnOffsetResolver, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
 };

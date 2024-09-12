@@ -1,82 +1,13 @@
+use std::{cell::RefCell, ptr::null_mut};
+
 use crate::{
-    memory::{DRAMAddr, LinuxPageMap},
-    util::{MemConfiguration, NamedProgress, MB, PAGE_SIZE, ROW_SIZE},
+    memory::LinuxPageMap,
+    util::{MB, PAGE_SIZE, ROW_SIZE},
 };
-use anyhow::{bail, Context};
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use itertools::Itertools;
+use anyhow::bail;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
-use lpfs::proc::buddyinfo::BuddyInfo;
-use rand::Rng;
-use std::io::Write;
-use std::{cell::RefCell, fs::OpenOptions, io::Read, process::Command, ptr::null_mut};
-use std::{cmp::min, collections::VecDeque};
 
-use super::{MemoryTupleTimer, VictimMemory, VirtToPhysResolver};
-
-#[derive(Debug)]
-pub struct ConsecBlocks {
-    pub blocks: Vec<MemBlock>,
-}
-
-impl ConsecBlocks {
-    pub fn new(blocks: Vec<MemBlock>) -> Self {
-        ConsecBlocks { blocks }
-    }
-    pub fn dealloc(self) {
-        for block in self.blocks {
-            block.dealloc();
-        }
-    }
-}
-
-impl VictimMemory for ConsecBlocks {
-    fn addr(&self, offset: usize) -> *mut u8 {
-        assert!(offset < self.len(), "Offset {} >= {}", offset, self.len());
-        let mut offset = offset;
-        for block in &self.blocks {
-            if offset < block.len {
-                return block.byte_add(offset).ptr;
-            }
-            offset -= block.len;
-        }
-        unreachable!("block not found for offset 0x{:x}", offset);
-    }
-
-    fn len(&self) -> usize {
-        return self.blocks.iter().map(|block| block.len).sum();
-    }
-}
-
-impl ConsecBlocks {
-    pub fn log_pfns(&self) {
-        let mut pfns = vec![];
-        for block in &self.blocks {
-            let block_pfns = match block.consec_pfns() {
-                Ok(pfns) => pfns,
-                Err(e) => {
-                    error!("Failed to get PFNs: {:?}", e);
-                    return;
-                }
-            };
-            let mut block_pfns = VecDeque::from(block_pfns);
-            let is_cons = pfns.last().map_or(false, |last| *last == block_pfns[0]);
-            if is_cons {
-                pfns.pop();
-                block_pfns.pop_front();
-            }
-            pfns.extend(block_pfns);
-        }
-        let pfns = pfns.format_pfns();
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("pfns.txt")
-            .expect("Failed to open pfns.txt");
-        write!(f, "\nConsecutive PFNs:\n{}\n", pfns).expect("Failed to write to pfns.txt");
-        info!("PFNs:\n{}", pfns);
-    }
-}
+use super::{pfn_offset::CachedPfnOffset, PfnOffset, VirtToPhysResolver};
 
 #[derive(Clone, Debug)]
 pub struct MemBlock {
@@ -85,12 +16,6 @@ pub struct MemBlock {
     /// block length in bytes
     pub len: usize,
     pfn_offset: PfnOffset,
-}
-
-#[derive(Clone, Debug)]
-enum PfnOffset {
-    Fixed(usize),
-    Dynamic(RefCell<Option<(Option<usize>, MemConfiguration, u64)>>),
 }
 
 pub enum HugepageSize {
@@ -156,8 +81,14 @@ impl MemBlock {
     }
 }
 
-impl MemBlock {
-    pub fn byte_add(&self, offset: usize) -> Self {
+pub trait BytePointer {
+    fn byte_add(&self, offset: usize) -> Self;
+    fn ptr(&self) -> *mut u8;
+    fn len(&self) -> usize;
+}
+
+impl BytePointer for MemBlock {
+    fn byte_add(&self, offset: usize) -> Self {
         assert!(
             offset < self.len,
             "MemBlock::byte_add failed. Offset {} >= {}",
@@ -170,141 +101,19 @@ impl MemBlock {
             pfn_offset: self.pfn_offset.clone(),
         }
     }
-}
-
-impl MemBlock {
-    /// Find the PFN-VA offset in rows.
-    ///
-    /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
-    /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
-    /// filtering for possible "bank periods" after each iteration, but this here should be fast enough for now.
-    /// WARNING: This function initializes pfn_offset with the provided mem_config. Calling #pfn_offset(...) with
-    ///          different arguments afterwards WILL NOT reset the OnceCell, potentially causing unintended behavior.
-    pub fn pfn_offset(
-        &self,
-        mem_config: &MemConfiguration,
-        conflict_threshold: u64,
-        timer: &dyn MemoryTupleTimer,
-        progress: Option<&MultiProgress>,
-    ) -> Option<usize> {
-        // reuse cached value if applicable
-        match &self.pfn_offset {
-            PfnOffset::Fixed(offset) => return Some(*offset),
-            PfnOffset::Dynamic(pfn_offset) => {
-                let mut state = pfn_offset.borrow_mut();
-                if let Some((offset, cfg, thresh)) = state.as_ref() {
-                    if offset.is_some() && cfg == mem_config && *thresh == conflict_threshold {
-                        info!("Reuse cached offset");
-                        return *offset;
-                    } else {
-                        info!("Resetting PFN offset state, parameter change detected");
-                        *state = None;
-                    }
-                }
-            }
-        }
-        // find PFN offset
-        let num_rows = self.len / ROW_SIZE;
-        let max_rows = mem_config.bank_function_period() as usize / 2; // TODO: check if it is valid for all bank functions to divide by two here (I think it is)
-        let num_rows = min(num_rows, max_rows);
-        let offset = progress.map(|progress| {
-            progress.add(
-                ProgressBar::new(num_rows as u64).with_style(ProgressStyle::named_bar("Offset")),
-            )
-        });
-        let pairs = progress.map(|progress| {
-            progress.add(
-                ProgressBar::new((num_rows * (num_rows - 1) / 2) as u64)
-                    .with_style(ProgressStyle::named_bar("Pairs")),
-            )
-        });
-
-        // do a quick pre-check. Toggling the uppermost bit in the bank function should result in a fast timing.
-        if self.len >= num_rows * ROW_SIZE {
-            let addr1 = self.ptr;
-            let addr2 = self.byte_add(num_rows * ROW_SIZE).ptr;
-            let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
-            if time > conflict_threshold {
-                info!("Pre-check failed. Block is not consecutive");
-                return self.retain_state(None, mem_config, conflict_threshold);
-            }
-        } else {
-            debug!("Skip pre-check, block is too small");
-        }
-
-        'next_offset: for row_offset in 0..num_rows {
-            let addr_offset = (row_offset * ROW_SIZE) as isize;
-            debug!(
-                "Checking row offset {} (effective offset: 0x{:x})",
-                row_offset, addr_offset
-            );
-            // update progress
-            if let (Some(offset), Some(pairs)) = (&offset, &pairs) {
-                offset.inc(1);
-                pairs.reset();
-            }
-            // iterate over row pairs
-            for row_pair in (0..num_rows).combinations(2) {
-                if let Some(pairs) = &pairs {
-                    pairs.inc(1);
-                }
-                let offset1 = row_pair[0] * ROW_SIZE;
-                let offset2 = row_pair[1] * ROW_SIZE;
-                let addr1 = self.byte_add(offset1).ptr;
-                let addr2 = self.byte_add(offset2).ptr;
-                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
-                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
-                let same_bank = dram1.bank == dram2.bank;
-                let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
-                if (same_bank && time < conflict_threshold)
-                    || (!same_bank && time > conflict_threshold)
-                {
-                    debug!(
-                        "Expected {} banks for ({:?}, {:?}), but timed {} {} {}",
-                        if same_bank { "same" } else { "differing" },
-                        offset1 / ROW_SIZE,
-                        offset2 / ROW_SIZE,
-                        time,
-                        if same_bank { "<" } else { ">" },
-                        conflict_threshold
-                    );
-                    debug!(
-                        "rows: ({}, {}); addrs: (0x{:x}, 0x{:x}); DRAM: {:?}, {:?}",
-                        offset1 / ROW_SIZE,
-                        offset2 / ROW_SIZE,
-                        addr1 as u64,
-                        addr2 as u64,
-                        dram1,
-                        dram2
-                    );
-                    continue 'next_offset;
-                }
-            }
-            return self.retain_state(Some(row_offset), mem_config, conflict_threshold);
-        }
-        self.retain_state(None, mem_config, conflict_threshold)
+    fn ptr(&self) -> *mut u8 {
+        self.ptr
     }
-
-    fn retain_state(
-        &self,
-        offset: Option<usize>,
-        mem_config: &MemConfiguration,
-        threshold: u64,
-    ) -> Option<usize> {
-        match &self.pfn_offset {
-            PfnOffset::Dynamic(pfn_offset) => {
-                let mut state = pfn_offset.borrow_mut();
-                *state = Some((offset, mem_config.clone(), threshold));
-                offset
-            }
-            PfnOffset::Fixed(_) => {
-                panic!("Fixed offset should not be set");
-            }
-        }
+    fn len(&self) -> usize {
+        self.len
     }
 }
 
-type ConsecPfns = Vec<u64>;
+impl CachedPfnOffset for MemBlock {
+    fn cached_offset(&self) -> &PfnOffset {
+        &self.pfn_offset
+    }
+}
 
 impl MemBlock {
     pub fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
@@ -329,6 +138,8 @@ pub trait FormatPfns {
     fn format_pfns(&self) -> String;
 }
 
+type ConsecPfns = Vec<u64>;
+
 impl FormatPfns for ConsecPfns {
     fn format_pfns(&self) -> String {
         let mut pfns = String::from("");
@@ -344,6 +155,7 @@ impl FormatPfns for ConsecPfns {
     }
 }
 
+// TODO: we can move this alongside consec_alloc/mmap.rs, but we'll need some more refactoring before (self.pfn_offset is private).
 impl MemBlock {
     pub fn pfn_align(mut self) -> anyhow::Result<Vec<MemBlock>> {
         let mut blocks = vec![];
@@ -424,162 +236,15 @@ impl MemBlock {
     }
 }
 
-unsafe fn mmap_block(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
-    use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
-
-    let v = libc::mmap(
-        addr,
-        len,
-        PROT_READ | PROT_WRITE,
-        MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
-        -1,
-        0,
-    );
-    assert_ne!(v as i64, -1, "mmap: {}", std::io::Error::last_os_error());
-    libc::memset(v, 0x11, len);
-    v
-}
-
-pub fn compact_mem() -> anyhow::Result<()> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("echo 1 | tee /proc/sys/vm/compact_memory")
-        .output()?;
-    if !output.status.success() {
-        bail!("Failed to compact memory. Are we root?");
-    }
-
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg("echo 0 | tee /proc/sys/kernel/randomize_va_space")
-        .output()?;
-    if !output.status.success() {
-        bail!("Failed to disable ASLR. Are we root?");
-    }
-    Ok(())
-}
-
-pub unsafe fn do_random_allocations() {
-    let mut rng = rand::thread_rng();
-    for _ in 0..rng.gen_range(1000..10000) {
-        let len = rng.gen_range(PAGE_SIZE..4 * MB);
-        let v = unsafe { mmap_block(std::ptr::null_mut(), len) };
-        unsafe {
-            libc::munmap(v, len);
-        }
-    }
-}
-
-pub unsafe fn all_locked_blocks() -> anyhow::Result<[u64; 11]> {
-    let mut locked: [u64; 11] = [0; 11];
-    for i in (0..10).rev() {
-        locked[i] = determine_locked_blocks(i)?;
-    }
-    locked[10] = 0;
-    Ok(locked)
-}
-
-pub fn fmt_arr<I>(arr: [I; 11]) -> String
-where
-    I: std::fmt::Display,
-{
-    let mut table = String::new();
-    for value in arr {
-        table.push_str(&format!("{:>7}", value));
-    }
-    table
-}
-
-unsafe fn determine_locked_blocks(order: usize) -> anyhow::Result<u64> {
-    let mut locked = u64::MAX;
-    let alloc_size = (1 << order) * PAGE_SIZE;
-    const MAX_ALLOCS: usize = 65000;
-    const REPETITIONS: usize = 3;
-    //info!("order {}", order);
-    for _repetition in 0..REPETITIONS {
-        let mut allocations = Vec::with_capacity(MAX_ALLOCS);
-        const MAX_REPETITIONS: usize = 10;
-        let mut split_allocations = 0;
-        for i in 0..MAX_ALLOCS {
-            //log_pagetypeinfo();
-            let buddy_before = get_normal_page_nums()?;
-            let v = mmap_block(std::ptr::null_mut(), alloc_size);
-            allocations.push(v);
-            let buddy_after = get_normal_page_nums()?;
-            let diff = diff_arrs(&buddy_before, &buddy_after);
-            locked = min(locked, buddy_before[order]);
-            if diff[order] < 0 {
-                // the last allocation increased the block count -> we encountered a split
-                log_pagetypeinfo();
-                split_allocations += 1;
-                debug!("  {:?}", buddy_before);
-                debug!("- {:?}", buddy_after);
-                debug!("= {:?}", diff);
-            }
-            if split_allocations == MAX_REPETITIONS {
-                //info!("split ({}, {})", locked, buddy_before[order]);
-                debug!("Allocated {} blocks before hitting threshold", i);
-                break;
-            }
-        }
-        for v in allocations {
-            libc::munmap(v, alloc_size);
-        }
-    }
-    Ok(locked)
-}
-
-/// Read /proc/pagetypeinfo to string
-fn read_pagetypeinfo() -> anyhow::Result<String> {
-    let mut s = String::new();
-    let mut f = std::fs::File::open("/proc/pagetypeinfo")?;
-    f.read_to_string(&mut s)?;
-    Ok(s)
-}
-
-/// Log /proc/pagetypeinfo to trace
-pub fn log_pagetypeinfo() {
-    match read_pagetypeinfo() {
-        Ok(pti) => trace!("{}", pti),
-        Err(_) => {}
-    }
-}
-
-/// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
-fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
-    match lpfs::proc::buddyinfo::buddyinfo() {
-        Ok(b) => Ok(b),
-        Err(e) => bail!("{:?}", e),
-    }
-}
-
-pub fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
-    let zones = buddyinfo()?;
-    let zone = zones
-        .iter()
-        .find(|z| z.zone().eq("Normal"))
-        .context("Zone 'Normal' not found")?;
-    return Ok(zone.free_areas().clone());
-}
-
-pub fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
-    let mut diffs: [i64; S] = [Default::default(); S];
-    let mut i = 0;
-    for (&l, &r) in l.iter().zip(r) {
-        diffs[i] = l as i64 - r as i64;
-        i += 1;
-    }
-    diffs
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::memory::memblock::PfnResolver;
     use rand::{thread_rng, Rng};
 
     use crate::{
         memory::{
             construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, MemBlock,
-            MemoryTupleTimer, PfnResolver,
+            MemoryTupleTimer, PfnOffsetResolver,
         },
         util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
     };

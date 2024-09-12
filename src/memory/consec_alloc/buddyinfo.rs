@@ -1,9 +1,13 @@
-use anyhow::bail;
+use std::{cmp::min, io::Read};
+
+use anyhow::{bail, Context};
+use lpfs::proc::buddyinfo::BuddyInfo;
+use rand::Rng;
 
 use crate::{
     memory::{
-        all_locked_blocks, compact_mem, diff_arrs, do_random_allocations, fmt_arr,
-        get_normal_page_nums, log_pagetypeinfo, AllocChecker, ConsecBlocks, ConsecCheck, MemBlock,
+        util::{compact_mem, mmap},
+        AllocChecker, ConsecBlocks, ConsecCheck, MemBlock,
     },
     retry,
     util::{MB, PAGE_SIZE},
@@ -49,6 +53,119 @@ impl ConsecAllocator for ConsecAllocBuddyInfo {
         }
         Ok(ConsecBlocks::new(blocks))
     }
+}
+
+unsafe fn all_locked_blocks() -> anyhow::Result<[u64; 11]> {
+    let mut locked: [u64; 11] = [0; 11];
+    for i in (0..10).rev() {
+        locked[i] = determine_locked_blocks(i)?;
+    }
+    locked[10] = 0;
+    Ok(locked)
+}
+
+unsafe fn do_random_allocations() {
+    let mut rng = rand::thread_rng();
+    for _ in 0..rng.gen_range(1000..10000) {
+        let len = rng.gen_range(PAGE_SIZE..4 * MB);
+        let v = mmap(std::ptr::null_mut(), len);
+        unsafe {
+            libc::munmap(v, len);
+        }
+    }
+}
+
+fn fmt_arr<I>(arr: [I; 11]) -> String
+where
+    I: std::fmt::Display,
+{
+    let mut table = String::new();
+    for value in arr {
+        table.push_str(&format!("{:>7}", value));
+    }
+    table
+}
+
+/// Read /proc/pagetypeinfo to string
+fn read_pagetypeinfo() -> anyhow::Result<String> {
+    let mut s = String::new();
+    let mut f = std::fs::File::open("/proc/pagetypeinfo")?;
+    f.read_to_string(&mut s)?;
+    Ok(s)
+}
+
+/// Log /proc/pagetypeinfo to trace
+fn log_pagetypeinfo() {
+    match read_pagetypeinfo() {
+        Ok(pti) => trace!("{}", pti),
+        Err(_) => {}
+    }
+}
+
+/// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
+fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
+    match lpfs::proc::buddyinfo::buddyinfo() {
+        Ok(b) => Ok(b),
+        Err(e) => bail!("{:?}", e),
+    }
+}
+
+fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
+    let zones = buddyinfo()?;
+    let zone = zones
+        .iter()
+        .find(|z| z.zone().eq("Normal"))
+        .context("Zone 'Normal' not found")?;
+    return Ok(zone.free_areas().clone());
+}
+
+fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
+    let mut diffs: [i64; S] = [Default::default(); S];
+    let mut i = 0;
+    for (&l, &r) in l.iter().zip(r) {
+        diffs[i] = l as i64 - r as i64;
+        i += 1;
+    }
+    diffs
+}
+
+unsafe fn determine_locked_blocks(order: usize) -> anyhow::Result<u64> {
+    let mut locked = u64::MAX;
+    let alloc_size = (1 << order) * PAGE_SIZE;
+    const MAX_ALLOCS: usize = 65000;
+    const REPETITIONS: usize = 3;
+    //info!("order {}", order);
+    for _repetition in 0..REPETITIONS {
+        let mut allocations = Vec::with_capacity(MAX_ALLOCS);
+        const MAX_REPETITIONS: usize = 10;
+        let mut split_allocations = 0;
+        for i in 0..MAX_ALLOCS {
+            //log_pagetypeinfo();
+            let buddy_before = get_normal_page_nums()?;
+            let v = mmap(std::ptr::null_mut(), alloc_size);
+            allocations.push(v);
+            let buddy_after = get_normal_page_nums()?;
+            let diff = diff_arrs(&buddy_before, &buddy_after);
+            locked = min(locked, buddy_before[order]);
+            if diff[order] < 0 {
+                // the last allocation increased the block count -> we encountered a split
+                log_pagetypeinfo();
+                split_allocations += 1;
+                debug!("  {:?}", buddy_before);
+                debug!("- {:?}", buddy_after);
+                debug!("= {:?}", diff);
+            }
+            if split_allocations == MAX_REPETITIONS {
+                //info!("split ({}, {})", locked, buddy_before[order]);
+                debug!("Allocated {} blocks before hitting threshold", i);
+                break;
+            }
+        }
+        for v in allocations {
+            libc::munmap(v, alloc_size);
+        }
+    }
+    Ok(locked)
 }
 
 impl MemBlock {

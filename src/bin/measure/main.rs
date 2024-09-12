@@ -3,7 +3,8 @@ use std::ptr::null_mut;
 use anyhow::{bail, Context};
 use bs_poc::{
     memory::{
-        construct_memory_tuple_timer, AllocChecker, ConsecCheckPfn, DRAMAddr, MemBlock, PfnResolver,
+        construct_memory_tuple_timer, AllocChecker, BytePointer, ConsecCheckPfn, DRAMAddr,
+        MemBlock, PfnResolver,
     },
     util::{BlacksmithConfig, MemConfiguration, MB, ROW_SIZE},
 };

@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::memory::{
-    ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
+    BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
 };
 use crate::util::{group, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
@@ -309,8 +309,9 @@ impl<'a> Hammerer<'a> {
         info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr| {
-            let block_idx = blocks.iter().find_position(|base| unsafe {
-                addr as u64 >= base.ptr as u64 && (addr as u64) < (base.ptr.add(base.len) as u64)
+            let block_idx = blocks.iter().find_position(|base| {
+                addr as u64 >= base.ptr as u64
+                    && (addr as u64) < (base.byte_add(base.len).ptr as u64)
             });
             let found = block_idx.is_some();
             if !found {
