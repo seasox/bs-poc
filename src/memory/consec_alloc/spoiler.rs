@@ -1,6 +1,10 @@
+use crate::memory::memblock::FormatPfns;
+use crate::memory::util::compact_mem;
+use std::fs::OpenOptions;
+use std::io::Write;
+
 use itertools::Itertools;
 
-use crate::memory::compact_mem;
 use crate::util::{KB, MB};
 use crate::{length, memory_addresses, retry};
 use crate::{
@@ -56,18 +60,7 @@ impl ConsecAllocator for ConsecAllocSpoiler {
                     Err(anyhow::anyhow!("Failed to get address space"))
                 } else {
                     let base = MemBlock::new(search_buffer, 512 * MB);
-                    let pfns = (0..512 * MB - 4 * KB)
-                        .step_by(4 * KB)
-                        .map(|i| base.byte_add(i).pfn().unwrap())
-                        .collect_vec();
-                    let mut filtered_pfns = vec![];
-                    for (p1, p2) in pfns.windows(2).map(|w| (w[0], w[1])).step_by(2) {
-                        filtered_pfns.push(p1);
-                        if p2 != p1 + PAGE_SIZE as u64 {
-                            filtered_pfns.push(p2);
-                        }
-                    }
-                    let pfns = filtered_pfns.format_pfns();
+                    let pfns = base.consec_pfns()?.format_pfns();
                     info!("PFN ranges: {}", pfns);
                     let mut f = OpenOptions::new()
                         .create(true)
