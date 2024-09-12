@@ -21,7 +21,7 @@ pub fn compact_mem() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn mmap(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
+pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
     use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
 
     let v = unsafe {
@@ -34,7 +34,17 @@ pub fn mmap(addr: *mut libc::c_void, len: usize) -> *mut libc::c_void {
             0,
         )
     };
-    assert_ne!(v as i64, -1, "mmap: {}", std::io::Error::last_os_error());
+    assert_ne!(
+        v,
+        libc::MAP_FAILED,
+        "mmap: {}",
+        std::io::Error::last_os_error()
+    );
     unsafe { libc::memset(v, 0x11, len) };
-    v
+    v as *mut P
+}
+
+pub fn munmap<P>(addr: *mut P, len: usize) {
+    let r = unsafe { libc::munmap(addr as *mut libc::c_void, len) };
+    assert_eq!(r, 0, "munmap: {}", std::io::Error::last_os_error());
 }
