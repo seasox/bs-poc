@@ -185,19 +185,6 @@ pub struct Memory {
     layout: Layout,
 }
 
-impl Memory {
-    /// Move an instance of T into the allocated memory region at `offset', overwriting
-    /// anything that might reside at `offset', returning a pinned reference to the moved
-    /// object. This is an unsafe operation, as it relies on direct pointer operations.
-    pub unsafe fn move_object<T: Unpin>(&self, x: T, offset: usize) -> Pin<&mut T> {
-        let addr = self.addr.add(offset) as *mut T;
-        core::ptr::write(addr, x);
-        let pinned = Pin::new(&mut *addr);
-        assert_eq!((pinned.deref() as *const T) as usize, addr as usize);
-        pinned
-    }
-}
-
 impl Drop for Memory {
     fn drop(&mut self) {
         unsafe {
