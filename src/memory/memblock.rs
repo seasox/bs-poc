@@ -224,12 +224,13 @@ mod tests {
     use crate::memory::memblock::PfnResolver;
     use rand::{thread_rng, Rng};
 
+    use crate::blacksmith::blacksmith_config::{BlacksmithConfig, MemConfiguration};
     use crate::{
         memory::{
             construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, MemBlock,
             MemoryTupleTimer, PfnOffsetResolver,
         },
-        util::{BlacksmithConfig, MemConfiguration, MB, ROW_SHIFT, ROW_SIZE},
+        util::{MB, ROW_SHIFT, ROW_SIZE},
     };
 
     const CONFIG_FILE: &str = "config/bs-config.json";

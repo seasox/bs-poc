@@ -1,34 +1,32 @@
+use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
+use crate::hammerer::Hammering;
+use crate::memory::mem_configuration::MemConfiguration;
+use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
+use crate::util::{group, BASE_MSB};
+use crate::victim::HammerVictim;
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
-use std::arch::x86_64::{__rdtscp, _mm_clflush, _mm_mfence};
+use std::arch::x86_64::{__rdtscp, _mm_mfence};
 use std::fmt::Debug;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
-
-use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::{group, MemConfiguration, BASE_MSB};
-use crate::victim::HammerVictim;
-
-pub trait Hammering {
-    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult>;
-}
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct Aggressor(u64);
 
 #[derive(Deserialize, Debug, Clone)]
 struct AggressorAccessPattern {
-    frequency: usize,
-    amplitude: i32,
-    start_offset: usize,
-    aggressors: Vec<Aggressor>,
+    //frequency: usize,
+    //amplitude: i32,
+    //start_offset: usize,
+    //aggressors: Vec<Aggressor>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(dead_code)]
 pub struct BitFlip {
     pub dram_addr: DRAMAddr,
     bitmask: u8,
@@ -104,7 +102,7 @@ impl PatternAddressMapper {
                         let addr =
                             flip.dram_addr.to_virt(BASE_MSB as *const u8, mem_config) as usize;
                         let offset = addr - BASE_MSB as usize;
-                        let addr = blocks.addr(offset as usize);
+                        let addr = blocks.addr(offset);
                         addr as *const u8
                     })
                     .collect()
@@ -118,7 +116,7 @@ impl PatternAddressMapper {
         mem_config: MemConfiguration,
         block_shift: usize,
         memory: &ConsecBlocks,
-    ) -> anyhow::Result<Vec<AggressorPtr>> {
+    ) -> Result<Vec<AggressorPtr>> {
         info!("Relocating aggressors with shift {}", block_shift);
         let block_size = 1 << block_shift;
         let addrs = &self.aggressor_to_addr;
@@ -195,13 +193,13 @@ pub struct FuzzSummary {
 #[derive(Deserialize, Debug, Clone)]
 pub struct HammeringPattern {
     pub id: String,
-    base_period: i32,
-    max_period: usize,
+    //base_period: i32,
+    //max_period: usize,
     total_activations: u32,
     num_refresh_intervals: u32,
-    is_location_dependent: bool,
+    //is_location_dependent: bool,
     pub access_ids: Vec<Aggressor>,
-    agg_access_patterns: Vec<AggressorAccessPattern>,
+    //agg_access_patterns: Vec<AggressorAccessPattern>,
     pub address_mappings: Vec<PatternAddressMapper>,
     //code_jitter: CodeJitter,
 }
@@ -258,36 +256,6 @@ pub struct HammerResult {
     pub attempt: u8,
 }
 
-pub struct DummyHammerer<'a> {
-    blocks: &'a ConsecBlocks,
-    flip_addr: *mut u8,
-}
-
-impl<'a> DummyHammerer<'a> {
-    pub fn new(blocks: &'a ConsecBlocks, flip_addr: *mut u8) -> Self {
-        DummyHammerer { blocks, flip_addr }
-    }
-}
-
-impl<'a> Hammering for DummyHammerer<'a> {
-    fn hammer(&self, victim: &mut dyn HammerVictim, _max_runs: u64) -> Result<HammerResult> {
-        victim.init();
-        unsafe {
-            debug!(
-                "Flip address 0x{:02X} from {} to {}",
-                self.flip_addr as usize, *self.flip_addr, !*self.flip_addr
-            );
-            *self.flip_addr = !*self.flip_addr;
-            _mm_clflush(self.flip_addr);
-        }
-        let result = victim.check();
-        if result {
-            return Ok(HammerResult { run: 0, attempt: 0 });
-        }
-        bail!("Hammering not successful")
-    }
-}
-
 pub struct Hammerer<'a, Mem: BytePointer> {
     blocks: Vec<&'a Mem>,
     mem_config: MemConfiguration,
@@ -306,9 +274,9 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
 
-        let hammer_log_cb = |action: &str, addr| {
+        let hammer_log_cb = |action: &str, addr: *const u8| {
             let block_idx = blocks.iter().find_position(|base| {
-                addr as u64 >= base.ptr() as u64 && (addr as u64) < (base.addr(base.len()) as u64)
+                (addr as u64) >= base.ptr() as u64 && (addr as u64) < (base.addr(base.len()) as u64)
             });
             let found = block_idx.is_some();
             if !found {
@@ -337,7 +305,7 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
 
         let num_accessed_addrs = hammering_addrs
             .into_iter()
-            .map(|x| (*x as usize) & !(0xFFF))
+            .map(|x| (*x as usize) & !0xFFF)
             .unique()
             .count();
 
@@ -353,12 +321,12 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
                 .with_context(|| "failed to write function to disk")?;
         }
 
-        return Ok(Hammerer {
+        Ok(Hammerer {
             blocks,
             program,
             mem_config,
             mapping,
-        });
+        })
     }
 
     fn do_random_accesses(

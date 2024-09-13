@@ -1,11 +1,12 @@
-use crate::memory::memblock::FormatPfns;
-use crate::memory::util::{compact_mem, mmap, munmap};
+use crate::memory::FormatPfns;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::ptr::null_mut;
 
 use itertools::Itertools;
 
+use super::ConsecAllocator;
+use crate::allocator::util::{compact_mem, mmap, munmap};
 use crate::util::MB;
 use crate::{addr_space, length, memory_addresses, retry};
 use crate::{
@@ -13,11 +14,9 @@ use crate::{
     util::PAGE_SIZE,
 };
 
-use super::ConsecAllocator;
+pub struct Spoiler {}
 
-pub struct ConsecAllocSpoiler {}
-
-impl ConsecAllocSpoiler {
+impl Spoiler {
     pub fn new() -> Self {
         Self {}
     }
@@ -40,7 +39,7 @@ impl FromRaw<addr_space> for AddrSpace {
     }
 }
 
-impl ConsecAllocator for ConsecAllocSpoiler {
+impl ConsecAllocator for Spoiler {
     fn block_size(&self) -> usize {
         1 * MB
     }

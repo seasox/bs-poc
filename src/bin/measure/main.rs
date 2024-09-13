@@ -1,12 +1,14 @@
 use std::ptr::null_mut;
 
 use anyhow::{bail, Context};
+use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+use bs_poc::memory::mem_configuration::MemConfiguration;
 use bs_poc::{
     memory::{
         construct_memory_tuple_timer, AllocChecker, BytePointer, ConsecCheckPfn, DRAMAddr,
         MemBlock, PfnResolver,
     },
-    util::{BlacksmithConfig, MemConfiguration, MB, ROW_SIZE},
+    util::{MB, ROW_SIZE},
 };
 use clap::Parser;
 use log::info;

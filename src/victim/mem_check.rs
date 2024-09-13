@@ -1,13 +1,9 @@
 use anyhow::Context;
 
-use crate::{forge::BitFlip, memory::VictimMemory, util::MemConfiguration};
-
-pub trait HammerVictim {
-    fn init(&mut self) {}
-    /// returns true if flip was successful
-    fn check(&mut self) -> bool;
-    fn log_report(&self) {}
-}
+use crate::hammerer::blacksmith::hammerer::BitFlip;
+use crate::memory::mem_configuration::MemConfiguration;
+use crate::memory::VictimMemory;
+use crate::victim::HammerVictim;
 
 pub struct HammerVictimMemCheck<'a> {
     mem_config: MemConfiguration,

@@ -1,6 +1,7 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::{jitter::AggressorPtr, util::MemConfiguration};
+use crate::hammerer::blacksmith::jitter::AggressorPtr;
+use crate::memory::mem_configuration::MemConfiguration;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

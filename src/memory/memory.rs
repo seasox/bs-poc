@@ -2,14 +2,13 @@ use anyhow::Result;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
-use crate::{
-    forge::BitFlip,
-    jitter::AggressorPtr,
-    memory::DRAMAddr,
-    util::{MemConfiguration, PAGE_SIZE},
-};
+use crate::{memory::DRAMAddr, util::PAGE_SIZE};
 
-use super::{allocator::HugepageAllocator, LinuxPageMap, PfnResolver, VirtToPhysResolver};
+use super::{LinuxPageMap, PfnResolver, VirtToPhysResolver};
+use crate::allocator::hugepage::HugepageAllocator;
+use crate::hammerer::blacksmith::hammerer::BitFlip;
+use crate::hammerer::blacksmith::jitter::AggressorPtr;
+use crate::memory::mem_configuration::MemConfiguration;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},

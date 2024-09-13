@@ -13,23 +13,20 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use rand::prelude::SliceRandom;
 
+use super::ConsecAllocator;
 use crate::{
-    memory::{
-        AllocChecker, BytePointer, ConsecBlocks, ConsecCheck, DRAMAddr, MemBlock, PfnResolver,
-    },
-    util::{BlacksmithConfig, MemConfiguration, NamedProgress, MB, ROW_SIZE},
+    memory::{AllocChecker, BytePointer, ConsecBlocks, ConsecCheck, MemBlock},
+    util::{NamedProgress, MB, ROW_SIZE},
 };
 
-use super::ConsecAllocator;
-
-pub struct ConsecAllocMmap {
+pub struct Mmap {
     consec_checker: ConsecCheck,
     progress: Option<MultiProgress>,
 }
 
-impl ConsecAllocMmap {
+impl Mmap {
     pub fn new(consec_checker: ConsecCheck, progress: Option<MultiProgress>) -> Self {
-        ConsecAllocMmap {
+        Mmap {
             consec_checker,
             progress,
         }
@@ -115,7 +112,7 @@ fn spawn_allocator_thread(
     })
 }
 
-impl ConsecAllocator for ConsecAllocMmap {
+impl ConsecAllocator for Mmap {
     fn block_size(&self) -> usize {
         4 * MB
     }
@@ -156,12 +153,14 @@ impl ConsecAllocator for ConsecAllocMmap {
 
         let blocks = blocks.lock().unwrap().clone();
 
-        let blocks = blocks
+        let _blocks = blocks
             .into_iter()
             .map(|block| block.pfn_align().expect("Failed to align block"))
             .flatten()
             .collect_vec();
 
+        todo!("Migrate config file to struct member");
+        /*
         let pfns: Vec<_> = blocks
             .iter()
             .map(|block| block.pfn().expect("Failed to get PFN"))
@@ -182,6 +181,6 @@ impl ConsecAllocator for ConsecAllocMmap {
         if let Some(progress) = progress {
             progress.finish();
         }
-        Ok(consecs)
+        Ok(consecs)*/
     }
 }

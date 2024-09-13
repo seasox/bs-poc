@@ -1,9 +1,9 @@
 use anyhow::Result;
+use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+use bs_poc::memory::mem_configuration::MemConfiguration;
 use bs_poc::memory::{construct_memory_tuple_timer, BytePointer};
 use bs_poc::memory::{DRAMAddr, Memory};
 use clap::Parser;
-
-use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]

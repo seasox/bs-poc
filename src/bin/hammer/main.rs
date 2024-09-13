@@ -7,29 +7,29 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use bs_poc::allocator::hugepage::HugepageAllocator;
+use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
+use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+use bs_poc::hammerer::blacksmith::hammerer::{
+    FuzzSummary, HammerResult, HammeringPattern, PatternAddressMapper,
+};
+use bs_poc::hammerer::Hammering;
+use bs_poc::memory::mem_configuration::MemConfiguration;
+use bs_poc::victim::HammerVictim;
 use bs_poc::{
-    forge::{
-        DummyHammerer, FuzzSummary, HammerResult, Hammerer, Hammering, HammeringPattern,
-        PatternAddressMapper,
-    },
-    memory::{
-        compact_mem, consec_alloc::ConsecAllocSpoiler, BytePointer, ConsecBlocks,
-        ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn, HugepageAllocator, MemBlock,
-        PfnResolver,
-    },
-    retry,
-    util::{
-        init_logging_with_progress, AttackState, BlacksmithConfig, MemConfiguration, PipeIPC, IPC,
-        PAGE_SIZE,
-    },
-    victim::{HammerVictim, HammerVictimMemCheck},
+    allocator,
+    allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
+    hammerer,
+    memory::ConsecCheck,
 };
 use bs_poc::{
-    memory::consec_alloc::{
-        ConsecAlloc, ConsecAllocBuddyInfo, ConsecAllocCoCo, ConsecAllocHugepageRnd,
-        ConsecAllocMmap, ConsecAllocator,
+    memory::{
+        BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
+        MemBlock, PfnResolver,
     },
-    memory::ConsecCheck,
+    retry,
+    util::{init_logging_with_progress, AttackState, PipeIPC, IPC, PAGE_SIZE},
+    victim::HammerVictimMemCheck,
 };
 use clap::Parser;
 use indicatif::MultiProgress;
@@ -55,7 +55,7 @@ struct CliArgs {
     mapping: Option<String>,
     #[clap(long = "consec-check", default_value = "bank-timing")]
     consec_check: ConsecCheckType,
-    #[clap(long = "alloc-strategy", default_value = "mmap")]
+    #[clap(long = "alloc-strategy", default_value = "spoiler")]
     alloc_strategy: ConsecAllocType,
     #[clap(long = "hammerer", default_value = "blacksmith")]
     hammerer: HammerStrategy,
@@ -94,14 +94,12 @@ fn create_allocator_from_cli(
     progress: Option<MultiProgress>,
 ) -> ConsecAlloc {
     match alloc_strategy {
-        ConsecAllocType::BuddyInfo => {
-            ConsecAlloc::BuddyInfo(ConsecAllocBuddyInfo::new(consec_checker))
-        }
-        ConsecAllocType::CoCo => ConsecAlloc::CoCo(ConsecAllocCoCo {}),
-        ConsecAllocType::Mmap => ConsecAlloc::Mmap(ConsecAllocMmap::new(consec_checker, progress)),
+        ConsecAllocType::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(consec_checker)),
+        ConsecAllocType::CoCo => ConsecAlloc::CoCo(CoCo {}),
+        ConsecAllocType::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
-        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(ConsecAllocHugepageRnd::new(1)),
-        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(ConsecAllocSpoiler::new()),
+        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
+        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Spoiler::new()),
     }
 }
 
@@ -189,21 +187,6 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
     Ok(LoadedPattern { pattern, mapping })
 }
 
-unsafe fn alloc_memory(
-    mut alloc_strategy: ConsecAlloc,
-    mem_config: MemConfiguration,
-    mapping: &PatternAddressMapper,
-) -> anyhow::Result<ConsecBlocks> {
-    let block_size = alloc_strategy.block_size();
-    let block_shift = block_size.ilog2() as usize;
-    let num_sets = mapping.aggressor_sets(mem_config, block_shift).len();
-
-    compact_mem()?;
-    let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size)?;
-    memory.log_pfns();
-    Ok(memory)
-}
-
 fn hammer(
     hammerer: HammerStrategy,
     pattern: HammeringPattern,
@@ -222,7 +205,7 @@ fn hammer(
                 block_shift as usize,
                 memory,
             )?;
-            Box::new(Hammerer::new(
+            Box::new(hammerer::Blacksmith::new(
                 mem_config,
                 pattern.clone(),
                 mapping.clone(),
@@ -232,15 +215,12 @@ fn hammer(
         }
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, &memory);
-            let flip = flip
-                .concat()
-                .pop()
-                .unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
+            let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
             info!(
                 "Running dummy hammerer with flip at VA 0x{:02x}",
                 flip as usize
             );
-            let hammerer = DummyHammerer::new(&memory, flip);
+            let hammerer = hammerer::Dummy::new(flip);
             Box::new(hammerer)
         }
         HammerStrategy::None => {
@@ -350,7 +330,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     let block_size = alloc_strategy.block_size();
 
     info!("Starting bait allocation");
-    let memory = alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
+    let memory = allocator::alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
     info!("Allocated {} bytes of memory", memory.len());
 
     let mut victim = spawn_victim(&args.target)?;

@@ -1,31 +1,28 @@
 use std::{cmp::min, io::Read};
 
 use anyhow::{bail, Context};
-use lpfs::proc::buddyinfo::BuddyInfo;
+use lpfs::proc::buddyinfo::BuddyInfo as ProcBuddyInfo;
 use rand::Rng;
 
+use super::ConsecAllocator;
+use crate::allocator::util::{compact_mem, mmap};
 use crate::{
-    memory::{
-        util::{compact_mem, mmap},
-        AllocChecker, ConsecBlocks, ConsecCheck, MemBlock,
-    },
+    memory::{AllocChecker, ConsecBlocks, ConsecCheck, MemBlock},
     retry,
     util::{MB, PAGE_SIZE},
 };
 
-use super::ConsecAllocator;
-
-pub struct ConsecAllocBuddyInfo {
+pub struct BuddyInfo {
     consec_checker: ConsecCheck,
 }
 
-impl ConsecAllocBuddyInfo {
+impl BuddyInfo {
     pub fn new(consec_checker: ConsecCheck) -> Self {
-        ConsecAllocBuddyInfo { consec_checker }
+        BuddyInfo { consec_checker }
     }
 }
 
-impl ConsecAllocator for ConsecAllocBuddyInfo {
+impl ConsecAllocator for BuddyInfo {
     fn block_size(&self) -> usize {
         4 * MB
     }
@@ -103,7 +100,7 @@ fn log_pagetypeinfo() {
 }
 
 /// A small wrapper around buddyinfo() from lpfs, which is not convertible to anyhow::Result
-fn buddyinfo() -> anyhow::Result<Vec<BuddyInfo>> {
+fn buddyinfo() -> anyhow::Result<Vec<ProcBuddyInfo>> {
     match lpfs::proc::buddyinfo::buddyinfo() {
         Ok(b) => Ok(b),
         Err(e) => bail!("{:?}", e),

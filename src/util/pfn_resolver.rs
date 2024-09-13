@@ -1,4 +1,4 @@
-use super::{LinuxPageMap, VirtToPhysResolver};
+use crate::memory::{LinuxPageMap, VirtToPhysResolver};
 
 pub trait PfnResolver {
     fn pfn(&self) -> anyhow::Result<u64>;

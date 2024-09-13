@@ -9,9 +9,9 @@ use crate::{
 
 use super::ConsecAllocator;
 
-pub struct ConsecAllocCoCo {}
+pub struct CoCo {}
 
-impl ConsecAllocator for ConsecAllocCoCo {
+impl ConsecAllocator for CoCo {
     fn block_size(&self) -> usize {
         4 * MB
     }

@@ -1,27 +1,27 @@
+use super::ConsecAllocator;
+use crate::allocator::hugepage::HugepageAllocator;
 use crate::{
-    memory::{BytePointer, ConsecBlocks, HugepageAllocator, MemBlock},
+    memory::{BytePointer, ConsecBlocks, MemBlock},
     util::{make_vec, MB},
 };
 use rand::prelude::SliceRandom;
 
-use super::ConsecAllocator;
-
-pub struct ConsecAllocHugepageRnd {
+pub struct HugepageRandomized {
     hugepages: Vec<ConsecBlocks>,
 }
 
-impl ConsecAllocHugepageRnd {
+impl HugepageRandomized {
     pub fn new(num_hugepages: u8) -> Self {
         let hugepages = make_vec(num_hugepages as usize, |_| unsafe {
             HugepageAllocator::new()
                 .alloc_consec_blocks(1024 * MB)
                 .expect("hugepage alloc")
         });
-        ConsecAllocHugepageRnd { hugepages }
+        HugepageRandomized { hugepages }
     }
 }
 
-impl ConsecAllocator for ConsecAllocHugepageRnd {
+impl ConsecAllocator for HugepageRandomized {
     fn block_size(&self) -> usize {
         4 * MB
     }

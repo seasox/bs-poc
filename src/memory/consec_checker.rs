@@ -1,12 +1,12 @@
 use anyhow::bail;
 use indicatif::MultiProgress;
 
+use super::{construct_memory_tuple_timer, MemBlock, PfnOffsetResolver};
+use crate::memory::mem_configuration::MemConfiguration;
 use crate::{
     memory::{BytePointer, DRAMAddr, FormatPfns, PfnResolver},
-    util::{MemConfiguration, PAGE_SIZE, ROW_SIZE},
+    util::{PAGE_SIZE, ROW_SIZE},
 };
-
-use super::{construct_memory_tuple_timer, MemBlock, PfnOffsetResolver};
 
 pub trait AllocChecker {
     fn check(&self, block: &MemBlock) -> anyhow::Result<bool>;

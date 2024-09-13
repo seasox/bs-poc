@@ -1,3 +1,5 @@
+pub use anyhow::Result;
+
 pub trait Anyhow<T> {
     fn anyhow(self) -> anyhow::Result<T>;
 }

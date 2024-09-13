@@ -2,16 +2,14 @@ use super::keyed_cache::KeyedCache;
 use std::cmp::min;
 
 use super::DRAMAddr;
+use super::{pfn_offset::CachedPfnOffset, BytePointer, MemoryTupleTimer};
+use crate::memory::mem_configuration::MemConfiguration;
 use crate::util::NamedProgress;
 use crate::util::ROW_SIZE;
 use indicatif::MultiProgress;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use itertools::Itertools;
-
-use crate::util::MemConfiguration;
-
-use super::{pfn_offset::CachedPfnOffset, BytePointer, MemoryTupleTimer};
 
 pub trait PfnOffsetResolver {
     fn pfn_offset(
