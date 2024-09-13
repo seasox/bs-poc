@@ -4,6 +4,7 @@
 
 // Include pow library
 #include <math.h>
+#include <assert.h>
 
 uint64_t *extract_diffBuffer(uint8_t *buffer, uint64_t profile_size, uint64_t *size);
 uint64_t sub_abs(uint64_t a, uint64_t b);
@@ -251,142 +252,149 @@ void analyze_and_print_cluster(uint8_t *buffer, int cluster_index)
 	exit(0);
 }
 
+void log_measurements(const char *fname, uint64_t *measurementBuffer, size_t count)
+{
+	FILE *file = fopen(fname, "w+");
+	if (file == NULL)
+	{
+		printf("Error opening file!\n");
+		exit(1);
+	}
+	for (int i = 0; i < count; i++)
+	{
+		fprintf(file, "%d,%lu\n", i, measurementBuffer[i]);
+	}
+	fclose(file);
+}
+
 struct addr_space *auto_spoiler(uint8_t *buffer)
 {
-
-	// system("echo 123456 | /usr/bin/sudo -S sh -c \"echo 1 >> /proc/sys/vm/compact_memory\"");
-	srand((unsigned int)time(NULL));
+	clock_t start = clock();
 	////////////////////////////////SPOILER////////////////////////////////////
 	// Warmup loop to avoid initial spike in timings
-	clock_t cl = clock();
-
 #define PASS asm("nop")
 
 	for (int i = 0; i < 1000000; i++)
 		PASS;
 #define WINDOW 64
 
-	srand((unsigned int)time(NULL));
-	float timer = 0.0;
+	// JB: do the actual spoiler measurements
+	uint64_t measurementBuffer[PAGE_COUNT] = {0};
+	uint64_t diffBuffer[PAGE_COUNT] = {0};
+	{
+		int t2_prev = 0;
+		// for each page in [WINDOW...PAGE_COUNT)
+		for (int p = WINDOW; p < PAGE_COUNT; p++)
+		{
+			uint64_t total = 0;
+			int cc = 0;
+			for (int r = 0; r < SPOILER_ROUNDS; r++)
+			{
+				uint32_t tt = 0;
+				for (int i = WINDOW; i >= 0; i--)
+				{
+					buffer[(p - i) * PAGE_SIZE] = 0;
+				}
+				measure(buffer, &tt);
+				// printf("tt = %lu\n", tt);
 
+				if (tt < THRESH_OUTLIER)
+				{
+					total = total + tt;
+					// printf("total = %lu\n", total);
+					cc++;
+				}
+			}
+
+			if (cc > 0)
+			{
+				uint64_t result = total / cc;
+				measurementBuffer[p] = result;
+				if (total / SPOILER_ROUNDS < t2_prev)
+				{
+					diffBuffer[p] = 0;
+				}
+				else
+				{
+					diffBuffer[p] = (total / SPOILER_ROUNDS) - t2_prev;
+				}
+			}
+			t2_prev = total / SPOILER_ROUNDS;
+		}
+	}
+	log_measurements("measurements.csv", measurementBuffer, PAGE_COUNT);
+	log_measurements("diffs.csv", diffBuffer, PAGE_COUNT);
+
+	const uint64_t THRESH_LOW = 400;
+	const uint64_t THRESH_HI = 800;
+
+	// JB: find clusters in diffBuffer, probably for debugging?
+	{
+		// Logic to find threshold values
+		const uint64_t search_space = PAGE_COUNT; // This can be reduced to speed up the process
+		assert(search_space <= PAGE_COUNT);
+
+		// Start clock
+		clock_t cl = clock();
+		uint64_t *clusters = (uint64_t *)malloc(search_space * sizeof(uint64_t));
+		uint64_t *centers = (uint64_t *)malloc(3 * sizeof(uint64_t));
+
+		srand((unsigned int)time(NULL)); // kmeans uses random values for initial centers: seed the RNG
+		centers = kmeans(diffBuffer, search_space, 3, 100, clusters);
+
+		// dump the time measurements and the cluster assignments to a file
+		FILE *file = fopen("memory_profiling/logs/spoiler_cluster.csv", "w+");
+		if (file == NULL)
+		{
+			printf("Error opening file!\n");
+			exit(1);
+		}
+		fprintf(file, "index,diffBuffer,cluster\n");
+		for (int i = 0; i < search_space; i++)
+		{
+			fprintf(file, "%d,%lu,%lu\n", i, diffBuffer[i], clusters[i]);
+		}
+		fclose(file);
+
+		// printf("Inertia: %ld\n", calculate_inertia(diffBuffer, size, clusters, 3, centers));
+		//  print the centers
+		printf("Centers: %ld, %ld, %ld\n", centers[0], centers[1], centers[2]);
+		// end clock
+		cl = clock() - cl;
+		float timer = ((float)cl) / CLOCKS_PER_SEC;
+
+		// first determine which cluster index has the largest centroid
+		int largest_index = 0;
+		for (int i = 0; i < 3; i++)
+		{
+			if (centers[i] > centers[largest_index])
+			{
+				largest_index = i;
+			}
+		}
+
+		uint64_t sum = 0;
+		for (int i = 0; i < search_space; i++)
+		{
+			if (clusters[i] == largest_index)
+			{
+				sum += pow(sub_abs(diffBuffer[i], centers[largest_index]), 2);
+			}
+		}
+
+		// Calculate the standard deviation
+		uint64_t std_dev = sqrt(sum / search_space);
+		printf("Standard Deviation: %ld\n", std_dev);
+		printf("Minimum threshold: %ld\n", centers[largest_index] - std_dev);
+		printf("Maximum threshold: %ld\n", centers[largest_index] + std_dev);
+
+		printf("Time to run kmeans: %f\n", timer);
+	}
+
+	// JB: "peaks" is an array of page offsets where diffBuffer is in (THRESH_LOW, THRESH_HI)
 	int peaks[PEAKS] = {0}; // Segmentation fault (core dumped) if less than the number of peaks found
 	int peak_index = 0;
 	int apart[PEAKS] = {0};
-
-	uint64_t *measurementBuffer = (uint64_t *)malloc(PAGE_COUNT * sizeof(uint64_t));
-	uint64_t *diffBuffer = (uint64_t *)malloc(PAGE_COUNT * sizeof(uint64_t));
-
-	uint32_t tt = 0;
-	uint64_t total = 0;
-	int t2_prev;
-
-	int cont_start = 0; // Starting and ending page # for cont_mem
-	int cont_end = 0;
-
-	t2_prev = 0;
-	for (int p = WINDOW; p < PAGE_COUNT; p++)
-	{
-		total = 0;
-		int cc = 0;
-		for (int r = 0; r < SPOILER_ROUNDS; r++)
-		{
-			for (int i = WINDOW; i >= 0; i--)
-			{
-				buffer[(p - i) * PAGE_SIZE] = 0;
-			}
-			measure(buffer, &tt);
-			// printf("tt = %lu\n", tt);
-
-			if (tt < THRESH_OUTLIER)
-			{
-				total = total + tt;
-				// printf("total = %lu\n", total);
-				cc++;
-			}
-		}
-
-		if (cc > 0)
-		{
-			uint64_t result = total / cc;
-			measurementBuffer[p] = result;
-			if (total / SPOILER_ROUNDS < t2_prev)
-			{
-				diffBuffer[p] = 0;
-			}
-			else
-			{
-				diffBuffer[p] = (total / SPOILER_ROUNDS) - t2_prev;
-			}
-		}
-		t2_prev = total / SPOILER_ROUNDS;
-
-		t2_prev = total / SPOILER_ROUNDS;
-	}
-
-	// Logic to find threshold values
-	uint64_t THRESH_LOW = 400;
-	uint64_t THRESH_HI = 800;
-	uint64_t search_space = PAGE_COUNT; // This can be reduced to speed up the process
-	if (search_space > PAGE_COUNT)
-	{
-		search_space = PAGE_COUNT;
-	}
-
-	// Start clock
-	cl = clock();
-	uint64_t *clusters = (uint64_t *)malloc(search_space * sizeof(uint64_t));
-	uint64_t *centers = (uint64_t *)malloc(3 * sizeof(uint64_t));
-	centers = kmeans(diffBuffer, search_space, 3, 100, clusters);
-
-	// dump the time measurements and the cluster assignments to a file
-	FILE *file = fopen("memory_profiling/logs/spoiler_cluster.csv", "w+");
-	if (file == NULL)
-	{
-		printf("Error opening file!\n");
-		exit(1);
-	}
-	fprintf(file, "index,diffBuffer,cluster\n");
-	for (int i = 0; i < search_space; i++)
-	{
-		fprintf(file, "%d,%lu,%lu\n", i, diffBuffer[i], clusters[i]);
-	}
-	fclose(file);
-
-	// printf("Inertia: %ld\n", calculate_inertia(diffBuffer, size, clusters, 3, centers));
-	//  print the centers
-	printf("Centers: %ld, %ld, %ld\n", centers[0], centers[1], centers[2]);
-	// end clock
-	cl = clock() - cl;
-	timer = ((float)cl) / CLOCKS_PER_SEC;
-
-	// first determine which cluster index has the largest centroid
-	int largest_index = 0;
-	for (int i = 0; i < 3; i++)
-	{
-		if (centers[i] > centers[largest_index])
-		{
-			largest_index = i;
-		}
-	}
-
-	uint64_t prev_addr = 0;
-	uint64_t sum = 0;
-	for (int i = 0; i < search_space; i++)
-	{
-		if (clusters[i] == largest_index)
-		{
-			sum += pow(sub_abs(diffBuffer[i], centers[largest_index]), 2);
-		}
-	}
-
-	// Calculate the standard deviation
-	uint64_t std_dev = sqrt(sum / search_space);
-	printf("Standard Deviation: %ld\n", std_dev);
-	printf("Minimum threshold: %ld\n", centers[largest_index] - std_dev);
-	printf("Maximum threshold: %ld\n", centers[largest_index] + std_dev);
-
-	printf("Time to run kmeans: %f\n", timer);
-
 	for (int p = 0; p < PAGE_COUNT; p++)
 	{
 		if (diffBuffer[p] > THRESH_LOW && diffBuffer[p] < THRESH_HI)
@@ -396,8 +404,6 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		}
 	}
 
-	// exit(1);
-
 	// Finding distances between the peaks in terms of # of pages
 	for (int j = 0; j < peak_index - 1; j++)
 	{
@@ -405,11 +411,14 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		// printf("apart[%i] = %i\n", j, apart[j]);
 	}
 
+	// JB: Find CONT_WINDOW_SIZE distances of 256 pages (1 MiB) between peaks
 	// Here 1 unit means 256 pages = 1MB
 	// 5 means we are looking for 6 peaks 256 apart = 5MB
 	// if changing here, also update the if(apart[j] == 256.....) statement accordingly
 	int cont_window = CONT_WINDOW_SIZE;
 	int condition;
+	int cont_start = 0; // Starting and ending page # for cont_mem
+	int cont_end = 0;
 	for (int j = 0; j < peak_index - 1 - cont_window; j++)
 	{
 		condition = 1;
@@ -421,8 +430,8 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		// if (apart[j] == 256 && apart[j+1] == 256 && apart[j+2] == 256 && apart[j+3] == 256 && apart[j+4] == 256 && apart[j+5] == 256 && apart[j+6] == 256 && apart[j+7] == 256 && apart[j+8] == 256 && apart[j+9] == 256)
 		if (condition)
 		{
-			cl = clock() - cl;
-			timer = ((float)cl) / CLOCKS_PER_SEC;
+			clock_t cl = clock() - start;
+			float timer = ((float)cl) / CLOCKS_PER_SEC;
 			printf("Found %d MB contiguous memory within %luMB buffer in %f seconds.\n", cont_window, PAGE_COUNT * PAGE_SIZE / 1024 / 1024, timer);
 
 			// printf("Contiguous memory found in %f seconds.\n", timer);
