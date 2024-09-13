@@ -121,61 +121,6 @@ impl ConsecAllocator for HugepageAllocator {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
-#[cfg(test)]
-pub mod tests {
-    use super::*;
-    use std::{mem, ptr};
-
-    #[test]
-    fn test_parse_hugepage_size() {
-        // correct.
-        assert_eq!(parse_hugepage_size("Hugepagesize:1024"), 1024);
-        assert_eq!(parse_hugepage_size("Hugepagesize: 2 kB"), 2048);
-
-        // wrong.
-        assert_eq!(parse_hugepage_size("Hugepagesize:1kB"), -1);
-        assert_eq!(parse_hugepage_size("Hugepagesize: 2kB"), -1);
-    }
-
-    #[test]
-    fn test_align_to() {
-        assert_eq!(align_to(8, 4), 8);
-        assert_eq!(align_to(8, 16), 16);
-    }
-
-    #[test]
-    fn test_allocator() {
-        let hugepage_alloc = HugepageAllocator {};
-
-        // u16.
-        unsafe {
-            let layout = Layout::new::<u16>();
-            let p = hugepage_alloc.alloc(layout);
-            assert_eq!(p.is_null(), false);
-            *p = 20;
-            assert_eq!(*p, 20);
-            hugepage_alloc.dealloc(p, layout);
-        }
-
-        // array.
-        unsafe {
-            let layout = Layout::array::<char>(2048).unwrap();
-            let dst = hugepage_alloc.alloc(layout);
-            assert_eq!(dst.is_null(), false);
-
-            let src = String::from("hello rust");
-            let len = src.len();
-            ptr::copy_nonoverlapping(src.as_ptr(), dst, len);
-            let s = String::from_raw_parts(dst, len, len);
-            assert_eq!(s, src);
-            mem::forget(s);
-
-            hugepage_alloc.dealloc(dst, layout);
-        }
-    }
-}
-
 pub trait VirtToPhysResolver {
     fn get_phys(&mut self, virt: u64) -> Result<u64>;
 }
@@ -233,5 +178,60 @@ impl VirtToPhysResolver for LinuxPageMap {
         let phys_addr = (pfn << PAGE_SHIFT) | ((virt as u64) & 0xFFF);
 
         Ok(phys_addr)
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use std::{mem, ptr};
+
+    #[test]
+    fn test_parse_hugepage_size() {
+        // correct.
+        assert_eq!(parse_hugepage_size("Hugepagesize:1024"), 1024);
+        assert_eq!(parse_hugepage_size("Hugepagesize: 2 kB"), 2048);
+
+        // wrong.
+        assert_eq!(parse_hugepage_size("Hugepagesize:1kB"), -1);
+        assert_eq!(parse_hugepage_size("Hugepagesize: 2kB"), -1);
+    }
+
+    #[test]
+    fn test_align_to() {
+        assert_eq!(align_to(8, 4), 8);
+        assert_eq!(align_to(8, 16), 16);
+    }
+
+    #[test]
+    fn test_allocator() {
+        let hugepage_alloc = HugepageAllocator {};
+
+        // u16.
+        unsafe {
+            let layout = Layout::new::<u16>();
+            let p = hugepage_alloc.alloc(layout);
+            assert_eq!(p.is_null(), false);
+            *p = 20;
+            assert_eq!(*p, 20);
+            hugepage_alloc.dealloc(p, layout);
+        }
+
+        // array.
+        unsafe {
+            let layout = Layout::array::<char>(2048).unwrap();
+            let dst = hugepage_alloc.alloc(layout);
+            assert_eq!(dst.is_null(), false);
+
+            let src = String::from("hello rust");
+            let len = src.len();
+            ptr::copy_nonoverlapping(src.as_ptr(), dst, len);
+            let s = String::from_raw_parts(dst, len, len);
+            assert_eq!(s, src);
+            mem::forget(s);
+
+            hugepage_alloc.dealloc(dst, layout);
+        }
     }
 }
