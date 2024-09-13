@@ -4,7 +4,11 @@ use std::path::PathBuf;
 fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
     println!("cargo:rustc-link-lib=spoiler");
     println!("cargo:rerun-if-changed=lib/spoiler/include/spoiler.h");
-    bindings.header("lib/spoiler/include/spoiler.h")
+    bindings
+        .header("lib/spoiler/include/spoiler.h")
+        .allowlist_function("auto_spoiler")
+        .allowlist_function("memory_addresses")
+        .allowlist_function("length")
 }
 
 fn build_spoiler() {
