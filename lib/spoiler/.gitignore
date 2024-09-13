@@ -1,2 +1,4 @@
-leapfrog_searchpage/plaintext.txt
-plaintext.txt
+memory_profiling/spoiler_clusters.png
+memory_profiling/logs/*
+victims/bin
+rowhammer_corruption

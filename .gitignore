@@ -2,3 +2,4 @@
 *.so
 /config
 .venv
+/log
