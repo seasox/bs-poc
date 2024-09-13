@@ -20,7 +20,7 @@ pub struct MemBlock {
 
 pub enum HugepageSize {
     //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
-    ONE_GB,
+    OneGb,
 }
 
 impl MemBlock {
@@ -52,10 +52,10 @@ impl MemBlock {
     pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
         const ADDR: usize = 0x2000000000;
         let hp_size = match size {
-            HugepageSize::ONE_GB => 1024 * MB,
+            HugepageSize::OneGb => 1024 * MB,
         };
         let hp_size_flag = match size {
-            HugepageSize::ONE_GB => MAP_HUGE_1GB,
+            HugepageSize::OneGb => MAP_HUGE_1GB,
         };
         let p = unsafe {
             libc::mmap(
@@ -306,7 +306,7 @@ mod tests {
         let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-        let block = MemBlock::hugepage(HugepageSize::ONE_GB)?;
+        let block = MemBlock::hugepage(HugepageSize::OneGb)?;
         let timer = construct_memory_tuple_timer()?;
         let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
         println!("VA: 0x{:02x}", block.ptr as usize);

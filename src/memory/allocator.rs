@@ -115,7 +115,7 @@ impl ConsecAllocator for HugepageAllocator {
             );
         }
         assert_eq!(self.block_size(), 1024 * MB);
-        let block = MemBlock::hugepage(HugepageSize::ONE_GB)?;
+        let block = MemBlock::hugepage(HugepageSize::OneGb)?;
         unsafe { libc::memset(block.ptr as *mut c_void, 0x00, self.block_size()) };
         Ok(ConsecBlocks::new(vec![block]))
     }

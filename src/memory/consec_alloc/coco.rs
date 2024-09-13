@@ -17,11 +17,11 @@ impl ConsecAllocator for ConsecAllocCoCo {
     }
 
     unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        const mod_path: &str = "/dev/coco_dec_mem";
-        let c_mod_path = CString::new(mod_path)?;
+        const MOD_PATH: &str = "/dev/coco_dec_mem";
+        let c_mod_path = CString::new(MOD_PATH)?;
         let fd = libc::open(c_mod_path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC);
         if fd == -1 {
-            bail!("Failed to open {}", mod_path);
+            bail!("Failed to open {}", MOD_PATH);
         }
         let block_size: usize = self.block_size();
         let block_count = (size as f32 / block_size as f32).ceil() as i32;
