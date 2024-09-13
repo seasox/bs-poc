@@ -54,19 +54,6 @@ fn build_rsa() {
     println!("cargo:rerun-if-changed=lib/rsa/rsa_crt.c");
 }
 
-fn bind_ptedit(bindings: bindgen::Builder) -> bindgen::Builder {
-    println!("cargo:rerun-if-changed=lib/ptedit/ptedit.h");
-    bindings.header("lib/ptedit/ptedit.h")
-}
-
-fn build_ptedit() {
-    // build ptedit
-    cc::Build::new()
-        .flag("-Wno-strict-aliasing") // silence warning regarding ptedit_cast macro in lib/ptedit/ptedit.h:498:33
-        .file("lib/ptedit/ptedit.c")
-        .compile("libptedit.a")
-}
-
 fn run_bindgen(bindings: bindgen::Builder) -> bindgen::Bindings {
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -95,13 +82,10 @@ fn main() {
     bindings = bind_rsa(bindings);
     bindings = bind_spoiler(bindings);
 
-    bindings = bind_ptedit(bindings);
-
     let bindings = run_bindgen(bindings);
 
     build_rsa();
     build_spoiler();
-    build_ptedit();
 
     write_bindings(bindings);
 }
