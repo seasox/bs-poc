@@ -48,9 +48,9 @@ SUDO=sudo -E taskset -c 1
 all:
 	cargo build ${CARGO_FLAGS}
 
-bait_alloc: all run_bait_alloc
+hammer: all run_hammer
 
-run_bait_alloc:
+run_hammer:
 	${LOGGER} ${SUDO} target/${PROFILE}/bait_alloc ${BS_FLAGS}
 
 bs_poc: all
