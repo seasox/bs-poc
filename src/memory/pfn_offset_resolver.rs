@@ -92,8 +92,8 @@ where
                 let offset2 = row_pair[1] * ROW_SIZE;
                 let addr1 = self.addr(offset1);
                 let addr2 = self.addr(offset2);
-                let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
-                let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
+                let dram1 = unsafe { DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config) };
+                let dram2 = unsafe { DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config) };
                 let same_bank = dram1.bank == dram2.bank;
                 let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
                 if (same_bank && time < conflict_threshold)

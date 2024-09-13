@@ -86,8 +86,6 @@ impl Memory {
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
         unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
         let addr = dst as AggressorPtr;
-        let layout = layout;
-
         Ok(Memory {
             allocator,
             addr,
@@ -126,19 +124,21 @@ impl Memory {
     }
 }
 
-/// Blanket implementation for PfnResolver trait for BytePointer
-impl<T: BytePointer> PfnResolver for T {
-    fn pfn(&self) -> anyhow::Result<u64> {
-        let mut resolver = LinuxPageMap::new()?;
-        resolver.get_phys(self.ptr() as u64)
-    }
-}
-
 /// Blanket implementations for Initializable trait for VictimMemory
 impl<T> Initializable for T
 where
     T: VictimMemory,
 {
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
+        let mut rng = StdRng::from_seed(seed);
+        info!(
+            "initialize buffer with pseudo-random values from seed {:?}",
+            seed
+        );
+        self.initialize_cb(&mut |_: usize| rng.gen());
+        debug!("memory init done");
+    }
+
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8) {
         let len = self.len();
         if len % 8 != 0 {
@@ -164,15 +164,13 @@ where
         }
         debug!("memory init done");
     }
+}
 
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
-        let mut rng = StdRng::from_seed(seed);
-        info!(
-            "initialize buffer with pseudo-random values from seed {:?}",
-            seed
-        );
-        self.initialize_cb(&mut |_: usize| rng.gen());
-        debug!("memory init done");
+/// Blanket implementation for PfnResolver trait for BytePointer
+impl<T: BytePointer> PfnResolver for T {
+    fn pfn(&self) -> anyhow::Result<u64> {
+        let mut resolver = LinuxPageMap::new()?;
+        resolver.get_phys(self.ptr() as u64)
     }
 }
 
@@ -181,57 +179,6 @@ impl<T> Checkable for T
 where
     T: VictimMemory,
 {
-    fn check_cb(
-        &self,
-        mem_config: MemConfiguration,
-        f: &mut dyn FnMut(usize) -> u8,
-    ) -> Vec<BitFlip> {
-        let len = self.len();
-        if len % PAGE_SIZE != 0 {
-            panic!(
-                "memory len ({}) must be divisible by PAGE_SIZE ({})",
-                len, PAGE_SIZE
-            );
-        }
-
-        let mut ret = vec![];
-        for offset in (0..len).step_by(PAGE_SIZE) {
-            let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-            for i in 0..PAGE_SIZE {
-                expected[i] = f(offset + i);
-            }
-            unsafe {
-                _mm_clflush(self.addr(offset));
-                _mm_mfence();
-                let cmp = memcmp(
-                    self.addr(offset) as *const c_void,
-                    expected.as_ptr() as *const c_void,
-                    PAGE_SIZE,
-                );
-                if cmp == 0 {
-                    continue;
-                }
-                debug!(
-                    "Found bitflip in page {}. Determining exact flip position",
-                    offset
-                );
-                for i in 0..expected.len() {
-                    let addr = self.addr(offset + i);
-                    _mm_clflush(addr);
-                    _mm_mfence();
-                    if *addr != expected[i] {
-                        ret.push(BitFlip::new(
-                            DRAMAddr::from_virt(addr, &mem_config),
-                            *addr ^ expected[i],
-                            expected[i],
-                        ));
-                    }
-                }
-            }
-        }
-        ret
-    }
-
     fn check(
         &self,
         mem_config: MemConfiguration,
@@ -281,5 +228,56 @@ where
             }
         }
         vec![]
+    }
+
+    fn check_cb(
+        &self,
+        mem_config: MemConfiguration,
+        f: &mut dyn FnMut(usize) -> u8,
+    ) -> Vec<BitFlip> {
+        let len = self.len();
+        if len % PAGE_SIZE != 0 {
+            panic!(
+                "memory len ({}) must be divisible by PAGE_SIZE ({})",
+                len, PAGE_SIZE
+            );
+        }
+
+        let mut ret = vec![];
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
+            for i in 0..PAGE_SIZE {
+                expected[i] = f(offset + i);
+            }
+            unsafe {
+                _mm_clflush(self.addr(offset));
+                _mm_mfence();
+                let cmp = memcmp(
+                    self.addr(offset) as *const c_void,
+                    expected.as_ptr() as *const c_void,
+                    PAGE_SIZE,
+                );
+                if cmp == 0 {
+                    continue;
+                }
+                debug!(
+                    "Found bitflip in page {}. Determining exact flip position",
+                    offset
+                );
+                for i in 0..expected.len() {
+                    let addr = self.addr(offset + i);
+                    _mm_clflush(addr);
+                    _mm_mfence();
+                    if *addr != expected[i] {
+                        ret.push(BitFlip::new(
+                            DRAMAddr::from_virt(addr, &mem_config),
+                            *addr ^ expected[i],
+                            expected[i],
+                        ));
+                    }
+                }
+            }
+        }
+        ret
     }
 }

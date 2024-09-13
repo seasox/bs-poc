@@ -81,7 +81,7 @@ impl MemConfiguration {
             .expect("The matrix defined in the config file is not invertible.")
             .try_cast::<i8>()
             .expect("inverse cast to i8 failed")
-            .map(|e| e.abs() as u8);
+            .map(|e| e.abs());
 
         for row in 0..MTX_SIZE {
             for col in 0..MTX_SIZE {

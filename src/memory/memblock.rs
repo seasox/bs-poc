@@ -136,12 +136,7 @@ impl FormatPfns for ConsecPfns {
     fn format_pfns(&self) -> String {
         let mut pfns = String::from("");
         for (p1, p2) in self.windows(2).map(|w| (w[0], w[1])).step_by(2) {
-            pfns += &format!(
-                "{:09x}..[{:04} KB]..{:09x}\n",
-                p1,
-                (p2 - p1 as u64) / 1024,
-                p2
-            );
+            pfns += &format!("{:09x}..[{:04} KB]..{:09x}\n", p1, (p2 - p1) / 1024, p2);
         }
         pfns
     }
@@ -186,7 +181,8 @@ mod tests {
     use crate::memory::memblock::PfnResolver;
     use rand::{thread_rng, Rng};
 
-    use crate::blacksmith::blacksmith_config::{BlacksmithConfig, MemConfiguration};
+    use crate::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+    use crate::memory::mem_configuration::MemConfiguration;
     use crate::{
         memory::{
             construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, MemBlock,
@@ -307,8 +303,9 @@ mod tests {
             let byte_offset = byte_offset.rem_euclid(4 * MB as isize) as usize;
             println!("Byte offset 0x{:02x}", byte_offset);
             println!("Row offset: {}", byte_offset >> ROW_SHIFT);
-            let dramv =
-                DRAMAddr::from_virt_offset(v as *const u8, byte_offset as isize, &mem_config);
+            let dramv = unsafe {
+                DRAMAddr::from_virt_offset(v as *const u8, byte_offset as isize, &mem_config)
+            };
             let dramp = DRAMAddr::from_virt(p as *const u8, &mem_config);
             println!("{:?}", dramv);
             println!("{:?}", dramp);

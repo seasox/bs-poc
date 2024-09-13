@@ -4,7 +4,7 @@ use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use crate::memory::mem_configuration::MemConfiguration;
 use serde::Deserialize;
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct DRAMAddr {
     pub bank: usize,
     pub row: usize,
@@ -36,13 +36,18 @@ impl DRAMAddr {
         DRAMAddr { bank, row, col }
     }
 
-    pub fn from_virt_offset(
+    /// Construct a DRAMAddr from a virtual address with offset.
+    ///
+    /// # Safety
+    /// The same safety consideration as discussed for *const T::offset apply.
+    ///
+    pub unsafe fn from_virt_offset(
         addr: AggressorPtr,
         offset: isize,
         mem_config: &MemConfiguration,
     ) -> DRAMAddr {
-        let p = unsafe { addr.byte_offset(offset) };
-        return DRAMAddr::from_virt(p, mem_config);
+        let p = addr.byte_offset(offset);
+        DRAMAddr::from_virt(p, mem_config)
     }
 }
 
@@ -61,18 +66,7 @@ impl DRAMAddr {
             res |= (l & i).count_ones() as usize % 2;
         }
         let base_msb_usize = (base_msb as usize) & !((1 << 30) - 1);
-        let v_addr = (base_msb_usize | res) as AggressorPtr;
-        v_addr
-    }
-}
-
-impl Default for DRAMAddr {
-    fn default() -> Self {
-        Self {
-            bank: 0,
-            row: 0,
-            col: 0,
-        }
+        (base_msb_usize | res) as AggressorPtr
     }
 }
 

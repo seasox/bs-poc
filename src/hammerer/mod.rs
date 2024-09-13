@@ -17,34 +17,6 @@
 //!
 //! - `HammerResult`: The result returned by hammering operations, defined in the `blacksmith` module.
 //! - `HammerVictim`: A trait that represents the target memory being hammered.
-//!
-//! # Example
-//!
-//! ```rust
-//! use bs_poc::hammerer::Blacksmith;
-//! use bs_poc::memory::mem_configuration::MemConfiguration;
-//! use bs_poc::victim::HammerVictimMemCheck;
-//!
-//! let memory = todo!("Allocate memory");
-//! let config = todo!("Load blacksmith config from JSON");
-//! let mem_config = MemConfiguration::from_blacksmith(&config);
-//! let mut victim = HammerVictimMemCheck::new(mem_config, &memory);
-//! let blacksmith = Blacksmith::new(
-//!                 mem_config,
-//!                 pattern.clone(),
-//!                 mapping.clone(),
-//!                 &hammering_addrs,
-//!                 memory.blocks.iter().collect(),
-//!             );
-//! let result = blacksmith.hammer(&mut victim, 1000);
-//! match result {
-//!     Ok(result) => println!("Hammering succeeded: {:?}", result),
-//!     Err(e) => eprintln!("Hammering failed: {}", e),
-//! }
-//! ```
-//!
-//! In the example above, the `Blacksmith` hammerer is used to hammer the victim memory for up to 1000 runs.
-
 pub mod blacksmith;
 pub mod dummy;
 

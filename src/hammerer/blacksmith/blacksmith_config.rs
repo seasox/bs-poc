@@ -56,8 +56,8 @@ impl BlacksmithConfig {
 mod test {
     #[test]
     fn test_bank_function_period() {
-        use crate::blacksmith::blacksmith_config::{BlacksmithConfig, MemConfiguration};
-        use crate::util::*;
+        use crate::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+        use crate::memory::mem_configuration::MemConfiguration;
         let config = BlacksmithConfig::from_jsonfile("config/bs-config.json")
             .expect("failed to read config file");
         let mem_config =

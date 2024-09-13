@@ -22,7 +22,7 @@ impl FromStr for FlushingStrategy {
         match s {
             "LATEST_POSSIBLE" => Ok(FlushingStrategy::LatestPossible),
             "EARLIEST_POSSIBLE" => Ok(FlushingStrategy::EarliestPossible),
-            _ => Err(format!("unknown strategy {}", s).into()),
+            _ => Err(format!("unknown strategy {}", s)),
         }
     }
 }
@@ -39,7 +39,7 @@ impl FromStr for FencingStrategy {
         match s {
             "LATEST_POSSIBLE" => Ok(FencingStrategy::LatestPossible),
             "EARLIEST_POSSIBLE" => Ok(FencingStrategy::EarliestPossible),
-            _ => Err(format!("unknown strategy {}", s).into()),
+            _ => Err(format!("unknown strategy {}", s)),
         }
     }
 }
@@ -51,7 +51,7 @@ pub trait Jitter {
         &self,
         num_acts_per_trefi: u64,
         aggressor_pairs: &[AggressorPtr],
-        log_cb: &dyn Fn(&str, AggressorPtr) -> (),
+        log_cb: &dyn Fn(&str, AggressorPtr),
     ) -> Result<Program>;
 }
 
@@ -107,12 +107,12 @@ impl Program {
             unsafe { slice::from_raw_parts(jit_function_ptr, function_size_bytes) };
         let jit_function: JitFunction = unsafe { mem::transmute(jit_function_bytes.as_ptr()) };
         let result = unsafe { jit_function() };
-        return result;
+        result
     }
 
     pub fn write(&self, filename: &str) -> Result<()> {
         let mut file = File::create(filename)?;
-        file.write(self.code.as_ref())?;
+        file.write_all(self.code.as_ref())?;
         Ok(())
     }
 }
@@ -122,7 +122,7 @@ impl Jitter for CodeJitter {
         &self,
         num_acts_per_trefi: u64,
         aggressor_pairs: &[AggressorPtr],
-        log_cb: &dyn Fn(&str, AggressorPtr) -> (),
+        log_cb: &dyn Fn(&str, AggressorPtr),
     ) -> Result<Program> {
         let mut a = CodeAssembler::new(64)?;
 
@@ -255,7 +255,7 @@ impl Jitter for CodeJitter {
 fn sync_ref(
     aggs: &[AggressorPtr],
     a: &mut CodeAssembler,
-    log_cb: &dyn Fn(&str, AggressorPtr) -> (),
+    log_cb: &dyn Fn(&str, AggressorPtr),
 ) -> Result<(), IcedError> {
     debug!("SYNC");
     let mut wbegin = a.create_label();
