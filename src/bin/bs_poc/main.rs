@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use bs_poc::forge::{Hammerer, Hammering, HammeringPattern};
 use bs_poc::memory::{BytePointer, Memory, PfnResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
-use bs_poc::victim::{HammerVictim, HammerVictimMemCheck, HammerVictimRsa};
+use bs_poc::victim::{HammerVictim, HammerVictimMemCheck};
 use clap::Parser;
 use std::fmt::Debug;
 
@@ -38,7 +38,6 @@ struct CliArgs {
 #[derive(clap::ValueEnum, Clone, Debug)]
 enum HammerMode {
     MemCheck,
-    Rsa,
 }
 
 fn main() -> Result<()> {
@@ -70,7 +69,6 @@ fn main() -> Result<()> {
     let config = BlacksmithConfig::from_jsonfile(&args.config).with_context(|| "from_jsonfile")?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-    let offset = 0x17B31343;
     let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
         todo!("dummy hammerer not implemented")
         /*Box::new(DummyHammerer::new(
@@ -93,7 +91,6 @@ fn main() -> Result<()> {
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),
-        HammerMode::Rsa => Box::new(HammerVictimRsa::new(&memory, offset)?),
     };
     info!("initialized hammerer");
     info!("start hammering");

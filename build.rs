@@ -27,33 +27,6 @@ fn build_spoiler() {
     }
 }
 
-fn bind_rsa(bindings: bindgen::Builder) -> bindgen::Builder {
-    println!("cargo:rerun-if-changed=lib/rsa/rsa_crt.h");
-    // Link with OpenSSL library
-    println!("cargo:rerun-if-env-changed=OPENSSL_LIB_DIR");
-    if let Ok(lib_dir) = std::env::var("OPENSSL_LIB_DIR") {
-        println!("cargo:rustc-link-search=native={}", lib_dir);
-    }
-    println!("cargo:rerun-if-env-changed=OPENSSL_INCLUDE_DIR");
-    if let Ok(include_dir) = std::env::var("OPENSSL_INCLUDE_DIR") {
-        println!("cargo:include={}", include_dir);
-    }
-    bindings.header("lib/rsa/rsa_crt.h")
-}
-
-fn build_rsa() {
-    // build rsa-crt
-    cc::Build::new()
-        .file("lib/rsa/rsa_crt.c")
-        .include("/usr/include")
-        .flag("-Wno-deprecated-declarations")
-        .compile("librsa_crt.a");
-    // Tell cargo to tell rustc to link the rsa_crt and crypto libraries
-    println!("cargo:rustc-link-lib=rsa_crt");
-    println!("cargo:rustc-link-lib=crypto");
-    println!("cargo:rerun-if-changed=lib/rsa/rsa_crt.c");
-}
-
 fn run_bindgen(bindings: bindgen::Builder) -> bindgen::Bindings {
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -79,12 +52,10 @@ fn write_bindings(bindings: bindgen::Bindings) {
 fn main() {
     let mut bindings = bindgen::Builder::default();
 
-    bindings = bind_rsa(bindings);
     bindings = bind_spoiler(bindings);
 
     let bindings = run_bindgen(bindings);
 
-    build_rsa();
     build_spoiler();
 
     write_bindings(bindings);
