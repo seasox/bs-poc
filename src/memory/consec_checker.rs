@@ -127,7 +127,7 @@ impl AllocChecker for ConsecCheckPfn {
                 "Allocated a consecutive {} KB block at [{:#02x}, {:#02x})",
                 first_block_bytes / 1024,
                 block.ptr as u64,
-                block.byte_add(first_block_bytes - PAGE_SIZE).ptr as usize + PAGE_SIZE, // subtrace one page from byte_add call to circumvent overflow
+                block.addr(first_block_bytes - PAGE_SIZE) as usize + PAGE_SIZE, // subtrace one page from byte_add call to circumvent overflow
             );
             info!("{}", pfns);
         }
@@ -155,7 +155,7 @@ impl AllocChecker for ConsecCheckPfnBank {
         info!("PFNs: {}", pfns);
         let first_pfn = block.pfn()? as *mut u8;
         for row in (0..block.len).step_by(ROW_SIZE) {
-            let pfn = block.byte_add(row).pfn()? as *mut u8;
+            let pfn = block.addr(row).pfn()? as *mut u8;
             // compare the actual PFN bank with the expected bank if the observed block were consecutive
             let dram = DRAMAddr::from_virt(pfn, &self.mem_config);
             let expected_dram =

@@ -9,7 +9,7 @@ use crate::{
     util::{MemConfiguration, PAGE_SIZE},
 };
 
-use super::allocator::HugepageAllocator;
+use super::{allocator::HugepageAllocator, LinuxPageMap, PfnResolver, VirtToPhysResolver};
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -34,10 +34,112 @@ impl fmt::Display for MemoryError {
     }
 }
 
-pub trait VictimMemory {
-    fn addr(&self, offset: usize) -> *mut u8;
-    fn len(&self) -> usize;
+pub trait VictimMemory: BytePointer + Initializable + Checkable {}
 
+pub trait BytePointer {
+    fn addr(&self, offset: usize) -> *mut u8;
+    fn ptr(&self) -> *mut u8;
+    fn len(&self) -> usize;
+}
+
+/// Trait for initializing memory with random values
+pub trait Initializable {
+    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed);
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8);
+}
+
+/// Trait for checking memory for bitflips
+pub trait Checkable {
+    fn check(
+        &self,
+        mem_config: MemConfiguration,
+        seed: <StdRng as SeedableRng>::Seed,
+    ) -> Vec<BitFlip>;
+    fn check_cb(
+        &self,
+        mem_config: MemConfiguration,
+        f: &mut dyn FnMut(usize) -> u8,
+    ) -> Vec<BitFlip>;
+}
+
+/// A managed memory region that is allocated using HugepageAllocator
+#[derive(Debug)]
+pub struct Memory {
+    allocator: HugepageAllocator,
+    addr: AggressorPtr,
+    layout: Layout,
+}
+
+impl Memory {
+    pub fn new(size: usize) -> Result<Self> {
+        let allocator = HugepageAllocator::new();
+        let layout = Layout::from_size_align(size, 1)?;
+        if layout.size() == 0 {
+            return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
+        }
+        let dst: *mut u8;
+        unsafe {
+            dst = allocator.alloc(layout);
+        }
+        if dst.is_null() {
+            return Err(anyhow::Error::new(MemoryError::AllocFailed));
+        }
+        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
+        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
+        let addr = dst as AggressorPtr;
+        let layout = layout;
+
+        Ok(Memory {
+            allocator,
+            addr,
+            layout,
+        })
+    }
+}
+
+impl VictimMemory for Memory {}
+
+impl BytePointer for Memory {
+    fn addr(&self, offset: usize) -> *mut u8 {
+        assert!(
+            offset < self.layout.size(),
+            "Offset {} >= {}",
+            offset,
+            self.layout.size()
+        );
+        unsafe { self.addr.byte_add(offset) as *mut u8 }
+    }
+
+    fn ptr(&self) -> *mut u8 {
+        self.addr as *mut u8
+    }
+
+    fn len(&self) -> usize {
+        self.layout.size()
+    }
+}
+
+impl Memory {
+    pub fn dealloc(self) {
+        unsafe {
+            self.allocator.dealloc(self.addr as *mut u8, self.layout);
+        }
+    }
+}
+
+/// Blanket implementation for PfnResolver trait for BytePointer
+impl<T: BytePointer> PfnResolver for T {
+    fn pfn(&self) -> anyhow::Result<u64> {
+        let mut resolver = LinuxPageMap::new()?;
+        resolver.get_phys(self.ptr() as u64)
+    }
+}
+
+/// Blanket implementations for Initializable trait for VictimMemory
+impl<T> Initializable for T
+where
+    T: VictimMemory,
+{
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8) {
         let len = self.len();
         if len % 8 != 0 {
@@ -63,6 +165,7 @@ pub trait VictimMemory {
         }
         debug!("memory init done");
     }
+
     fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
         let mut rng = StdRng::from_seed(seed);
         info!(
@@ -72,7 +175,13 @@ pub trait VictimMemory {
         self.initialize_cb(&mut |_: usize| rng.gen());
         debug!("memory init done");
     }
+}
 
+/// Blanket implementation for Checkable trait for VictimMemory
+impl<T> Checkable for T
+where
+    T: VictimMemory,
+{
     fn check_cb(
         &self,
         mem_config: MemConfiguration,
@@ -173,56 +282,5 @@ pub trait VictimMemory {
             }
         }
         vec![]
-    }
-}
-
-#[derive(Debug)]
-pub struct Memory {
-    allocator: HugepageAllocator,
-    addr: AggressorPtr,
-    layout: Layout,
-}
-
-impl Drop for Memory {
-    fn drop(&mut self) {
-        unsafe {
-            self.allocator.dealloc(self.addr as *mut u8, self.layout);
-        }
-    }
-}
-
-impl Memory {
-    pub fn new(size: usize) -> Result<Self> {
-        let allocator = HugepageAllocator::new();
-        let layout = Layout::from_size_align(size, 1)?;
-        if layout.size() == 0 {
-            return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
-        }
-        let dst: *mut u8;
-        unsafe {
-            dst = allocator.alloc(layout);
-        }
-        if dst.is_null() {
-            return Err(anyhow::Error::new(MemoryError::AllocFailed));
-        }
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
-        let addr = dst as AggressorPtr;
-        let layout = layout;
-
-        Ok(Memory {
-            allocator,
-            addr,
-            layout,
-        })
-    }
-}
-
-impl VictimMemory for Memory {
-    fn addr(&self, offset: usize) -> *mut u8 {
-        unsafe { self.addr.add(offset) as *mut u8 }
-    }
-    fn len(&self) -> usize {
-        return self.layout.size();
     }
 }

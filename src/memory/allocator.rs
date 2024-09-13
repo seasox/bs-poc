@@ -71,7 +71,7 @@ fn align_to(size: usize, align: usize) -> usize {
 
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct HugepageAllocator {}
 
 impl HugepageAllocator {

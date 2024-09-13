@@ -48,7 +48,7 @@ fn spawn_loader_thread(
             let blocks = blocks.lock().unwrap().clone();
             for block in blocks {
                 for offset in (0..block.len).step_by(ROW_SIZE) {
-                    let addr = block.byte_add(offset).ptr;
+                    let addr = block.addr(offset);
                     let count = min(ROW_SIZE, block.len - offset);
                     trace!(target: "loader", "Waiting for memory lock");
                     let mem_lock = mem_lock.lock().unwrap();

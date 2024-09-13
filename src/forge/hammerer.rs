@@ -9,9 +9,7 @@ use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
 use crate::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::memory::{
-    BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, MemBlock, VictimMemory, VirtToPhysResolver,
-};
+use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
 use crate::util::{group, MemConfiguration, BASE_MSB};
 use crate::victim::HammerVictim;
 
@@ -290,28 +288,27 @@ impl<'a> Hammering for DummyHammerer<'a> {
     }
 }
 
-pub struct Hammerer<'a> {
-    blocks: &'a [MemBlock],
+pub struct Hammerer<'a, Mem: BytePointer> {
+    blocks: Vec<&'a Mem>,
     mem_config: MemConfiguration,
     mapping: PatternAddressMapper,
     program: Program,
 }
 
-impl<'a> Hammerer<'a> {
+impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
     pub fn new(
         mem_config: MemConfiguration,
         pattern: HammeringPattern,
         mapping: PatternAddressMapper,
         hammering_addrs: &[AggressorPtr],
-        blocks: &'a [MemBlock],
+        blocks: Vec<&'a Mem>,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr| {
             let block_idx = blocks.iter().find_position(|base| {
-                addr as u64 >= base.ptr as u64
-                    && (addr as u64) < (base.byte_add(base.len).ptr as u64)
+                addr as u64 >= base.ptr() as u64 && (addr as u64) < (base.addr(base.len()) as u64)
             });
             let found = block_idx.is_some();
             if !found {
@@ -384,7 +381,7 @@ impl<'a> Hammerer<'a> {
     }
 }
 
-impl<'a> Hammering for Hammerer<'a> {
+impl<'a, Mem: BytePointer> Hammering for Hammerer<'a, Mem> {
     fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
@@ -402,7 +399,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     &self
                         .blocks
                         .iter()
-                        .map(|b| b.ptr as *const u8)
+                        .map(|b| b.ptr() as *const u8)
                         .collect::<Vec<_>>(),
                     self.mem_config,
                 );

@@ -21,17 +21,24 @@ impl ConsecBlocks {
     }
 }
 
-impl VictimMemory for ConsecBlocks {
+impl VictimMemory for ConsecBlocks {}
+
+impl BytePointer for ConsecBlocks {
     fn addr(&self, offset: usize) -> *mut u8 {
         assert!(offset < self.len(), "Offset {} >= {}", offset, self.len());
         let mut offset = offset;
         for block in &self.blocks {
             if offset < block.len {
-                return block.byte_add(offset).ptr;
+                return block.addr(offset);
             }
             offset -= block.len;
         }
         unreachable!("block not found for offset 0x{:x}", offset);
+    }
+
+    fn ptr(&self) -> *mut u8 {
+        assert!(self.blocks.len() > 0, "No blocks");
+        self.blocks[0].ptr()
     }
 
     fn len(&self) -> usize {

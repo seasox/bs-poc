@@ -64,7 +64,7 @@ where
         // do a quick pre-check. Toggling the uppermost bit in the bank function should result in a fast timing.
         if self.len() >= num_rows * ROW_SIZE {
             let addr1 = self.ptr();
-            let addr2 = self.byte_add(num_rows * ROW_SIZE).ptr();
+            let addr2 = self.addr(num_rows * ROW_SIZE);
             let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
             if time > conflict_threshold {
                 info!("Pre-check failed. Block is not consecutive");
@@ -92,8 +92,8 @@ where
                 }
                 let offset1 = row_pair[0] * ROW_SIZE;
                 let offset2 = row_pair[1] * ROW_SIZE;
-                let addr1 = self.byte_add(offset1).ptr();
-                let addr2 = self.byte_add(offset2).ptr();
+                let addr1 = self.addr(offset1);
+                let addr2 = self.addr(offset2);
                 let dram1 = DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config);
                 let dram2 = DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config);
                 let same_bank = dram1.bank == dram2.bank;

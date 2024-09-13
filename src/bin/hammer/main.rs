@@ -15,7 +15,7 @@ use bs_poc::{
     memory::{
         compact_mem, consec_alloc::ConsecAllocSpoiler, BytePointer, ConsecBlocks,
         ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn, HugepageAllocator, MemBlock,
-        PfnResolver, VictimMemory,
+        PfnResolver,
     },
     retry,
     util::{
@@ -227,7 +227,7 @@ fn hammer(
                 pattern.clone(),
                 mapping.clone(),
                 &hammering_addrs,
-                &memory.blocks,
+                memory.blocks.iter().collect(),
             )?)
         }
         HammerStrategy::Dummy => {
@@ -235,7 +235,7 @@ fn hammer(
             let flip = flip
                 .concat()
                 .pop()
-                .unwrap_or(memory.blocks[0].byte_add(0x42).ptr) as *mut u8;
+                .unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
             info!(
                 "Running dummy hammerer with flip at VA 0x{:02x}",
                 flip as usize
@@ -390,8 +390,6 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
 
     drop(hammer_victim);
-
-    memory.dealloc();
 
     if let Some(victim) = victim {
         info!("Waiting for victim to finish");

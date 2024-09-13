@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use bs_poc::forge::{Hammerer, Hammering, HammeringPattern};
-use bs_poc::memory::{MemBlock, Memory, PfnResolver, VictimMemory};
+use bs_poc::memory::{BytePointer, Memory, PfnResolver};
 use bs_poc::util::{BlacksmithConfig, MemConfiguration};
 use bs_poc::victim::{HammerVictim, HammerVictimMemCheck, HammerVictimRsa};
 use clap::Parser;
@@ -57,11 +57,11 @@ fn main() -> Result<()> {
     const MEM_SIZE: usize = 1 << 30; // 1 GB
 
     let memory = Memory::new(MEM_SIZE)?;
-    let block = MemBlock::new(memory.addr(0), MEM_SIZE);
+    let blocks = vec![&memory];
 
     info!("allocated {} B of memory", MEM_SIZE);
 
-    let phys = block.pfn();
+    let phys = memory.pfn();
     match phys {
         Ok(phys) => info!("phys base_msb: 0x{:02X}", phys),
         Err(err) => warn!("Failed to determine physical address: {}", err),
@@ -71,7 +71,6 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
     let offset = 0x17B31343;
-    let blocks = vec![block];
     let hammerer: Box<dyn Hammering> = if args.dummy_hammerer {
         todo!("dummy hammerer not implemented")
         /*Box::new(DummyHammerer::new(
@@ -88,12 +87,9 @@ fn main() -> Result<()> {
                 .determine_most_effective_mapping()
                 .expect("pattern contains no mapping"),
         };
-        let addrs =
-            mapping.get_hammering_addresses(&pattern.access_ids, memory.addr(0), mem_config);
+        let addrs = mapping.get_hammering_addresses(&pattern.access_ids, memory.ptr(), mem_config);
 
-        Box::new(Hammerer::new(
-            mem_config, pattern, mapping, &addrs, &blocks,
-        )?)
+        Box::new(Hammerer::new(mem_config, pattern, mapping, &addrs, blocks)?)
     };
     let mut victim: Box<dyn HammerVictim> = match args.hammer_mode {
         HammerMode::MemCheck => Box::new(HammerVictimMemCheck::new(mem_config, &memory)),

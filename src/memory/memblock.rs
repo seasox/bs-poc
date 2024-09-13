@@ -1,13 +1,13 @@
 use std::{cell::RefCell, ptr::null_mut};
 
 use crate::{
-    memory::LinuxPageMap,
+    memory::PfnResolver,
     util::{MB, PAGE_SIZE, ROW_SIZE},
 };
 use anyhow::bail;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 
-use super::{pfn_offset::CachedPfnOffset, PfnOffset, VirtToPhysResolver};
+use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset};
 
 #[derive(Clone, Debug)]
 pub struct MemBlock {
@@ -81,25 +81,17 @@ impl MemBlock {
     }
 }
 
-pub trait BytePointer {
-    fn byte_add(&self, offset: usize) -> Self;
-    fn ptr(&self) -> *mut u8;
-    fn len(&self) -> usize;
-}
+//impl VictimMemory for MemBlock {}
 
 impl BytePointer for MemBlock {
-    fn byte_add(&self, offset: usize) -> Self {
+    fn addr(&self, offset: usize) -> *mut u8 {
         assert!(
             offset < self.len,
             "MemBlock::byte_add failed. Offset {} >= {}",
             offset,
             self.len
         );
-        MemBlock {
-            ptr: unsafe { self.ptr.byte_add(offset) },
-            len: self.len - offset,
-            pfn_offset: self.pfn_offset.clone(),
-        }
+        unsafe { self.ptr.byte_add(offset) }
     }
     fn ptr(&self) -> *mut u8 {
         self.ptr
@@ -121,14 +113,14 @@ impl MemBlock {
         let mut phys_prev = self.pfn()?;
         let mut consecs = vec![phys_prev];
         for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
-            let phys = self.byte_add(offset).pfn()?;
+            let phys = self.addr(offset).pfn()?;
             if phys != phys_prev + PAGE_SIZE as u64 {
                 consecs.push(phys_prev + PAGE_SIZE as u64);
                 consecs.push(phys);
             }
             phys_prev = phys;
         }
-        consecs.push(self.byte_add(self.len - PAGE_SIZE).pfn()? + PAGE_SIZE as u64);
+        consecs.push(self.addr(self.len - PAGE_SIZE).pfn()? + PAGE_SIZE as u64);
         trace!("PFN check done");
         Ok(consecs)
     }
@@ -178,23 +170,14 @@ impl MemBlock {
         assert_eq!(self.len, 4 * MB);
         let offset = self.len - offset * ROW_SIZE;
         assert!(offset < 4 * MB, "Offset {} >= 4MB", offset);
-        let block = self.byte_add(offset);
+        let ptr = self.addr(offset);
+        let len = self.len - offset;
+        let block = MemBlock::new(ptr, len); // TODO: add new trait for offsetting into MemBlock (byte_add returns *mut u8 now, but we need MemBlock here)
         blocks.push(block);
         self.len = offset;
         blocks.push(self);
 
         Ok(blocks)
-    }
-}
-
-pub trait PfnResolver {
-    fn pfn(&self) -> anyhow::Result<u64>;
-}
-
-impl PfnResolver for MemBlock {
-    fn pfn(&self) -> anyhow::Result<u64> {
-        let mut resolver = LinuxPageMap::new()?;
-        resolver.get_phys(self.ptr as u64)
     }
 }
 

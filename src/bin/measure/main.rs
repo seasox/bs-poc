@@ -35,24 +35,24 @@ fn main() -> anyhow::Result<()> {
     } else {
         alloc_4m_consec()?
     };
-    let addr1 = mem.byte_add(args.row1 * ROW_SIZE);
-    let addr2 = mem.byte_add(args.row2 * ROW_SIZE);
-    let dram1 = DRAMAddr::from_virt((addr1.ptr as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
-    let dram2 = DRAMAddr::from_virt((addr2.ptr as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
+    let addr1 = mem.addr(args.row1 * ROW_SIZE);
+    let addr2 = mem.addr(args.row2 * ROW_SIZE);
+    let dram1 = DRAMAddr::from_virt((addr1 as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
+    let dram2 = DRAMAddr::from_virt((addr2 as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
     println!("row1,row2,vaddr1,vaddr2,paddr1,paddr2,dram1,dram2");
     println!(
         "{},{},0x{:x},0x{:x},{:x},{:x},{:?},{:?}",
         args.row1,
         args.row2,
-        addr1.ptr as usize,
-        addr2.ptr as usize,
+        addr1 as usize,
+        addr2 as usize,
         addr1.pfn()?,
         addr2.pfn()?,
         dram1,
         dram2
     );
     loop {
-        let time = unsafe { timer.time_subsequent_access_from_ram(addr1.ptr, addr2.ptr, 100000) };
+        let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 100000) };
         println!("{}", time);
     }
 }

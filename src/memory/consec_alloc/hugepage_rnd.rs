@@ -1,5 +1,5 @@
 use crate::{
-    memory::{ConsecBlocks, HugepageAllocator, MemBlock, VictimMemory},
+    memory::{BytePointer, ConsecBlocks, HugepageAllocator, MemBlock},
     util::{make_vec, MB},
 };
 use rand::prelude::SliceRandom;
