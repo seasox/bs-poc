@@ -1,12 +1,11 @@
 use std::{
     fmt::Debug,
     fs::File,
-    io::{stdin, BufRead, BufReader},
-    process::{Child, ChildStdin, ChildStdout, Command},
-    thread::{self},
+    io::{stdin, BufReader},
+    process::{ChildStdin, ChildStdout},
 };
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use bs_poc::allocator::hugepage::HugepageAllocator;
 use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
@@ -15,7 +14,6 @@ use bs_poc::hammerer::blacksmith::hammerer::{
 };
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::victim::process::VictimProcess;
 use bs_poc::victim::{process, HammerVictim};
 use bs_poc::{
     allocator,
@@ -25,13 +23,9 @@ use bs_poc::{
     victim,
 };
 use bs_poc::{
-    memory::{
-        BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn,
-        MemBlock, PfnResolver,
-    },
+    memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
-    util::{init_logging_with_progress, AttackState, PipeIPC, IPC, PAGE_SIZE},
-    victim::HammerVictimMemCheck,
+    util::{init_logging_with_progress, PipeIPC},
 };
 use clap::Parser;
 use indicatif::MultiProgress;
