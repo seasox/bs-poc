@@ -1,5 +1,4 @@
 use anyhow::Result;
-use lazy_static::__Deref;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
@@ -16,7 +15,6 @@ use std::{
     alloc::{GlobalAlloc, Layout},
     arch::x86_64::{_mm_clflush, _mm_mfence},
     fmt,
-    pin::Pin,
 };
 
 #[derive(Debug)]
