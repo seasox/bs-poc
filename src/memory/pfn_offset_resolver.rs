@@ -27,11 +27,11 @@ where
 {
     /// Find the PFN-VA offset in rows.
     ///
-    /// This is brute force, simply trying all row offsets from 0..row_offsets (determined using mem_config)
+    /// This is brute force, simply trying all row offsets from 0...row_offsets (determined using mem_config)
     /// There probably is a more sophisticated way to implement this, e.g., by examing the bank orders and
     /// filtering for possible "bank periods" after each iteration, but this here should be fast enough for now.
     /// WARNING: This function initializes pfn_offset with the provided mem_config. Calling #pfn_offset(...) with
-    ///          different arguments afterwards WILL NOT reset the OnceCell, potentially causing unintended behavior.
+    ///          different arguments afterward WILL NOT reset the OnceCell, potentially causing unintended behavior.
     fn pfn_offset(
         &self,
         mem_config: &MemConfiguration,
@@ -40,7 +40,7 @@ where
         progress: Option<&MultiProgress>,
     ) -> Option<usize> {
         // reuse cached value if possible
-        if let Some(offset) = self.get_cached((mem_config.clone(), conflict_threshold)) {
+        if let Some(offset) = self.get_cached((*mem_config, conflict_threshold)) {
             return Some(offset);
         }
         // find PFN offset
@@ -66,7 +66,7 @@ where
             let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
             if time > conflict_threshold {
                 info!("Pre-check failed. Block is not consecutive");
-                return self.put(None, (mem_config.clone(), conflict_threshold));
+                return self.put(None, (*mem_config, conflict_threshold));
             }
         } else {
             debug!("Skip pre-check, block is too small");
@@ -92,8 +92,8 @@ where
                 let offset2 = row_pair[1] * ROW_SIZE;
                 let addr1 = self.addr(offset1);
                 let addr2 = self.addr(offset2);
-                let dram1 = unsafe { DRAMAddr::from_virt_offset(addr1, addr_offset, &mem_config) };
-                let dram2 = unsafe { DRAMAddr::from_virt_offset(addr2, addr_offset, &mem_config) };
+                let dram1 = unsafe { DRAMAddr::from_virt_offset(addr1, addr_offset, mem_config) };
+                let dram2 = unsafe { DRAMAddr::from_virt_offset(addr2, addr_offset, mem_config) };
                 let same_bank = dram1.bank == dram2.bank;
                 let time = unsafe { timer.time_subsequent_access_from_ram(addr1, addr2, 1000) };
                 if (same_bank && time < conflict_threshold)
@@ -120,8 +120,8 @@ where
                     continue 'next_offset;
                 }
             }
-            return self.put(Some(row_offset), (mem_config.clone(), conflict_threshold));
+            return self.put(Some(row_offset), (*mem_config, conflict_threshold));
         }
-        self.put(None, (mem_config.clone(), conflict_threshold))
+        self.put(None, (*mem_config, conflict_threshold))
     }
 }
