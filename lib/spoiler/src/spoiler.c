@@ -267,9 +267,16 @@ void log_measurements(const char *fname, uint64_t *measurementBuffer, size_t cou
 	fclose(file);
 }
 
-struct addr_space *auto_spoiler(uint8_t *buffer)
+struct measurement
 {
-	clock_t start = clock();
+	uint64_t measurementBuffer[PAGE_COUNT];
+	uint64_t diffBuffer[PAGE_COUNT];
+};
+
+struct measurement *spoiler_measure(uint8_t *buffer, uint8_t *read)
+{
+	struct measurement *ret = malloc(sizeof(struct measurement));
+
 	////////////////////////////////SPOILER////////////////////////////////////
 	// Warmup loop to avoid initial spike in timings
 #define PASS asm("nop")
@@ -277,10 +284,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	for (int i = 0; i < 1000000; i++)
 		PASS;
 #define WINDOW 64
-
 	// JB: do the actual spoiler measurements
-	uint64_t measurementBuffer[PAGE_COUNT] = {0};
-	uint64_t diffBuffer[PAGE_COUNT] = {0};
 	{
 		int t2_prev = 0;
 		// for each page in [WINDOW...PAGE_COUNT)
@@ -295,7 +299,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 				{
 					buffer[(p - i) * PAGE_SIZE] = 0;
 				}
-				measure(buffer, &tt);
+				measure(read, &tt);
 				// printf("tt = %lu\n", tt);
 
 				if (tt < THRESH_OUTLIER)
@@ -309,21 +313,28 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 			if (cc > 0)
 			{
 				uint64_t result = total / cc;
-				measurementBuffer[p] = result;
+				ret->measurementBuffer[p] = result;
 				if (total / SPOILER_ROUNDS < t2_prev)
 				{
-					diffBuffer[p] = 0;
+					ret->diffBuffer[p] = 0;
 				}
 				else
 				{
-					diffBuffer[p] = (total / SPOILER_ROUNDS) - t2_prev;
+					ret->diffBuffer[p] = (total / SPOILER_ROUNDS) - t2_prev;
 				}
 			}
 			t2_prev = total / SPOILER_ROUNDS;
 		}
 	}
-	log_measurements("measurements.csv", measurementBuffer, PAGE_COUNT);
-	log_measurements("diffs.csv", diffBuffer, PAGE_COUNT);
+	return ret;
+}
+
+struct addr_space *auto_spoiler(uint8_t *buffer)
+{
+	clock_t start = clock();
+	struct measurement *m = spoiler_measure(buffer, buffer);
+	log_measurements("measurements.csv", m->measurementBuffer, PAGE_COUNT);
+	log_measurements("diffs.csv", m->diffBuffer, PAGE_COUNT);
 
 	const uint64_t THRESH_LOW = 400;
 	const uint64_t THRESH_HI = 800;
@@ -340,10 +351,10 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		uint64_t *centers = (uint64_t *)malloc(3 * sizeof(uint64_t));
 
 		srand((unsigned int)time(NULL)); // kmeans uses random values for initial centers: seed the RNG
-		centers = kmeans(diffBuffer, search_space, 3, 100, clusters);
+		centers = kmeans(m->diffBuffer, search_space, 3, 100, clusters);
 
 		// dump the time measurements and the cluster assignments to a file
-		FILE *file = fopen("memory_profiling/logs/spoiler_cluster.csv", "w+");
+		FILE *file = fopen("log/memory_profiling/logs/spoiler_cluster.csv", "w+");
 		if (file == NULL)
 		{
 			printf("Error opening file!\n");
@@ -352,7 +363,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		fprintf(file, "index,diffBuffer,cluster\n");
 		for (int i = 0; i < search_space; i++)
 		{
-			fprintf(file, "%d,%lu,%lu\n", i, diffBuffer[i], clusters[i]);
+			fprintf(file, "%d,%lu,%lu\n", i, m->diffBuffer[i], clusters[i]);
 		}
 		fclose(file);
 
@@ -378,7 +389,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		{
 			if (clusters[i] == largest_index)
 			{
-				sum += pow(sub_abs(diffBuffer[i], centers[largest_index]), 2);
+				sum += pow(sub_abs(m->diffBuffer[i], centers[largest_index]), 2);
 			}
 		}
 
@@ -397,7 +408,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	int apart[PEAKS] = {0};
 	for (int p = 0; p < PAGE_COUNT; p++)
 	{
-		if (diffBuffer[p] > THRESH_LOW && diffBuffer[p] < THRESH_HI)
+		if (m->diffBuffer[p] > THRESH_LOW && m->diffBuffer[p] < THRESH_HI)
 		{
 			peaks[peak_index] = p;
 			peak_index++;
@@ -458,7 +469,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	{
 		ret->memory_addresses[i] = &buffer[((cont_start * PAGE_SIZE) + (i * PAGE_SIZE))];
 	}
-	process_buff(ret, measurementBuffer);
+	process_buff(ret, m->measurementBuffer);
 	return ret;
 	///////////////////////////////////////////////////////////////////////////
 }
@@ -666,4 +677,14 @@ inline uint8_t **memory_addresses(const struct addr_space *addr)
 inline int length(const struct addr_space *addr)
 {
 	return addr->length;
+}
+
+const uint64_t *measurements(const struct measurement *m)
+{
+	return m->measurementBuffer;
+}
+
+const uint64_t *diffs(const struct measurement *m)
+{
+	return m->diffBuffer;
 }

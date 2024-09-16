@@ -9,3 +9,8 @@ struct addr_space *auto_spoiler(uint8_t *buffer);
 
 uint8_t **memory_addresses(const struct addr_space *addr);
 int length(const struct addr_space *addr);
+
+struct measurement *spoiler_measure(uint8_t *write, uint8_t *read);
+
+const uint64_t *measurements(const struct measurement *m);
+const uint64_t *diffs(const struct measurement *m);
