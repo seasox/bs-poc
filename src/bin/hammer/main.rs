@@ -87,6 +87,8 @@ pub enum ConsecAllocType {
 fn create_allocator_from_cli(
     alloc_strategy: ConsecAllocType,
     consec_checker: ConsecCheck,
+    mem_config: MemConfiguration,
+    threshold: u64,
     progress: Option<MultiProgress>,
 ) -> ConsecAlloc {
     match alloc_strategy {
@@ -95,7 +97,7 @@ fn create_allocator_from_cli(
         ConsecAllocType::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
         ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
         ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Spoiler::new()),
+        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Spoiler::new(mem_config, threshold)),
     }
 }
 
@@ -184,9 +186,9 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
 }
 
 fn hammer(
-    hammerer: HammerStrategy,
-    pattern: HammeringPattern,
-    mapping: PatternAddressMapper,
+    hammerer: &HammerStrategy,
+    pattern: &HammeringPattern,
+    mapping: &PatternAddressMapper,
     victim: &mut dyn HammerVictim,
     mem_config: MemConfiguration,
     block_size: usize,
@@ -224,8 +226,7 @@ fn hammer(
             return Ok(HammerResult { run: 0, attempt: 0 });
         }
     };
-    let flips = mapping.bit_flips;
-    info!("Expected bitflips: {:?}", flips);
+    info!("Expected bitflips: {:?}", mapping.bit_flips);
 
     info!("Hammering pattern. This might take a while...");
     hammerer.hammer(victim, 3)
@@ -246,17 +247,21 @@ unsafe fn _main() -> anyhow::Result<()> {
         config.threshold,
         Some(progress.clone()),
     )?;
-    let alloc_strategy =
-        create_allocator_from_cli(args.alloc_strategy, consec_checker, Some(progress.clone()));
+    let mut alloc_strategy = create_allocator_from_cli(
+        args.alloc_strategy,
+        consec_checker,
+        mem_config,
+        config.threshold,
+        Some(progress.clone()),
+    );
     let block_size = alloc_strategy.block_size();
 
     info!("Starting bait allocation");
-    let memory = allocator::alloc_memory(alloc_strategy, mem_config, &pattern.mapping)?;
+    let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
     info!("Allocated {} bytes of memory", memory.len());
 
     let mut victim = process::spawn_victim(&args.target)?;
     process::log_victim_stderr(&mut victim)?;
-
     let mut hammer_victim: Box<dyn HammerVictim> = match &mut victim {
         Some(victim) => {
             let mut pipe: PipeIPC<ChildStdout, ChildStdin> = process::piped_channel(victim)?;
@@ -265,16 +270,16 @@ unsafe fn _main() -> anyhow::Result<()> {
         }
         None => {
             warn!(
-            "No target specified. Consider `./hammer --config [...] your_victim your_victim_args`"
-        );
+                "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
+            );
             Box::new(victim::MemCheck::new(mem_config, &memory))
         }
     };
 
     let result = hammer(
-        args.hammerer,
-        pattern.pattern,
-        pattern.mapping,
+        &args.hammerer,
+        &pattern.pattern,
+        &pattern.mapping,
         &mut *hammer_victim,
         mem_config,
         block_size,
@@ -289,9 +294,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             warn!("Hammering not successful: {:?}", e);
         }
     }
-
-    drop(hammer_victim);
-
     if let Some(victim) = victim {
         info!("Waiting for victim to finish");
         let output = victim.wait_with_output()?;
@@ -299,7 +301,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     info!("Goodbye.");
 
-    Ok(())
+    return Ok(());
 }
 
 fn main() -> anyhow::Result<()> {

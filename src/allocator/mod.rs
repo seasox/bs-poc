@@ -46,7 +46,7 @@ use crate::memory::ConsecBlocks;
 /// - `Err(Error)` if there is any failure during allocation.
 ///
 pub unsafe fn alloc_memory(
-    mut alloc_strategy: ConsecAlloc,
+    alloc_strategy: &mut ConsecAlloc,
     mem_config: MemConfiguration,
     mapping: &PatternAddressMapper,
 ) -> anyhow::Result<ConsecBlocks> {

@@ -112,7 +112,7 @@ impl PatternAddressMapper {
 
     pub fn get_hammering_addresses_relocate(
         &self,
-        aggressors: &Vec<Aggressor>,
+        aggressors: &[Aggressor],
         mem_config: MemConfiguration,
         block_shift: usize,
         memory: &ConsecBlocks,

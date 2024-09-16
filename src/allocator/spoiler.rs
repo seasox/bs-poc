@@ -14,11 +14,17 @@ use crate::{
     util::PAGE_SIZE,
 };
 
-pub struct Spoiler {}
+pub struct Spoiler {
+    mem_config: MemConfiguration,
+    threshold: u64,
+}
 
 impl Spoiler {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(mem_config: MemConfiguration, threshold: u64) -> Self {
+        Self {
+            mem_config,
+            threshold,
+        }
     }
 }
 
