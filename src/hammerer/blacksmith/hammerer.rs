@@ -276,7 +276,8 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
 
         let hammer_log_cb = |action: &str, addr: *const u8| {
             let block_idx = blocks.iter().find_position(|base| {
-                (addr as u64) >= base.ptr() as u64 && (addr as u64) < (base.addr(base.len()) as u64)
+                (addr as u64) >= base.ptr() as u64
+                    && (addr as u64) <= (base.addr(base.len() - 1) as u64)
             });
             let found = block_idx.is_some();
             if !found {
