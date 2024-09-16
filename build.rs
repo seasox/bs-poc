@@ -6,6 +6,10 @@ fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
     println!("cargo:rerun-if-changed=lib/spoiler/include/spoiler.h");
     bindings
         .header("lib/spoiler/include/spoiler.h")
+        .header("lib/spoiler/include/misc.h")
+        .allowlist_function("spoiler_measure")
+        .allowlist_function("measurements")
+        .allowlist_function("diffs")
         .allowlist_function("auto_spoiler")
         .allowlist_function("memory_addresses")
         .allowlist_function("length")
@@ -20,6 +24,8 @@ fn build_spoiler() {
     ];
     cc::Build::new()
         .files(spoiler_srcs.clone())
+        .flag("-Wall")
+        .flag("-Werror")
         .flag("-Wno-sign-compare")
         .flag("-Wno-unused-parameter")
         .flag("-Wno-unused-variable")
