@@ -83,14 +83,14 @@ fn alloc_4m_consec() -> anyhow::Result<MemBlock> {
     info!("Allocating a consecutive 4 MiB block. This might take some time...");
     let pfn_checker = ConsecCheckPfn {};
     let mut allocations: [*mut libc::c_void; 10000] = [null_mut(); 10000];
-    for i in 0..10000 {
+    for allocation in allocations.iter_mut() {
         let ptr = mmap(4 * MB)?;
         let mem = MemBlock::new(ptr as *mut u8, 4 * MB);
         let is_consec = pfn_checker.check(&mem)?;
         if is_consec {
             return Ok(mem);
         } else {
-            allocations[i] = ptr;
+            *allocation = ptr;
         }
     }
     bail!("Failed to allocate 4M consecutive pages");

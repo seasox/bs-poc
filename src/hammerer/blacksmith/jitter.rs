@@ -73,6 +73,9 @@ pub struct CodeJitter {
     total_activations: u32,
 }
 
+/// A program that can be executed.
+///
+/// The program is represented as a byte buffer containing machine code.
 pub struct Program {
     code: Mmap,
     start: u64,
@@ -100,14 +103,16 @@ impl Program {
 }
 
 impl Program {
+    /// Execute the program.
+    ///
+    /// # Safety
+    /// The program must be valid machine code. The caller must ensure that the program is safe to execute.
     pub unsafe fn call(&self) -> u64 {
         let jit_function_ptr = self.code.as_ptr().offset(self.start as isize);
         let function_size_bytes = self.code.len() - self.start as usize;
-        let jit_function_bytes =
-            unsafe { slice::from_raw_parts(jit_function_ptr, function_size_bytes) };
-        let jit_function: JitFunction = unsafe { mem::transmute(jit_function_bytes.as_ptr()) };
-        let result = unsafe { jit_function() };
-        result
+        let jit_function_bytes = slice::from_raw_parts(jit_function_ptr, function_size_bytes);
+        let jit_function: JitFunction = mem::transmute(jit_function_bytes.as_ptr());
+        jit_function()
     }
 
     pub fn write(&self, filename: &str) -> Result<()> {
@@ -146,18 +151,20 @@ impl Jitter for CodeJitter {
 
         // part 1: synchronize with the beginning of an interval
         // warmup
-        for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx] as u64)?;
+        assert!(aggressor_pairs.len() >= num_timed_accesses);
+        for &agg in aggressor_pairs.iter().take(num_timed_accesses) {
+            a.mov(rax, agg as u64)?;
             a.mov(rbx, ptr(rax))?;
-            log_cb("ACCESS", aggressor_pairs[idx]);
+            log_cb("ACCESS", agg);
         }
 
         a.set_label(&mut while1_begin)?;
 
-        for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx] as u64)?;
+        assert!(aggressor_pairs.len() >= num_timed_accesses);
+        for &agg in aggressor_pairs.iter().take(num_timed_accesses) {
+            a.mov(rax, agg as u64)?;
             a.clflushopt(ptr(rax))?;
-            log_cb("FLUSH", aggressor_pairs[idx]);
+            log_cb("FLUSH", agg);
         }
 
         // fence memory activations, retrieve timestamp
@@ -167,10 +174,10 @@ impl Jitter for CodeJitter {
         a.mov(ebx, eax)?;
 
         // use first NUM_TIMED_ACCESSES addresses for sync
-        for idx in 0..num_timed_accesses {
-            a.mov(rax, aggressor_pairs[idx] as u64)?;
+        for &agg in aggressor_pairs.iter().take(num_timed_accesses) {
+            a.mov(rax, agg as u64)?;
             a.mov(rcx, ptr(rax))?;
-            log_cb("ACCESS", aggressor_pairs[idx]);
+            log_cb("ACCESS", agg);
         }
         // if ((after - before) > 1000) break;
         a.rdtscp()?;

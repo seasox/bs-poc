@@ -2,6 +2,8 @@ use crate::memory::keyed_cache::KeyedCache;
 use crate::memory::mem_configuration::MemConfiguration;
 use std::cell::RefCell;
 
+type CacheKey = (MemConfiguration, u64);
+type CacheValue = Option<usize>;
 /// An enum representing a PFN offset that can be either fixed or dynamic.
 /// A fixed PFN offset is a constant value that is set once and never changes.
 /// A dynamic PFN offset is a value that is calculated at runtime.
@@ -9,7 +11,7 @@ use std::cell::RefCell;
 #[derive(Clone, Debug)]
 pub enum PfnOffset {
     Fixed(usize),
-    Dynamic(RefCell<Option<(Option<usize>, (MemConfiguration, u64))>>), // a RefCell holding the cached value for the PFN offset as well as a key (mem_config, threshold)
+    Dynamic(Box<RefCell<Option<(CacheValue, CacheKey)>>>), // a RefCell holding the cached value for the PFN offset as well as a key (mem_config, threshold)
 }
 
 /// A trait for a type that can provide a PFN offset.

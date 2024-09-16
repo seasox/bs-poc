@@ -37,8 +37,7 @@ impl BytePointer for ConsecBlocks {
     }
 
     fn ptr(&self) -> *mut u8 {
-        assert!(self.blocks.len() > 0, "No blocks");
-        self.blocks[0].ptr()
+        self.blocks.first().unwrap().ptr()
     }
 
     fn len(&self) -> usize {

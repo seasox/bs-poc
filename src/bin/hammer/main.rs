@@ -88,16 +88,15 @@ fn create_allocator_from_cli(
     alloc_strategy: ConsecAllocType,
     consec_checker: ConsecCheck,
     mem_config: MemConfiguration,
-    threshold: u64,
     progress: Option<MultiProgress>,
 ) -> ConsecAlloc {
     match alloc_strategy {
         ConsecAllocType::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(consec_checker)),
         ConsecAllocType::CoCo => ConsecAlloc::CoCo(CoCo {}),
         ConsecAllocType::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
-        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::new()),
+        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
         ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Spoiler::new(mem_config, threshold)),
+        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config))),
     }
 }
 
@@ -123,7 +122,7 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
         stdin()
             .read_line(&mut option)
             .expect("Did not enter a correct string");
-        match str::parse::<usize>(&option.trim()) {
+        match str::parse::<usize>(option.trim()) {
             Ok(i) => {
                 if i < fuzz.hammering_patterns.len() {
                     return Ok(fuzz.hammering_patterns[i].id.clone());
@@ -169,7 +168,7 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
 
     let pattern = HammeringPattern::load_pattern_from_json(args.load_json.clone(), pattern)?;
     let mapping = match &args.mapping {
-        Some(mapping) => pattern.find_mapping(&mapping).expect("mapping not found"),
+        Some(mapping) => pattern.find_mapping(mapping).expect("mapping not found"),
         None => pattern
             .determine_most_effective_mapping()
             .expect("pattern contains no mapping"),
@@ -212,7 +211,7 @@ fn hammer(
             )?)
         }
         HammerStrategy::Dummy => {
-            let flip = mapping.get_bitflips_relocate(mem_config, &memory);
+            let flip = mapping.get_bitflips_relocate(mem_config, memory);
             let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
             info!(
                 "Running dummy hammerer with flip at VA 0x{:02x}",
@@ -251,7 +250,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         args.alloc_strategy,
         consec_checker,
         mem_config,
-        config.threshold,
         Some(progress.clone()),
     );
     let block_size = alloc_strategy.block_size();
@@ -301,7 +299,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     info!("Goodbye.");
 
-    return Ok(());
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {

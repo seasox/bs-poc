@@ -59,7 +59,7 @@ pub struct PatternAddressMapper {
 impl PatternAddressMapper {
     pub fn get_hammering_addresses(
         &self,
-        aggressors: &Vec<Aggressor>,
+        aggressors: &[Aggressor],
         base_msb: AggressorPtr,
         mem_config: MemConfiguration,
     ) -> Vec<AggressorPtr> {
@@ -81,9 +81,9 @@ impl PatternAddressMapper {
 
         // group aggressors by prefix
         let groups: Vec<Vec<(&Aggressor, &DRAMAddr)>> = group(addrs_vec, |(_, addr)| {
+            #[allow(clippy::zero_ptr)]
             let virt = addr.to_virt(0 as *const u8, mem_config) as usize;
-            let virt = virt >> block_shift;
-            virt
+            virt >> block_shift
         });
         groups
     }
@@ -140,6 +140,7 @@ impl PatternAddressMapper {
             let base = memory.addr(base_idx * block_size) as u64;
             let base = base & !((1 << block_shift) - 1);
             let addr = &addrs[agg];
+            #[allow(clippy::zero_ptr)]
             let virt = addr.to_virt(0 as *const u8, mem_config);
             let virt = virt as u64 & ((1 << block_shift) - 1);
             let virt = (base | virt) as *const u8;
@@ -220,7 +221,7 @@ impl HammeringPattern {
         let f = File::open(&json_filename)?;
         let reader = BufReader::new(f);
         let patterns: FuzzSummary = serde_json::from_reader(reader)?;
-        Ok(patterns
+        patterns
             .hammering_patterns
             .into_iter()
             .find(|p| pattern_id.eq(&p.id))
@@ -230,7 +231,7 @@ impl HammeringPattern {
                     pattern_id.clone(),
                     json_filename
                 )
-            })?)
+            })
     }
 }
 
@@ -305,7 +306,7 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
 
         let num_accessed_addrs = hammering_addrs
-            .into_iter()
+            .iter()
             .map(|x| (*x as usize) & !0xFFF)
             .unique()
             .count();
@@ -315,7 +316,7 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
         let program =
             mapping
                 .code_jitter
-                .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
+                .jit(acts_per_tref as u64, hammering_addrs, &hammer_log_cb)?;
         if cfg!(feature = "jitter_dump") {
             program
                 .write("hammer_jit.o")

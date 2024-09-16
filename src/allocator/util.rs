@@ -21,6 +21,7 @@ pub fn compact_mem() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
     use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
 
@@ -44,7 +45,12 @@ pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
     v as *mut P
 }
 
-pub fn munmap<P>(addr: *mut P, len: usize) {
-    let r = unsafe { libc::munmap(addr as *mut libc::c_void, len) };
+/// Unmap memory
+///
+/// # Safety
+/// * `addr` must be a valid pointer to a memory region previously allocated by `mmap`
+/// * `len` must be less than or equal the length as the memory region previously allocated by `mmap`
+pub unsafe fn munmap<P>(addr: *mut P, len: usize) {
+    let r = libc::munmap(addr as *mut libc::c_void, len);
     assert_eq!(r, 0, "munmap: {}", std::io::Error::last_os_error());
 }

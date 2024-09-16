@@ -45,37 +45,27 @@ fn main() -> Result<()> {
     for row in 1..mem_config.get_row_count() {
         let addr = start_addr.add(0, row, 0);
         let addr_virt = addr.to_virt(base_msb, mem_config);
-        let time = unsafe {
-            timer.time_subsequent_access_from_ram(
-                start_addr_virt as *const u8,
-                addr_virt as *const u8,
-                1000,
-            )
-        };
+        let time =
+            unsafe { timer.time_subsequent_access_from_ram(start_addr_virt, addr_virt, 1000) };
         print!("{:?}, {:?}, {}", start_addr, addr, time);
         if time < THRESH {
             print!(" [FAST]");
             outliers.fast.push(addr.clone());
         }
-        println!("");
+        println!();
     }
 
     for bank in 0..mem_config.get_bank_count() {
         let addr = start_addr.add(bank, 0, 0);
         let addr_virt = addr.to_virt(base_msb, mem_config);
-        let time = unsafe {
-            timer.time_subsequent_access_from_ram(
-                start_addr_virt as *const u8,
-                addr_virt as *const u8,
-                1000,
-            )
-        };
+        let time =
+            unsafe { timer.time_subsequent_access_from_ram(start_addr_virt, addr_virt, 1000) };
         print!("{:?}, {:?}, {}", start_addr, addr, time);
         if time > THRESH {
             print!(" [SLOW]");
             outliers.slow.push(addr.clone());
         }
-        println!("");
+        println!();
     }
 
     println!("Too fast: {:?}", outliers.fast);

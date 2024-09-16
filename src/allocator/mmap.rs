@@ -41,7 +41,7 @@ fn spawn_loader_thread(
 ) -> JoinHandle<()> {
     spawn(move || {
         info!(target: "loader", "Loader thread started");
-        while stop.load(Ordering::Relaxed) == false {
+        while !stop.load(Ordering::Relaxed) {
             let blocks = blocks.lock().unwrap().clone();
             for block in blocks {
                 for offset in (0..block.len).step_by(ROW_SIZE) {
@@ -49,7 +49,7 @@ fn spawn_loader_thread(
                     let count = min(ROW_SIZE, block.len - offset);
                     trace!(target: "loader", "Waiting for memory lock");
                     let mem_lock = mem_lock.lock().unwrap();
-                    unsafe { std::ptr::write_bytes(addr as *mut u8, 0, count) };
+                    unsafe { std::ptr::write_bytes(addr, 0, count) };
                     drop(mem_lock);
                 }
             }
@@ -117,7 +117,7 @@ impl ConsecAllocator for Mmap {
         4 * MB
     }
 
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         assert_eq!(size % self.block_size(), 0);
         unsafe impl Send for MemBlock {}
         let block_size = self.block_size();
@@ -155,8 +155,7 @@ impl ConsecAllocator for Mmap {
 
         let _blocks = blocks
             .into_iter()
-            .map(|block| block.pfn_align().expect("Failed to align block"))
-            .flatten()
+            .flat_map(|block| block.pfn_align().expect("Failed to align block"))
             .collect_vec();
 
         todo!("Migrate config file to struct member");

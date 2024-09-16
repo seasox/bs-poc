@@ -12,8 +12,8 @@ pub struct HugepageRandomized {
 
 impl HugepageRandomized {
     pub fn new(num_hugepages: u8) -> Self {
-        let hugepages = make_vec(num_hugepages as usize, |_| unsafe {
-            HugepageAllocator::new()
+        let hugepages = make_vec(num_hugepages as usize, |_| {
+            HugepageAllocator::default()
                 .alloc_consec_blocks(1024 * MB)
                 .expect("hugepage alloc")
         });
@@ -26,7 +26,7 @@ impl ConsecAllocator for HugepageRandomized {
         4 * MB
     }
 
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         let hp_size = 1024 * MB;
         let chunk_size = self.block_size();
         let num_chunks = hp_size / chunk_size;

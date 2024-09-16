@@ -40,7 +40,10 @@ lazy_static! {
 fn parse_hugepage_size(s: &str) -> isize {
     for line in s.lines() {
         if line.starts_with(TOKEN) {
-            let mut parts = line[TOKEN.len()..].split_whitespace();
+            let mut parts = match line.strip_prefix(TOKEN) {
+                Some(line) => line.split_whitespace(),
+                None => panic!("Invalid line: {}", line),
+            };
 
             let p = parts.next().unwrap_or("0");
             let mut hugepage_size = p.parse::<isize>().unwrap_or(-1);
@@ -54,7 +57,7 @@ fn parse_hugepage_size(s: &str) -> isize {
         }
     }
 
-    return -1;
+    -1
 }
 
 fn align_to(size: usize, align: usize) -> usize {
@@ -63,14 +66,8 @@ fn align_to(size: usize, align: usize) -> usize {
 
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct HugepageAllocator {}
-
-impl HugepageAllocator {
-    pub fn new() -> Self {
-        HugepageAllocator {}
-    }
-}
 
 #[cfg(target_arch = "x86_64")]
 unsafe impl GlobalAlloc for HugepageAllocator {
@@ -99,7 +96,7 @@ impl ConsecAllocator for HugepageAllocator {
     fn block_size(&self) -> usize {
         *HUGEPAGE_SIZE as usize
     }
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<super::ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<super::ConsecBlocks> {
         if size > self.block_size() {
             bail!(
                 "Only support allocations up to 0x{:x} bytes",
@@ -145,7 +142,7 @@ pub mod tests {
         unsafe {
             let layout = Layout::new::<u16>();
             let p = hugepage_alloc.alloc(layout);
-            assert_eq!(p.is_null(), false);
+            assert!(!p.is_null(), "allocation failed");
             *p = 20;
             assert_eq!(*p, 20);
             hugepage_alloc.dealloc(p, layout);
@@ -155,7 +152,7 @@ pub mod tests {
         unsafe {
             let layout = Layout::array::<char>(2048).unwrap();
             let dst = hugepage_alloc.alloc(layout);
-            assert_eq!(dst.is_null(), false);
+            assert!(!dst.is_null(), "allocation failed");
 
             let src = String::from("hello rust");
             let len = src.len();

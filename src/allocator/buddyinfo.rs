@@ -27,7 +27,7 @@ impl ConsecAllocator for BuddyInfo {
         4 * MB
     }
 
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         let block_size = self.block_size();
         if size % block_size != 0 {
             bail!(
@@ -46,7 +46,7 @@ impl ConsecAllocator for BuddyInfo {
         }
         // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
         for block in &blocks {
-            unsafe { std::ptr::write_bytes(block.ptr as *mut u8, 0, block.len) };
+            unsafe { std::ptr::write_bytes(block.ptr, 0, block.len) };
         }
         Ok(ConsecBlocks::new(blocks))
     }
@@ -93,9 +93,8 @@ fn read_pagetypeinfo() -> anyhow::Result<String> {
 
 /// Log /proc/pagetypeinfo to trace
 fn log_pagetypeinfo() {
-    match read_pagetypeinfo() {
-        Ok(pti) => trace!("{}", pti),
-        Err(_) => {}
+    if let Ok(pti) = read_pagetypeinfo() {
+        trace!("{}", pti)
     }
 }
 
@@ -113,15 +112,13 @@ fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
         .iter()
         .find(|z| z.zone().eq("Normal"))
         .context("Zone 'Normal' not found")?;
-    return Ok(zone.free_areas().clone());
+    return Ok(*zone.free_areas());
 }
 
 fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {
     let mut diffs: [i64; S] = [Default::default(); S];
-    let mut i = 0;
-    for (&l, &r) in l.iter().zip(r) {
+    for (i, (&l, &r)) in l.iter().zip(r).enumerate() {
         diffs[i] = l as i64 - r as i64;
-        i += 1;
     }
     diffs
 }
@@ -184,10 +181,7 @@ impl MemBlock {
             let block = MemBlock::find_block10_candidate()?;
             // munmap slice of MemBlock
             unsafe {
-                libc::munmap(
-                    (block.ptr as *mut u8).add(size) as *mut libc::c_void,
-                    block.len - size,
-                );
+                libc::munmap(block.ptr.add(size) as *mut libc::c_void, block.len - size);
             }
             let block = MemBlock::new(block.ptr, size);
             match consec_checker.check(&block) {
@@ -211,8 +205,8 @@ impl MemBlock {
             panic!("Invalid order");
         }
         let mut bytes = 0;
-        for i in 0..=max_order {
-            bytes += blocks[i] as usize * (1 << i) * PAGE_SIZE;
+        for (i, block) in blocks.iter().enumerate().take(max_order + 1) {
+            bytes += *block as usize * (1 << i) * PAGE_SIZE;
         }
         bytes
     }

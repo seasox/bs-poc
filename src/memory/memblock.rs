@@ -28,7 +28,7 @@ impl MemBlock {
         MemBlock {
             ptr,
             len,
-            pfn_offset: PfnOffset::Dynamic(RefCell::new(None)),
+            pfn_offset: PfnOffset::Dynamic(Box::new(RefCell::new(None))),
         }
     }
     pub fn mmap(size: usize) -> anyhow::Result<Self> {

@@ -29,9 +29,9 @@ impl DRAMAddr {
             res <<= 1;
             res |= (p & i).count_ones() as usize & 1;
         }
-        let bank = (res >> mem_config.bk_shift) & mem_config.bk_mask as usize;
-        let row = (res >> mem_config.row_shift) & mem_config.row_mask as usize;
-        let col = (res >> mem_config.col_shift) & mem_config.col_mask as usize;
+        let bank = (res >> mem_config.bk_shift) & mem_config.bk_mask;
+        let row = (res >> mem_config.row_shift) & mem_config.row_mask;
+        let col = (res >> mem_config.col_shift) & mem_config.col_mask;
 
         DRAMAddr { bank, row, col }
     }

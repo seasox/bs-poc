@@ -66,7 +66,7 @@ pub unsafe fn alloc_memory(
 
 pub trait ConsecAllocator {
     fn block_size(&self) -> usize;
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks>;
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks>;
 }
 
 /// A helper enum to create an allocator from CLI arguments.
@@ -78,7 +78,7 @@ pub enum ConsecAlloc {
     Hugepage(HugepageAllocator),
     HugepageRnd(HugepageRandomized),
     Mmap(Mmap),
-    Spoiler(Spoiler),
+    Spoiler(Box<Spoiler>),
 }
 
 impl ConsecAllocator for ConsecAlloc {
@@ -93,7 +93,7 @@ impl ConsecAllocator for ConsecAlloc {
         }
     }
 
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         match self {
             ConsecAlloc::BuddyInfo(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::CoCo(alloc) => alloc.alloc_consec_blocks(size),

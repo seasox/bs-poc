@@ -56,7 +56,7 @@ impl VirtToPhysResolver for LinuxPageMap {
         let pfn = entry[0]
             .pfn()
             .with_context(|| format!("failed to get PFN for pagemap entry {:?}", entry[0]))?;
-        let phys_addr = (pfn << PAGE_SHIFT) | ((virt as u64) & 0xFFF);
+        let phys_addr = (pfn << PAGE_SHIFT) | (virt & 0xFFF);
 
         Ok(phys_addr)
     }

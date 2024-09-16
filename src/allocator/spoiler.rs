@@ -1,9 +1,5 @@
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{
-    construct_memory_tuple_timer, BytePointer, ConsecCheckBankTiming, DRAMAddr, FormatPfns,
-    PfnResolver,
-};
-use core::slice;
+use crate::memory::{BytePointer, DRAMAddr, FormatPfns, PfnResolver};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::ops::{Deref, Range};
@@ -11,12 +7,11 @@ use std::ptr::null_mut;
 
 use anyhow::bail;
 use itertools::Itertools;
-use x86::msr::LASTBRANCHFROMIP;
 
 use super::ConsecAllocator;
 use crate::allocator::util::{compact_mem, mmap, munmap};
+use crate::retry;
 use crate::util::MB;
-use crate::{addr_space, length, memory_addresses, retry};
 use crate::{
     memory::{ConsecBlocks, MemBlock},
     util::PAGE_SIZE,
@@ -24,33 +19,11 @@ use crate::{
 
 pub struct Spoiler {
     mem_config: MemConfiguration,
-    threshold: u64,
 }
 
 impl Spoiler {
-    pub fn new(mem_config: MemConfiguration, threshold: u64) -> Self {
-        Self {
-            mem_config,
-            threshold,
-        }
-    }
-}
-
-/// Trait for converting raw pointers to Rust types
-trait FromRaw<T> {
-    /// Convert a raw pointer to a Rust type
-    fn from_raw(raw_ptr: *mut T) -> Self;
-}
-
-type AddrSpace = Vec<*mut u8>;
-impl FromRaw<addr_space> for AddrSpace {
-    fn from_raw(raw_ptr: *mut addr_space) -> Self {
-        let addrs = unsafe { memory_addresses(raw_ptr) };
-        let addrs_len = unsafe { length(raw_ptr) } as usize;
-        assert!(!addrs.is_null());
-        assert!(addrs_len > 0);
-        let slice = unsafe { slice::from_raw_parts(addrs, addrs_len) };
-        Vec::from(slice)
+    pub fn new(mem_config: MemConfiguration) -> Self {
+        Self { mem_config }
     }
 }
 
@@ -59,7 +32,7 @@ impl ConsecAllocator for Spoiler {
         4 * MB
     }
 
-    unsafe fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
+    fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         const PAGE_COUNT: usize = 256 * 512;
 
         //let hugeblock_len = 1 << 30;
@@ -68,7 +41,6 @@ impl ConsecAllocator for Spoiler {
         let mut blocks: Vec<MemBlock> = vec![];
         const BLOCK_SIZE: usize = 4 * MB;
         let block_count = size.div_ceil(BLOCK_SIZE);
-        let timer = construct_memory_tuple_timer()?;
         while blocks.len() < block_count {
             let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
             let round_blocks = retry!(|| {
@@ -87,19 +59,20 @@ impl ConsecAllocator for Spoiler {
                 let addrs = spoiler_candidates
                     .iter()
                     .flat_map(|(start, end)| {
-                        (0..(end - start))
-                            .map(move |i| search_buffer.byte_add((start + i) * PAGE_SIZE))
+                        (0..(end - start)).map(move |i| unsafe {
+                            search_buffer.byte_add((start + i) * PAGE_SIZE)
+                        })
                     })
                     .collect::<Vec<_>>();
 
                 let to_munmap = (0..512 * MB)
                     .step_by(PAGE_SIZE)
-                    .map(|i| search_buffer.byte_add(i))
+                    .map(|i| unsafe { search_buffer.byte_add(i) })
                     .filter(|ptr| !addrs.contains(ptr))
                     .collect_vec();
 
                 for ptr in to_munmap {
-                    munmap(ptr, PAGE_SIZE);
+                    unsafe { munmap(ptr, PAGE_SIZE) };
                 }
                 let mut blocks = vec![];
                 let mut prev_end = 0;
@@ -107,9 +80,9 @@ impl ConsecAllocator for Spoiler {
                     if candidate.0 < prev_end {
                         continue;
                     }
-                    let addr = search_buffer.byte_add(candidate.0 * PAGE_SIZE);
+                    let addr = unsafe { search_buffer.byte_add(candidate.0 * PAGE_SIZE) };
                     let offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
-                    let addr = addr.byte_add(offset);
+                    let addr = unsafe { addr.byte_add(offset) };
                     if addr.pfn().unwrap() & 0xFFFFF != 0 {
                         error!(
                             "Not aligned to 1 MB boundary: {:?}, offset {}",
@@ -183,7 +156,7 @@ impl<T> Deref for CArray<T> {
     }
 }
 
-fn spoiler(requested_size: usize) -> anyhow::Result<ConsecBlocks> {
+fn _spoiler(requested_size: usize) -> anyhow::Result<ConsecBlocks> {
     let block_size = 8 * MB;
     let rounds = requested_size.div_ceil(block_size);
     for _ in 0..rounds {
@@ -227,7 +200,7 @@ fn spoiler_candidates(
     const THRESH_LOW: u64 = 400;
     const THRESH_HIGH: u64 = 800;
 
-    const PAGES_PER_MB: usize = 1 * MB / PAGE_SIZE;
+    const PAGES_PER_MB: usize = MB / PAGE_SIZE;
 
     let page_count = 256 * buf_size / MB; // 256 pages per MB
 
@@ -303,11 +276,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        fs::{remove_file, File},
-        io::Write,
-        ptr::null_mut,
-    };
+    use std::{fs::remove_file, ptr::null_mut};
 
     use crate::{
         allocator::{
@@ -315,20 +284,13 @@ mod tests {
             spoiler::{spoiler_candidates, DIFF_LOG, MEASURE_LOG},
             util::{mmap, munmap},
         },
-        hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
-        memory::{
-            construct_memory_tuple_timer, mem_configuration::MemConfiguration, BytePointer,
-            FormatPfns, MemBlock, PfnOffsetResolver, PfnResolver,
-        },
-        util::{MB, PAGE_SIZE, ROW_SIZE},
+        memory::{FormatPfns, MemBlock},
+        util::{MB, PAGE_SIZE},
     };
 
     #[test]
+    #[ignore = "spoiler test needs root permissions. This test is mainly a playground for the spoiler strategy."]
     fn test_spoiler() {
-        let bs_config = BlacksmithConfig::from_jsonfile("config/bs-config.json").unwrap();
-        let mem_config = MemConfiguration::from_blacksmith(&bs_config);
-        let timer = construct_memory_tuple_timer().unwrap();
-
         compact_mem().unwrap();
 
         let b: *mut u8 = mmap(null_mut(), 2048 * MB); // dummy buffer to collect small page blocks
@@ -371,7 +333,9 @@ mod tests {
                 assert_eq!(end as usize - start as usize, 8 * MB);
             }
         }
-        munmap(buf, BUF_SIZE);
-        munmap(b, 2048 * MB);
+        unsafe {
+            munmap(buf, BUF_SIZE);
+            munmap(b, 2048 * MB);
+        }
     }
 }

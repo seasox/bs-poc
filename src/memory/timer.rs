@@ -6,6 +6,10 @@ use {core::arch::x86_64, core::ptr};
 use anyhow::bail;
 
 pub trait MemoryTupleTimer {
+    /// time_subsequent_access_from_ram measures the access time when accessing both memory locations back to back from ram.
+    /// 
+    /// # Safety
+    /// * `a` and `b` must be valid pointers to memory locations
     unsafe fn time_subsequent_access_from_ram(
         &self,
         a: *const u8,
@@ -62,14 +66,12 @@ impl MemoryTupleTimer for DefaultMemoryTupleTimer {
         }
         trace!("Measurements: {:?}", measurements);
         let _mean = sum / rounds as u64;
-        let median = median(measurements);
-        median
+        median(measurements)
     }
 }
 
 fn median(mut list: Vec<u64>) -> u64 {
     list.sort();
     let mid = list.len() / 2;
-    let median = (list[mid] + list[mid + 1]) / 2;
-    median
+    (list[mid] + list[mid + 1]) / 2
 }
