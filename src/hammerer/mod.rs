@@ -20,7 +20,6 @@
 pub mod blacksmith;
 pub mod dummy;
 
-use crate::hammerer::blacksmith::hammerer::HammerResult;
 use crate::victim::HammerVictim;
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 pub use dummy::hammerer::Hammerer as Dummy;
@@ -28,4 +27,10 @@ pub use dummy::hammerer::Hammerer as Dummy;
 /// The Hammering trait. A hammerer must implement this trait to perform hammering.
 pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> anyhow::Result<HammerResult>;
+}
+
+#[derive(Debug)]
+pub struct HammerResult {
+    pub run: u64,
+    pub attempt: u8,
 }

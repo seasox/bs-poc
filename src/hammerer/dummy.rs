@@ -1,4 +1,4 @@
-use crate::hammerer::blacksmith::hammerer::HammerResult;
+use crate::hammerer::HammerResult;
 use crate::hammerer::Hammering;
 use crate::victim::HammerVictim;
 use anyhow::bail;
