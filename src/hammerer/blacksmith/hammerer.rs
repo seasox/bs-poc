@@ -254,12 +254,6 @@ impl HammeringPattern {
     }
 }
 
-#[derive(Debug)]
-pub struct HammerResult {
-    pub run: u64,
-    pub attempt: u8,
-}
-
 pub struct Hammerer<'a, Mem: BytePointer> {
     blocks: Vec<&'a Mem>,
     mem_config: MemConfiguration,
