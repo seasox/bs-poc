@@ -2,6 +2,7 @@
 name = "bs_poc"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [features]
 jitter_dump = []
@@ -21,13 +22,11 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.99"
 serde_with = "3.0.0"
 serde-enum-str = "0.3.2"
-mt19937 = "2.0.1"
 nalgebra = "0.32.2"
 log = "0.4.0"
 env_logger = "0.10.0"
 pagemap = "0.1.0"
 ctrlc = "3.4.1"
-sys-info = "0.9.1"
 lpfs = { path = "lib/lpfs" }
 itertools = "0.12.1"
 indicatif = "0.17.8"
