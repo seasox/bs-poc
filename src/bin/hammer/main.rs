@@ -9,9 +9,8 @@ use anyhow::bail;
 use bs_poc::allocator::hugepage::HugepageAllocator;
 use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
-use bs_poc::hammerer::blacksmith::hammerer::{
-    FuzzSummary, HammerResult, HammeringPattern, PatternAddressMapper,
-};
+use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
+use bs_poc::hammerer::HammerResult;
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
 use bs_poc::victim::{process, HammerVictim};
@@ -31,56 +30,75 @@ use clap::Parser;
 use indicatif::MultiProgress;
 use log::{info, warn};
 
-/// Search for a pattern in a file and display the lines that contain it.
+/// CLI arguments for the `hammer` binary.
+///
+/// This struct defines the command line arguments that can be passed to the `hammer` binary.
 #[derive(Debug, Parser)]
 struct CliArgs {
-    ///The BlacksmithConfig
+    ///The `blacksmith` config file. The default is `config/bs-config.json`.
     #[clap(long = "config", default_value = "config/bs-config.json")]
     config: String,
-    /// The JSON file containing hammering patterns to load
+    /// The JSON file containing hammering patterns to load. The default is `config/fuzz-summary.json`.
     #[clap(long = "load-json", default_value = "config/fuzz-summary.json")]
     load_json: String,
-    /// The pattern ID to load from the JSON file
+    /// The pattern ID to load from the `blacksmith` JSON file. The default is `39ad622b-3bfe-4161-b860-dad5f3e6dd68`.
     #[clap(
         long = "pattern",
         default_value = "39ad622b-3bfe-4161-b860-dad5f3e6dd68"
     )]
     pattern: Option<String>,
-    /// The mapping ID to load from the JSON file (optional, will determine most optimal pattern if omitted)
+    /// The mapping ID to load from the `blacksmith` JSON file. Optional argument, will determine most optimal pattern if omitted.
     #[clap(long = "mapping")]
     mapping: Option<String>,
+    /// Some allocation strategies require a check for consecutive memory. This option allows you to specify the type of check to use. The default is `bank-timing`.
     #[clap(long = "consec-check", default_value = "bank-timing")]
     consec_check: ConsecCheckType,
+    /// The allocation strategy to use. The default is `spoiler`.
     #[clap(long = "alloc-strategy", default_value = "spoiler")]
     alloc_strategy: ConsecAllocType,
+    /// The hammering strategy to use. The default is `blacksmith`.
     #[clap(long = "hammerer", default_value = "blacksmith")]
     hammerer: HammerStrategy,
-    /// The target to hammer
+    /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
 }
 
+/// The hammering strategy to use.
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum HammerStrategy {
+    /// Use a dummy hammerer. This hammerer flips a bit at a fixed offset.
     Dummy,
+    /// Use the blacksmith hammerer. This hammerer uses the pattern and mapping determined by `blacksmith` to hammer the target.
     Blacksmith,
+    /// No hammering strategy. This will exit the program without hammering. Mainly used for debugging allocation strategies.
     None,
 }
 
+/// The type of consecutive memory check to use.
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ConsecCheckType {
+    /// Measure consecutive memory accesses using bank timing. This will check the allocation against the memory configuration to determine if it is consecutive.
     BankTiming,
+    /// No consecutive memory check.
     None,
+    /// Check for consecutive memory accesses using page frame numbers (requires root). Mainly used for debugging, as it assumes a very powerful thread model.
     Pfn,
 }
 
+/// The type of allocation strategy to use.
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum ConsecAllocType {
+    /// Use `/proc/buddyinfo` to monitor availability of page orders, assume consecutive memory according to the delta in buddyinfo.
     BuddyInfo,
     // Allocate using the CoCo dec mem module: https://git.its.uni-luebeck.de/research-projects/tdx/kmod-coco-dec-mem
     CoCo,
+    /// Allocate consecutive memory using huge pages.
     Hugepage,
+    /// Allocate consecutive memory using huge pages with randomization. This will return random 4 MB chunks of a 1 GB hugepage.
     HugepageRnd,
+    /// Allocate consecutive memory using `mmap`. This will `mmap` a large buffer and find consecutive memory using the provided `ConsecCheckType`
     Mmap,
+    /// Allocate consecutive memory using the Spoiler attack. This strategy will measure read-after-write pipeline conflicts to determine consecutive memory.
     Spoiler,
 }
 
@@ -283,23 +301,22 @@ unsafe fn _main() -> anyhow::Result<()> {
         block_size,
         &memory,
     );
-    match result {
-        Ok(res) => {
-            info!("{:?}", res);
-            hammer_victim.log_report();
-        }
-        Err(e) => {
-            warn!("Hammering not successful: {:?}", e);
-        }
-    }
     if let Some(victim) = victim {
         info!("Waiting for victim to finish");
         let output = victim.wait_with_output()?;
         info!("Captured output: {:?}", output);
     }
-    info!("Goodbye.");
 
-    Ok(())
+    match result {
+        Ok(res) => {
+            info!("{:?}", res);
+            hammer_victim.log_report();
+            Ok(())
+        }
+        Err(e) => {
+            bail!("Hammering not successful: {:?}", e)
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
