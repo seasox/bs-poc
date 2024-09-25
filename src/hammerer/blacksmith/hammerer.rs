@@ -1,8 +1,8 @@
 use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
-use crate::hammerer::Hammering;
+use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::{group, BASE_MSB};
+use crate::util::{GroupBy, BASE_MSB};
 use crate::victim::HammerVictim;
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_with::serde_as;
 use std::arch::x86_64::{__rdtscp, _mm_mfence};
 use std::fmt::Debug;
+use std::hash::Hash;
 use std::time::SystemTime;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
@@ -161,7 +162,13 @@ impl PatternAddressMapper {
                         base_idx
                     );
                 }
-                Err(e) => warn!("Failed to get physical address: {}", e),
+                Err(_) => info!(
+                    "Relocate {:?} to {:?}, base: 0x{:x}, base_idx {}",
+                    addr,
+                    DRAMAddr::from_virt(virt, &mem_config),
+                    base,
+                    base_idx
+                ),
             }
             aggrs_relocated.push(virt);
         }
