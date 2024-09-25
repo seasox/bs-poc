@@ -55,7 +55,7 @@ struct CliArgs {
     consec_check: ConsecCheckType,
     /// The allocation strategy to use. The default is `spoiler`.
     #[clap(long = "alloc-strategy", default_value = "spoiler")]
-    alloc_strategy: ConsecAllocType,
+    alloc_strategy: AllocStrategy,
     /// The hammering strategy to use. The default is `blacksmith`.
     #[clap(long = "hammerer", default_value = "blacksmith")]
     hammerer: HammerStrategy,
@@ -87,7 +87,7 @@ pub enum ConsecCheckType {
 
 /// The type of allocation strategy to use.
 #[derive(clap::ValueEnum, Clone, Debug)]
-pub enum ConsecAllocType {
+pub enum AllocStrategy {
     /// Use `/proc/buddyinfo` to monitor availability of page orders, assume consecutive memory according to the delta in buddyinfo.
     BuddyInfo,
     // Allocate using the CoCo dec mem module: https://git.its.uni-luebeck.de/research-projects/tdx/kmod-coco-dec-mem
@@ -102,19 +102,21 @@ pub enum ConsecAllocType {
     Spoiler,
 }
 
-fn create_allocator_from_cli(
-    alloc_strategy: ConsecAllocType,
-    consec_checker: ConsecCheck,
-    mem_config: MemConfiguration,
-    progress: Option<MultiProgress>,
-) -> ConsecAlloc {
-    match alloc_strategy {
-        ConsecAllocType::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(consec_checker)),
-        ConsecAllocType::CoCo => ConsecAlloc::CoCo(CoCo {}),
-        ConsecAllocType::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
-        ConsecAllocType::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
-        ConsecAllocType::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-        ConsecAllocType::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config))),
+impl AllocStrategy {
+    fn create_allocator(
+        &self,
+        consec_checker: ConsecCheck,
+        mem_config: MemConfiguration,
+        progress: Option<MultiProgress>,
+    ) -> allocator::ConsecAlloc {
+        match self {
+            AllocStrategy::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(consec_checker)),
+            AllocStrategy::CoCo => ConsecAlloc::CoCo(CoCo {}),
+            AllocStrategy::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
+            AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
+            AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
+            AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config))),
+        }
     }
 }
 
@@ -264,12 +266,9 @@ unsafe fn _main() -> anyhow::Result<()> {
         config.threshold,
         Some(progress.clone()),
     )?;
-    let mut alloc_strategy = create_allocator_from_cli(
-        args.alloc_strategy,
-        consec_checker,
-        mem_config,
-        Some(progress.clone()),
-    );
+    let mut alloc_strategy =
+        args.alloc_strategy
+            .create_allocator(consec_checker, mem_config, Some(progress.clone()));
     let block_size = alloc_strategy.block_size();
 
     info!("Starting bait allocation");
