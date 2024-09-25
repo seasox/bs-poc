@@ -7,7 +7,7 @@ These strategies allow testing the resilience of DRAM to Rowhammer attacks.
 ## Modules
 
 - `blacksmith`: Implements the `Blacksmith` hammerer, which uses advanced hammering techniques.
-- `dummy`: Implements the `Dummy` hammerer, which serves as a baseline or no-op hammerer.
+- `dummy`: Implements the `Dummy` hammerer, which flips fixed bits for testing purposes.
 
 ## Traits
 
@@ -16,7 +16,7 @@ These strategies allow testing the resilience of DRAM to Rowhammer attacks.
 
 ## Types
 
-- `HammerResult`: The result returned by hammering operations, defined in the `blacksmith` module.
-- `HammerVictim`: A trait that represents the target memory being hammered.
+- `HammerResult`: The result returned by hammering operations.
+- `HammerVictim`: A trait that represents the target being hammered. This can be a memory region or interface with a victim process, e.g., using pipe IPC or unix sockets.
 
 License: MIT
