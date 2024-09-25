@@ -73,19 +73,22 @@ impl PatternAddressMapper {
         &self,
         mem_config: MemConfiguration,
         block_shift: usize,
-    ) -> Vec<Vec<(&Aggressor, &DRAMAddr)>> {
+    ) -> HashMap<usize, Vec<Aggressor>> {
         // find mapping classes
         let addrs: &HashMap<Aggressor, DRAMAddr> = &self.aggressor_to_addr;
 
         let addrs_vec = addrs.iter().collect::<Vec<_>>();
 
         // group aggressors by prefix
-        let groups: Vec<Vec<(&Aggressor, &DRAMAddr)>> = group(addrs_vec, |(_, addr)| {
-            #[allow(clippy::zero_ptr)]
-            let virt = addr.to_virt(0 as *const u8, mem_config) as usize;
-            virt >> block_shift
-        });
-        groups
+        addrs_vec
+            .group_by(|(_, addr)| {
+                #[allow(clippy::zero_ptr)]
+                let virt = addr.to_virt(0 as *const u8, mem_config) as usize;
+                virt >> block_shift
+            })
+            .into_iter()
+            .map(|(key, group)| (key, group.into_iter().map(|(aggr, _)| *aggr).collect()))
+            .collect()
     }
 
     pub fn get_bitflips_relocate(
@@ -123,10 +126,10 @@ impl PatternAddressMapper {
         let sets = self.aggressor_sets(mem_config, block_shift);
 
         let mut base_lookup: HashMap<Aggressor, usize> = HashMap::new();
-        for (i, group) in sets.iter().enumerate() {
-            debug!("{}: {:?}", i, group.iter().collect::<Vec<_>>());
-            for (&aggr, _) in group {
-                base_lookup.insert(aggr, i);
+        for (i, group) in &sets {
+            debug!("{}: {:?}", i, group);
+            for aggr in group {
+                base_lookup.insert(*aggr, *i);
             }
         }
         debug!("{:?}", base_lookup);

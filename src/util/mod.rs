@@ -22,21 +22,25 @@ pub fn init_logging_with_progress() -> anyhow::Result<MultiProgress> {
     Ok(progress)
 }
 
-pub fn group<F, K: std::hash::Hash + std::cmp::Eq, T>(addrs: Vec<T>, f: F) -> Vec<Vec<T>>
-where
-    F: Fn(&T) -> K,
-{
-    let mut idx_lookup = HashMap::new();
-    let mut out = vec![];
-    for addr in addrs {
-        let k = f(&addr);
-        let idx = idx_lookup.entry(k).or_insert(out.len());
-        if *idx == out.len() {
-            out.push(vec![]);
+pub trait GroupBy<V> {
+    fn group_by<K: std::hash::Hash + std::cmp::Eq, F: Fn(&V) -> K>(
+        self,
+        f: F,
+    ) -> HashMap<K, Vec<V>>;
+}
+
+impl<T> GroupBy<T> for Vec<T> {
+    fn group_by<K: std::hash::Hash + std::cmp::Eq, F: Fn(&T) -> K>(
+        self,
+        f: F,
+    ) -> HashMap<K, Vec<T>> {
+        let mut out = HashMap::new();
+        for elem in self {
+            let k = f(&elem);
+            out.entry(k).or_insert(vec![]).push(elem);
         }
-        out[*idx].push(addr);
+        out
     }
-    out
 }
 
 pub fn make_vec<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
@@ -65,24 +69,33 @@ macro_rules! retry {
 
 #[cfg(test)]
 mod tests {
-    use crate::util::group;
+    use super::GroupBy;
 
     #[test]
     fn test_group_mod2() {
         let addrs = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let groups = group(addrs, |x| x % 2);
+        let groups = addrs.group_by(|x| x % 2);
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0], vec![0, 2, 4, 6, 8]);
-        assert_eq!(groups[1], vec![1, 3, 5, 7, 9]);
+        assert_eq!(groups[&0], vec![0, 2, 4, 6, 8]);
+        assert_eq!(groups[&1], vec![1, 3, 5, 7, 9]);
     }
 
     #[test]
     fn test_group_identity() {
         let addrs = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
-        let groups = group(addrs, |x| *x);
-        for (i, group) in groups.iter().enumerate() {
+        let groups = addrs.group_by(|x| *x);
+        for (i, group) in groups {
             assert_eq!(group.len(), 1);
             assert_eq!(group[0], i);
         }
+    }
+
+    #[test]
+    fn test_group_prefix() {
+        let addrs = vec!["apple", "banana", "apricot", "blueberry"];
+        let groups = addrs.group_by(|x| &x[0..1]);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups["a"], vec!["apple", "apricot"]);
+        assert_eq!(groups["b"], vec!["banana", "blueberry"]);
     }
 }
