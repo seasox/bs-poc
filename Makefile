@@ -68,3 +68,9 @@ clean:
 
 hammer_jit.o.objdump: hammer_jit.o
 	objdump -b binary -m i386:x86-64 -D hammer_jit.o > hammer_jit.o.objdump
+
+# Shorthand target to rebuild all READMEs in all subdirectories containing a mod.rs file
+readme:
+	for dir in $$(find src -type f -name mod.rs -exec dirname {} \;); do \
+		cargo readme --input $$dir/mod.rs > $$dir/README.md --no-title; \
+	done
