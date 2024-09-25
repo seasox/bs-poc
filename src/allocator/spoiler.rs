@@ -40,14 +40,15 @@ impl ConsecAllocator for Spoiler {
 
         let mut blocks: Vec<MemBlock> = vec![];
         const BLOCK_SIZE: usize = 4 * MB;
-        let block_count = size.div_ceil(BLOCK_SIZE);
-        while blocks.len() < block_count {
+        let required_blocks = size.div_ceil(BLOCK_SIZE);
+        while blocks.len() < required_blocks {
             let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
             let round_blocks = retry!(|| {
                 compact_mem()?;
                 let search_buffer = mmap(null_mut(), search_buffer_size);
                 let spoiler_candidates = spoiler_candidates(search_buffer, search_buffer_size, 0);
                 if spoiler_candidates.is_empty() {
+                    unsafe { munmap(search_buffer, search_buffer_size) };
                     bail!("No candidates found");
                 }
                 info!(
@@ -109,17 +110,21 @@ impl ConsecAllocator for Spoiler {
                 "Banks: {:?}",
                 blocks
                     .iter()
-                    .map(|b| DRAMAddr::from_virt(b.ptr(), &self.mem_config))
+                    .map(|b| DRAMAddr::from_virt(b.pfn().unwrap() as *const u8, &self.mem_config))
                     .collect_vec()
             );
             for block in round_blocks {
-                if blocks.len() >= block_count {
+                if blocks.len() >= required_blocks {
                     break;
+                }
+                // TODO: this is a workaround and to be replaced w/ an actual timing based side channel
+                let bank = DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config).bank;
+                if bank != 0 {
+                    info!("Not bank 0: {}", bank);
+                    continue;
                 }
                 // check for same bank
                 if let Some(last) = blocks.last() {
-                    let bank =
-                        DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config).bank;
                     let last_bank =
                         DRAMAddr::from_virt(last.pfn()? as *const u8, &self.mem_config).bank;
                     if bank != last_bank {
@@ -129,8 +134,21 @@ impl ConsecAllocator for Spoiler {
                         info!("Same bank: {} == {}", bank, last_bank);
                     }
                 }
+                info!(
+                    "Adding block {:?}:\n{}",
+                    DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config),
+                    block.consec_pfns()?.format_pfns()
+                );
                 blocks.push(block);
             }
+        }
+        for (block1, block2) in blocks.iter().tuple_windows() {
+            assert!(
+                (block1.addr(block1.len() - 1) as usize) < (block2.ptr() as usize),
+                "{} >= {}",
+                block1.addr(block1.len() - 1) as usize,
+                block2.ptr() as usize
+            );
         }
         Ok(ConsecBlocks { blocks })
     }
