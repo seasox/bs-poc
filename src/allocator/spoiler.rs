@@ -77,8 +77,10 @@ impl ConsecAllocator for Spoiler {
                 }
                 let mut blocks = vec![];
                 let mut prev_end = 0;
+                debug!("Candidates: {:?}", spoiler_candidates);
                 for candidate in spoiler_candidates {
                     if candidate.0 < prev_end {
+                        debug!("Skipping candidate {:?}: overlaps with previous", candidate);
                         continue;
                     }
                     let addr = unsafe { search_buffer.byte_add(candidate.0 * PAGE_SIZE) };
@@ -130,8 +132,6 @@ impl ConsecAllocator for Spoiler {
                     if bank != last_bank {
                         info!("Different bank: {} != {}", bank, last_bank);
                         continue;
-                    } else {
-                        info!("Same bank: {} == {}", bank, last_bank);
                     }
                 }
                 info!(
