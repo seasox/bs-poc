@@ -119,13 +119,13 @@ impl ConsecAllocator for Spoiler {
                 if blocks.len() >= required_blocks {
                     break;
                 }
+                // check for same bank
                 // TODO: this is a workaround and to be replaced w/ an actual timing based side channel
                 let bank = DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config).bank;
                 if bank != 0 {
                     info!("Not bank 0: {}", bank);
                     continue;
                 }
-                // check for same bank
                 if let Some(last) = blocks.last() {
                     let last_bank =
                         DRAMAddr::from_virt(last.pfn()? as *const u8, &self.mem_config).bank;
