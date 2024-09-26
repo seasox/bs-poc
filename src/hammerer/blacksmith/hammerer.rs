@@ -141,21 +141,22 @@ impl PatternAddressMapper {
         let mut pagemap = LinuxPageMap::new()?;
         for agg in aggressors {
             let base_idx = base_lookup[agg];
-            let base = memory.addr(base_idx * block_size) as u64;
-            let base = base & !((1 << block_shift) - 1);
             let addr = &addrs[agg];
             #[allow(clippy::zero_ptr)]
-            let virt = addr.to_virt(0 as *const u8, mem_config);
-            let virt = virt as u64 & ((1 << block_shift) - 1);
-            let virt = (base | virt) as *const u8;
-            let p = pagemap.get_phys(virt as u64);
+            let virt_offset = addr.to_virt(0 as *const u8, mem_config);
+            let virt_offset = virt_offset as u64 & ((1 << block_shift) - 1);
+            assert!(virt_offset < block_size as u64); // check if virt is within block. This should usually hold, but you never know amirite?
+            let base = memory.addr(base_idx * block_size) as u64;
+            let relocated = memory.addr(base_idx * block_size + virt_offset as usize) as *const u8;
+            let p = pagemap.get_phys(relocated as u64);
             match p {
                 Ok(p) => {
                     let phys = DRAMAddr::from_virt(p as *const u8, &mem_config);
                     info!(
-                        "Relocate {:?} to {:?}, phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
+                        "Relocate {:?} to {:?} (0x{:x}), phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
                         addr,
-                        DRAMAddr::from_virt(virt, &mem_config),
+                        DRAMAddr::from_virt(relocated, &mem_config),
+                        relocated as u64,
                         phys,
                         p,
                         base,
@@ -163,14 +164,15 @@ impl PatternAddressMapper {
                     );
                 }
                 Err(_) => info!(
-                    "Relocate {:?} to {:?}, base: 0x{:x}, base_idx {}",
+                    "Relocate {:?} to {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
                     addr,
-                    DRAMAddr::from_virt(virt, &mem_config),
+                    DRAMAddr::from_virt(relocated, &mem_config),
+                    relocated as u64,
                     base,
                     base_idx
                 ),
             }
-            aggrs_relocated.push(virt);
+            aggrs_relocated.push(relocated);
         }
         Ok(aggrs_relocated)
     }
@@ -275,6 +277,8 @@ pub struct Hammerer<'a> {
     hammering_addrs: Vec<AggressorPtr>,
     mem_config: MemConfiguration,
     program: Program,
+    rounds: u64,
+    attempts: u8,
 }
 
 impl<'a> Hammerer<'a> {
@@ -284,6 +288,8 @@ impl<'a> Hammerer<'a> {
         mapping: &PatternAddressMapper,
         hammering_addrs: &[AggressorPtr],
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
+        rounds: u64,
+        attempts: u8,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -341,6 +347,8 @@ impl<'a> Hammerer<'a> {
             hammering_addrs: hammering_addrs.to_vec(),
             program,
             mem_config,
+            rounds,
+            attempts,
         })
     }
 
@@ -365,16 +373,14 @@ impl<'a> Hammerer<'a> {
 }
 
 impl<'a> Hammering for Hammerer<'a> {
-    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult> {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
 
-        const NUM_RETRIES: u8 = 100;
-
-        for run in 0..max_runs {
+        for run in 0..self.rounds {
             victim.init();
             info!("Hammering run {}", run);
-            for attempt in 0..NUM_RETRIES {
+            for attempt in 0..self.attempts {
                 // log PFNs of memory region
                 self.memory.log_pfns();
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
