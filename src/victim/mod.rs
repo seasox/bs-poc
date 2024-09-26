@@ -18,4 +18,6 @@ pub trait HammerVictim {
     fn check(&mut self) -> bool;
     /// Log the report of the hammering (optional).
     fn log_report(&self) {}
+    /// Stop the victim. This method is called after the hammering is done. This consumes the victim.
+    fn stop(self);
 }

@@ -38,6 +38,8 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         !self.flips.is_empty()
     }
 
+    fn stop(self) {}
+
     fn log_report(&self) {
         let virt_addrs: Vec<String> = self
             .flips

