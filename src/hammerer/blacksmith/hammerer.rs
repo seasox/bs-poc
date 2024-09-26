@@ -375,6 +375,8 @@ impl<'a> Hammering for Hammerer<'a> {
             victim.init();
             info!("Hammering run {}", run);
             for attempt in 0..NUM_RETRIES {
+                // log PFNs of memory region
+                self.memory.log_pfns();
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
