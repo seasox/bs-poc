@@ -127,10 +127,10 @@ impl PatternAddressMapper {
         let sets = self.aggressor_sets(mem_config, block_shift);
 
         let mut base_lookup: HashMap<Aggressor, usize> = HashMap::new();
-        for (i, group) in &sets {
-            debug!("{}: {:?}", i, group);
+        for (idx, (base, group)) in sets.iter().enumerate() {
+            debug!("Index/Base/Group: {}, {}, {:?}", idx, base, group);
             for aggr in group {
-                base_lookup.insert(*aggr, *i);
+                base_lookup.insert(*aggr, idx);
             }
         }
         debug!("{:?}", base_lookup);
