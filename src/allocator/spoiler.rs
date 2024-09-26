@@ -1,5 +1,5 @@
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{BytePointer, DRAMAddr, FormatPfns, PfnResolver};
+use crate::memory::{DRAMAddr, FormatPfns, PfnResolver};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::ops::{Deref, Range};
