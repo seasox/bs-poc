@@ -295,7 +295,7 @@ impl<'a> Hammerer<'a> {
             });
             let found = block_idx.is_some();
             if !found {
-                error!("OUT OF BOUNDS ACCESS: {:?}", addr);
+                error!("OUT OF BOUNDS ACCESS: {} {:?}", action, addr);
             }
             let paddr = LinuxPageMap::new()
                 .expect("pagemap open")
