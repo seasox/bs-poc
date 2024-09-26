@@ -11,7 +11,7 @@ use core::slice;
 use std::{collections::HashMap, fs::File, io::Write, mem, ops::DerefMut, str::FromStr};
 
 #[derive(DeserializeFromStr, Debug, Clone)]
-pub enum FlushingStrategy {
+enum FlushingStrategy {
     LatestPossible,
     EarliestPossible,
 }
@@ -46,7 +46,7 @@ impl FromStr for FencingStrategy {
 
 pub type AggressorPtr = *const u8;
 
-pub trait Jitter {
+pub(super) trait Jitter {
     fn jit(
         &self,
         num_acts_per_trefi: u64,
@@ -65,7 +65,7 @@ pub trait Jitter {
 },
 */
 #[derive(Deserialize, Debug, Clone)]
-pub struct CodeJitter {
+pub(super) struct CodeJitter {
     fencing_strategy: FencingStrategy,
     flushing_strategy: FlushingStrategy,
     num_aggs_for_sync: usize,
@@ -76,15 +76,15 @@ pub struct CodeJitter {
 /// A program that can be executed.
 ///
 /// The program is represented as a byte buffer containing machine code.
-pub struct Program {
+pub(super) struct Program {
     code: Mmap,
     start: u64,
 }
 
-pub type JitFunction = unsafe extern "C" fn() -> u64;
+type JitFunction = unsafe extern "C" fn() -> u64;
 
 impl Program {
-    pub fn from_asm(mut asm: CodeAssembler, start_label: &CodeLabel) -> Result<Self> {
+    fn from_asm(mut asm: CodeAssembler, start_label: &CodeLabel) -> Result<Self> {
         let result =
             asm.assemble_options(0, BlockEncoderOptions::RETURN_NEW_INSTRUCTION_OFFSETS)?;
 
@@ -107,7 +107,7 @@ impl Program {
     ///
     /// # Safety
     /// The program must be valid machine code. The caller must ensure that the program is safe to execute.
-    pub unsafe fn call(&self) -> u64 {
+    pub(super) unsafe fn call(&self) -> u64 {
         let jit_function_ptr = self.code.as_ptr().offset(self.start as isize);
         let function_size_bytes = self.code.len() - self.start as usize;
         let jit_function_bytes = slice::from_raw_parts(jit_function_ptr, function_size_bytes);
@@ -115,7 +115,7 @@ impl Program {
         jit_function()
     }
 
-    pub fn write(&self, filename: &str) -> Result<()> {
+    pub(super) fn write(&self, filename: &str) -> Result<()> {
         let mut file = File::create(filename)?;
         file.write_all(self.code.as_ref())?;
         Ok(())

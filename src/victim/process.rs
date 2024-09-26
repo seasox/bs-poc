@@ -28,7 +28,7 @@ impl HammerVictim for VictimProcess {
         info!("Victim process initialized");
     }
 
-    fn check(&mut self) -> bool {
+    fn check(&mut self) -> Option<String> {
         info!("Victim process check");
         self.pipe
             .send(AttackState::AttackerHammerDone)
@@ -36,7 +36,11 @@ impl HammerVictim for VictimProcess {
         info!("Reading pipe");
         let state = self.pipe.receive().expect("receive");
         info!("Received state: {:?}", state);
-        state == AttackState::VictimHammerSuccess
+        if state == AttackState::VictimHammerSuccess {
+            Some(String::default())
+        } else {
+            None
+        }
     }
 
     fn stop(self) {

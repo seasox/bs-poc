@@ -195,6 +195,7 @@ dependencies = [
  "bindgen",
  "cc",
  "clap",
+ "csv",
  "ctrlc",
  "env_logger",
  "glob",

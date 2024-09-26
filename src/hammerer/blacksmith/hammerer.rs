@@ -416,8 +416,13 @@ impl<'a> Hammering for Hammerer<'a> {
                     );
                 }
                 let result = victim.check();
-                if result {
-                    return Ok(HammerResult { run, attempt });
+                if let Some(mut victim_result) = result {
+                    victim_result += &format!(", target_bank: {}", target_bank);
+                    return Ok(HammerResult {
+                        run,
+                        attempt,
+                        victim_result,
+                    });
                 }
             }
         }

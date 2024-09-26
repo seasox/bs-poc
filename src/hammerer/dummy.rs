@@ -26,8 +26,12 @@ impl Hammering for Hammerer {
             _mm_clflush(self.flip_addr);
         }
         let result = victim.check();
-        if result {
-            return Ok(HammerResult { run: 0, attempt: 0 });
+        if let Some(victim_result) = result {
+            return Ok(HammerResult {
+                run: 0,
+                attempt: 0,
+                victim_result,
+            });
         }
         bail!("Hammering not successful")
     }

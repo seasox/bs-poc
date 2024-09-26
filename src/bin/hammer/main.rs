@@ -28,6 +28,7 @@ use bs_poc::{
 use clap::Parser;
 use indicatif::MultiProgress;
 use log::{debug, error, info, warn};
+use serde::Serialize;
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -78,6 +79,10 @@ struct CliArgs {
     /// The default value of 100 is a good starting point for the blacksmith hammerer.
     #[arg(long, default_value = "100")]
     attempts: u8,
+    /// Do a stats run. This will run the hammerer and store the results in the provided file. The default is `None`, causing no stats to be stored.
+    /// When `stats` is set, the hammering process will not exit after the first successful attack, but continue hammering until `repeat` is reached.
+    #[arg(long)]
+    statistics: Option<String>,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
 }
@@ -266,7 +271,7 @@ fn hammer(
         }
         HammerStrategy::None => {
             warn!("No hammerer specified. Exiting.");
-            return Ok(HammerResult { run: 0, attempt: 0 });
+            return Ok(HammerResult::default());
         }
     };
     info!("Expected bitflips: {:?}", mapping.bit_flips);
@@ -301,6 +306,18 @@ unsafe fn _main() -> anyhow::Result<()> {
         None => 1,
     };
 
+    let mut csv_file = args
+        .statistics
+        .as_ref()
+        .map(csv::Writer::from_path)
+        .transpose()?;
+    if csv_file.is_some() {
+        info!(
+            "Writing statistics to file {}",
+            args.statistics.as_ref().unwrap()
+        );
+    }
+
     for _ in 0..repetitions {
         info!("Starting bait allocation");
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
@@ -333,11 +350,36 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.attempts,
         );
 
+        if let Some(csv_file) = &mut csv_file {
+            #[derive(Serialize)]
+            struct HammerStatistic {
+                run: i64,
+                attempt: i8,
+                victim_result: String,
+            }
+            let stat = match result {
+                Ok(ref res) => HammerStatistic {
+                    run: res.run as i64,
+                    attempt: res.attempt as i8,
+                    victim_result: res.victim_result.clone(),
+                },
+                Err(_) => HammerStatistic {
+                    run: -1,
+                    attempt: -1,
+                    victim_result: "failed".to_string(),
+                },
+            };
+            csv_file.serialize(stat)?;
+            csv_file.flush()?;
+        }
+
         match result {
             Ok(res) => {
                 info!("{:?}", res);
                 victim.log_report();
-                return Ok(());
+                if args.statistics.is_none() {
+                    return Ok(());
+                }
             }
             Err(e) => {
                 error!("Hammering not successful: {:?}", e)

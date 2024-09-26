@@ -14,8 +14,10 @@ pub use self::process::VictimProcess as Process;
 pub trait HammerVictim {
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self) {}
-    /// Check if the hammering was successful. Returns true if the attack was successful.
-    fn check(&mut self) -> bool;
+    /// Check if the hammering was successful. Returns Some with an optional string describing the result if the hammering was successful, None otherwise.
+    /// TODO: It would be nice to generify this method to return a generic type, but that's kinda hard with the current way Hammerers and Victims work together.
+    /// this might become easier once hammerer and victim are decoupled using a HammerSuite type encapsulating both.
+    fn check(&mut self) -> Option<String>;
     /// Log the report of the hammering (optional).
     fn log_report(&self) {}
     /// Stop the victim. This method is called after the hammering is done. This consumes the victim.

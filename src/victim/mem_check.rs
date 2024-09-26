@@ -30,12 +30,16 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         self.seed = Some(seed);
     }
 
-    fn check(&mut self) -> bool {
+    fn check(&mut self) -> Option<String> {
         self.flips = self.memory.check(
             self.mem_config,
             self.seed.with_context(|| "no seed").unwrap(),
         );
-        !self.flips.is_empty()
+        if !self.flips.is_empty() {
+            Some(format!("{:?}", self.flips.clone()).to_string())
+        } else {
+            None
+        }
     }
 
     fn stop(self) {}

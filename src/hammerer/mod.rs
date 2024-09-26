@@ -30,8 +30,9 @@ pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> anyhow::Result<HammerResult>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct HammerResult {
     pub run: u64,
     pub attempt: u8,
+    pub victim_result: String,
 }
