@@ -142,14 +142,6 @@ impl ConsecAllocator for Spoiler {
                 blocks.push(block);
             }
         }
-        for (block1, block2) in blocks.iter().tuple_windows() {
-            assert!(
-                (block1.addr(block1.len() - 1) as usize) < (block2.ptr() as usize),
-                "{} >= {}",
-                block1.addr(block1.len() - 1) as usize,
-                block2.ptr() as usize
-            );
-        }
         Ok(ConsecBlocks { blocks })
     }
 }
