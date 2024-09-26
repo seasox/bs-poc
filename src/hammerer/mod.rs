@@ -27,7 +27,7 @@ pub use dummy::Hammerer as Dummy;
 
 /// The Hammering trait. A hammerer must implement this trait to perform hammering.
 pub trait Hammering {
-    fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> anyhow::Result<HammerResult>;
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> anyhow::Result<HammerResult>;
 }
 
 #[derive(Debug)]

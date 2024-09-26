@@ -5,7 +5,6 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::allocator::hugepage::HugepageAllocator;
 use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
 use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
@@ -20,6 +19,7 @@ use bs_poc::{
     memory::ConsecCheck,
     victim,
 };
+use bs_poc::{allocator::hugepage::HugepageAllocator, util::PAGE_SIZE};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
@@ -27,7 +27,7 @@ use bs_poc::{
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -65,14 +65,19 @@ struct CliArgs {
     /// 2. initialize the victim, potentially running a memory massaging technique to inject a target page
     /// 3. run the hammer attack using the requested `hammerer` for a number of `rounds`
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
-    #[arg(short, long)]
+    #[arg(long)]
     repeat: Option<Option<usize>>,
     /// The number of rounds to hammer per repetition. The default is 1.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
     /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
     /// victim will initialize the memory with a random seed, while a process victim might generate a new private key for each round.
-    #[arg(short, long, default_value = "1")]
+    #[arg(long, default_value = "1")]
     rounds: u64,
+    /// The number of hammering attempts per round. The default is 100.
+    /// An attempt denotes a single run of the hammering code. Usually, hammerers need several attempts to successfully flip a bit in the victim.
+    /// The default value of 100 is a good starting point for the blacksmith hammerer.
+    #[arg(long, default_value = "100")]
+    attempts: u8,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
 }
@@ -228,6 +233,7 @@ fn hammer(
     block_size: usize,
     memory: &ConsecBlocks,
     rounds: u64,
+    attempts: u8,
 ) -> anyhow::Result<HammerResult> {
     let block_shift = block_size.ilog2();
     let hammerer: Box<dyn Hammering> = match hammerer {
@@ -244,6 +250,8 @@ fn hammer(
                 mapping,
                 &hammering_addrs,
                 memory,
+                rounds,
+                attempts,
             )?)
         }
         HammerStrategy::Dummy => {
@@ -264,7 +272,7 @@ fn hammer(
     info!("Expected bitflips: {:?}", mapping.bit_flips);
 
     info!("Hammering pattern. This might take a while...");
-    hammerer.hammer(victim, rounds)
+    hammerer.hammer(victim)
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -298,6 +306,12 @@ unsafe fn _main() -> anyhow::Result<()> {
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         info!("Allocated {} bytes of memory", memory.len());
 
+        debug!("Writing into memory for testing");
+        for offset in (0..memory.len()).step_by(PAGE_SIZE) {
+            debug!("Page no {}", offset);
+            std::ptr::write_bytes(memory.addr(offset), 0xFF, PAGE_SIZE);
+        }
+
         let mut victim: Box<dyn HammerVictim> = if args.target.is_empty() {
             warn!(
             "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
@@ -316,6 +330,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             block_size,
             &memory,
             args.rounds,
+            args.attempts,
         );
 
         match result {

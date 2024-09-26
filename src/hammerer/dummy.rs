@@ -15,11 +15,7 @@ impl Hammerer {
 }
 
 impl Hammering for Hammerer {
-    fn hammer(
-        &self,
-        victim: &mut dyn HammerVictim,
-        _max_runs: u64,
-    ) -> anyhow::Result<HammerResult> {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> anyhow::Result<HammerResult> {
         victim.init();
         unsafe {
             debug!(
