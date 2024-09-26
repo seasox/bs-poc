@@ -227,10 +227,10 @@ fn hammer(
             )?;
             Box::new(hammerer::Blacksmith::new(
                 mem_config,
-                pattern.clone(),
-                mapping.clone(),
+                pattern,
+                mapping,
                 &hammering_addrs,
-                memory.blocks.iter().collect(),
+                memory,
             )?)
         }
         HammerStrategy::Dummy => {

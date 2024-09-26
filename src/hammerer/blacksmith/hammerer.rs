@@ -175,25 +175,34 @@ impl PatternAddressMapper {
         Ok(aggrs_relocated)
     }
 
-    fn get_random_nonaccessed_rows(
-        &self,
-        bases: &[AggressorPtr],
-        mem_config: MemConfiguration,
-    ) -> Vec<AggressorPtr> {
-        let mut addresses = vec![];
-        let mut rng = rand::thread_rng();
-        for _ in 0..1024 {
-            let row = rng.gen_range(self.max_row..self.max_row + self.min_row)
-                % mem_config.get_row_count();
-            let base = bases[rng.gen_range(0..bases.len())];
-            addresses.push(DRAMAddr::new(self.bank_no, row, 0).to_virt(base, mem_config));
-        }
-        addresses
-    }
-
     pub fn count_bitflips(&self) -> usize {
         self.bit_flips.iter().map(|b| b.len()).sum()
     }
+}
+
+fn get_random_nonaccessed_rows<const S: usize>(
+    memory: &dyn BytePointer,
+    accessed_rows: &[AggressorPtr],
+    mem_config: &MemConfiguration,
+    target_bank: usize,
+) -> [AggressorPtr; S] {
+    let mut addresses: [AggressorPtr; S] = [std::ptr::null_mut(); S];
+    let mut rng = rand::thread_rng();
+    let mut i = 0;
+    // do rejection sampling for nonaccessed rows
+    while i < S {
+        let candidate = memory.addr(rng.gen_range(0..memory.len()));
+        let dram = DRAMAddr::from_virt(candidate as *const u8, mem_config);
+        if dram.bank != target_bank {
+            continue;
+        }
+        if accessed_rows.contains(&(candidate as *const u8)) {
+            continue;
+        }
+        addresses[i] = candidate;
+        i += 1;
+    }
+    addresses
 }
 
 #[derive(Deserialize, Debug)]
@@ -261,26 +270,26 @@ impl HammeringPattern {
     }
 }
 
-pub struct Hammerer<'a, Mem: BytePointer> {
-    blocks: Vec<&'a Mem>,
+pub struct Hammerer<'a> {
+    memory: &'a ConsecBlocks,
+    hammering_addrs: Vec<AggressorPtr>,
     mem_config: MemConfiguration,
-    mapping: PatternAddressMapper,
     program: Program,
 }
 
-impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
+impl<'a> Hammerer<'a> {
     pub fn new(
         mem_config: MemConfiguration,
-        pattern: HammeringPattern,
-        mapping: PatternAddressMapper,
+        pattern: &HammeringPattern,
+        mapping: &PatternAddressMapper,
         hammering_addrs: &[AggressorPtr],
-        blocks: Vec<&'a Mem>,
+        memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
 
         let hammer_log_cb = |action: &str, addr: *const u8| {
-            let block_idx = blocks.iter().find_position(|base| {
+            let block_idx = memory.blocks.iter().find_position(|base| {
                 (addr as u64) >= base.ptr() as u64
                     && (addr as u64) <= (base.addr(base.len() - 1) as u64)
             });
@@ -328,10 +337,10 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
         }
 
         Ok(Hammerer {
-            blocks,
+            memory,
+            hammering_addrs: hammering_addrs.to_vec(),
             program,
             mem_config,
-            mapping,
         })
     }
 
@@ -355,7 +364,7 @@ impl<'a, Mem: BytePointer> Hammerer<'a, Mem> {
     }
 }
 
-impl<'a, Mem: BytePointer> Hammering for Hammerer<'a, Mem> {
+impl<'a> Hammering for Hammerer<'a> {
     fn hammer(&self, victim: &mut dyn HammerVictim, max_runs: u64) -> Result<HammerResult> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
@@ -369,13 +378,13 @@ impl<'a, Mem: BytePointer> Hammering for Hammerer<'a, Mem> {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
-                let random_rows = self.mapping.get_random_nonaccessed_rows(
-                    &self
-                        .blocks
-                        .iter()
-                        .map(|b| b.ptr() as *const u8)
-                        .collect::<Vec<_>>(),
-                    self.mem_config,
+                let target_bank =
+                    DRAMAddr::from_virt(self.hammering_addrs[0], &self.mem_config).bank;
+                let random_rows = get_random_nonaccessed_rows::<1024>(
+                    self.memory,
+                    &self.hammering_addrs,
+                    &self.mem_config,
+                    target_bank,
                 );
                 debug!(
                     "do random memory accesses for {} us before running jitted code",
