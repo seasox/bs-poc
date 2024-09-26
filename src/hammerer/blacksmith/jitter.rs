@@ -155,7 +155,7 @@ impl Jitter for CodeJitter {
         for &agg in aggressor_pairs.iter().take(num_timed_accesses) {
             a.mov(rax, agg as u64)?;
             a.mov(rbx, ptr(rax))?;
-            log_cb("ACCESS", agg);
+            log_cb("SYNC ACCESS", agg);
         }
 
         a.set_label(&mut while1_begin)?;
@@ -177,7 +177,7 @@ impl Jitter for CodeJitter {
         for &agg in aggressor_pairs.iter().take(num_timed_accesses) {
             a.mov(rax, agg as u64)?;
             a.mov(rcx, ptr(rax))?;
-            log_cb("ACCESS", agg);
+            log_cb("SYNC ACCESS", agg);
         }
         // if ((after - before) > 1000) break;
         a.rdtscp()?;
@@ -224,7 +224,7 @@ impl Jitter for CodeJitter {
             // hammer
             a.mov(rax, cur_addr)?;
             a.mov(rcx, ptr(rax))?;
-            log_cb("ACCESS", aggressor_pairs[idx]);
+            log_cb("HAMMER ACCESS", aggressor_pairs[idx]);
             a.dec(esi)?;
             accessed_before.insert(cur_addr, true);
             cnt_total_activations += 1;
@@ -233,7 +233,7 @@ impl Jitter for CodeJitter {
             if let FlushingStrategy::EarliestPossible = self.flushing_strategy {
                 a.mov(rax, cur_addr)?;
                 a.clflushopt(ptr(rax))?;
-                log_cb("FLUSH", aggressor_pairs[idx]);
+                log_cb("HAMMER FLUSH", aggressor_pairs[idx]);
             }
             if self.pattern_sync_each_ref && (cnt_total_activations % num_acts_per_trefi) == 0 {
                 let aggs = &aggressor_pairs[idx..(idx + num_timed_accesses)];
@@ -279,14 +279,14 @@ fn sync_ref(
     for &agg in aggs {
         // flush
         a.mov(rax, agg as u64)?;
-        log_cb("ACCESS", agg);
+        log_cb("SYNC ACCESS", agg);
         a.clflushopt(ptr(rax))?;
-        log_cb("FLUSH", agg);
+        log_cb("SYNC FLUSH", agg);
         // access
         a.mov(rax, agg as u64)?;
-        log_cb("ACCESS", agg);
+        log_cb("SYNC ACCESS", agg);
         a.mov(rcx, ptr(rax))?;
-        log_cb("FLUSH", agg);
+        log_cb("SYNC FLUSH", agg);
 
         // we do not deduct the sync aggressors from the total number of activations because the number of sync activations
         // varies for different patterns; if we deduct it from the total number of activations, we cannot ensure anymore
