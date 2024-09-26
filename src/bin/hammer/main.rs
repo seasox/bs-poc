@@ -60,8 +60,19 @@ struct CliArgs {
     hammerer: HammerStrategy,
     /// Repeat the hammering until the target reports a successful attack. If --repeat is specified without a value, the hammering will
     /// repeat indefinitely. The victim process is restarted for each repetition. The default is to repeat the hammering once and exit even if the attack was not successful.
+    /// A repetition denotes a complete run of the suite:
+    /// 1. allocate memory using the requested `alloc-strategy`
+    /// 2. initialize the victim, potentially running a memory massaging technique to inject a target page
+    /// 3. run the hammer attack using the requested `hammerer` for a number of `rounds`
+    /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
     #[arg(short, long)]
     repeat: Option<Option<usize>>,
+    /// The number of rounds to hammer per repetition. The default is 1.
+    /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
+    /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
+    /// victim will initialize the memory with a random seed, while a process victim might generate a new private key for each round.
+    #[arg(short, long, default_value = "1")]
+    rounds: u64,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
 }
@@ -207,6 +218,7 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
     Ok(LoadedPattern { pattern, mapping })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn hammer(
     hammerer: &HammerStrategy,
     pattern: &HammeringPattern,
@@ -215,6 +227,7 @@ fn hammer(
     mem_config: MemConfiguration,
     block_size: usize,
     memory: &ConsecBlocks,
+    rounds: u64,
 ) -> anyhow::Result<HammerResult> {
     let block_shift = block_size.ilog2();
     let hammerer: Box<dyn Hammering> = match hammerer {
@@ -251,7 +264,7 @@ fn hammer(
     info!("Expected bitflips: {:?}", mapping.bit_flips);
 
     info!("Hammering pattern. This might take a while...");
-    hammerer.hammer(victim, 3)
+    hammerer.hammer(victim, rounds)
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -302,6 +315,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             mem_config,
             block_size,
             &memory,
+            args.rounds,
         );
 
         match result {
