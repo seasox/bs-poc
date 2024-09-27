@@ -1,3 +1,24 @@
+//! The `memory` module provides abstractions for memory management, initialization, and checking for bitflips.
+//!
+//! The `memory` module provides the following abstractions:
+//! - `Memory`: A managed memory region that is allocated using HugepageAllocator.
+//! - `VictimMemory`: A trait that combines the `BytePointer`, `Initializable`, and `Checkable` traits.
+//! - `BytePointer`: A trait for accessing memory as a byte pointer.
+//! - `Initializable`: A trait for initializing memory with (random) values.
+//! - `Checkable`: A trait for checking memory for bitflips.
+//! - `PfnResolver`: A trait for resolving the physical frame number (PFN) of a `self`.
+//! - `LinuxPageMap`: A struct that provides a mapping from virtual to physical addresses.
+//! - `VirtToPhysResolver`: A trait for resolving the physical address of a provided virtual address.
+//!
+//! The `memory` module also provides the following helper structs:
+//! - `ConsecBlocks`: A struct that represents a collection of consecutive memory blocks.
+//! - `MemBlock`: A struct that represents a memory block.
+//! - `PfnOffset`: A struct that represents a physical frame number (PFN) offset.
+//! - `PfnOffsetResolver`: A struct that resolves the physical frame number (PFN) offset of a provided virtual address.
+//! - `Timer`: A struct that provides a timer for measuring memory access times.
+//!
+//! The `memory` module also provides the following helper functions:
+//! - `construct_memory_tuple_timer`: A function that constructs a memory tuple timer.
 mod consec_blocks;
 mod consec_checker;
 mod dram_addr;
@@ -5,6 +26,7 @@ mod keyed_cache;
 mod memblock;
 mod pfn_offset;
 mod pfn_offset_resolver;
+mod pfn_resolver;
 mod timer;
 mod virt_to_phys;
 
@@ -16,14 +38,14 @@ pub use self::dram_addr::DRAMAddr;
 pub use self::memblock::*;
 pub use self::pfn_offset::PfnOffset;
 pub use self::pfn_offset_resolver::PfnOffsetResolver;
+pub use self::pfn_resolver::PfnResolver;
 pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
-pub use crate::allocator::hugepage::HugepageAllocator;
-pub use crate::util::pfn_resolver::PfnResolver;
 use anyhow::Result;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::fmt::Debug;
 
+use crate::allocator::hugepage::HugepageAllocator;
 use crate::util::PAGE_SIZE;
 
 use crate::hammerer::blacksmith::hammerer::BitFlip;

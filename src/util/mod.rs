@@ -2,7 +2,6 @@ mod anyhow;
 mod constants;
 mod ipc;
 mod named_progress;
-pub mod pfn_resolver;
 
 pub use self::anyhow::Anyhow;
 pub use self::constants::*;
