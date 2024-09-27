@@ -9,10 +9,8 @@ use bs_poc::allocator::hugepage::HugepageAllocator;
 use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
 use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
-use bs_poc::hammerer::HammerResult;
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::victim::HammerVictim;
 use bs_poc::{
     allocator,
     allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
@@ -27,8 +25,7 @@ use bs_poc::{
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use log::{error, info, warn};
-use serde::Serialize;
+use log::{info, warn};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -68,6 +65,10 @@ struct CliArgs {
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
     #[arg(long)]
     repeat: Option<Option<usize>>,
+    /// The number of rounds to profile for vulnerable addresses. The default is 50.
+    /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
+    #[arg(long, default_value = "50")]
+    profiling_rounds: u64,
     /// The number of rounds to hammer per repetition. The default is 1.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
     /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
@@ -94,8 +95,6 @@ pub enum HammerStrategy {
     Dummy,
     /// Use the blacksmith hammerer. This hammerer uses the pattern and mapping determined by `blacksmith` to hammer the target.
     Blacksmith,
-    /// No hammering strategy. This will exit the program without hammering. Mainly used for debugging allocation strategies.
-    None,
 }
 
 /// The type of consecutive memory check to use.
@@ -228,37 +227,27 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
     Ok(LoadedPattern { pattern, mapping })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn hammer(
+fn make_hammer<'a>(
     hammerer: &HammerStrategy,
     pattern: &HammeringPattern,
     mapping: &PatternAddressMapper,
-    victim: &mut dyn HammerVictim,
     mem_config: MemConfiguration,
     block_size: usize,
-    memory: &ConsecBlocks,
+    memory: &'a ConsecBlocks,
     rounds: u64,
     attempts: u8,
-) -> anyhow::Result<HammerResult> {
+) -> anyhow::Result<Box<dyn Hammering + 'a>> {
     let block_shift = block_size.ilog2();
     let hammerer: Box<dyn Hammering> = match hammerer {
-        HammerStrategy::Blacksmith => {
-            let hammering_addrs = mapping.get_hammering_addresses_relocate(
-                &pattern.access_ids,
-                mem_config,
-                block_shift as usize,
-                memory,
-            )?;
-            Box::new(hammerer::Blacksmith::new(
-                mem_config,
-                pattern,
-                mapping,
-                &hammering_addrs,
-                memory,
-                rounds,
-                attempts,
-            )?)
-        }
+        HammerStrategy::Blacksmith => Box::new(hammerer::Blacksmith::new(
+            mem_config,
+            pattern,
+            mapping,
+            block_shift as usize,
+            memory,
+            rounds,
+            attempts,
+        )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, memory);
             let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
@@ -269,15 +258,69 @@ fn hammer(
             let hammerer = hammerer::Dummy::new(flip);
             Box::new(hammerer)
         }
-        HammerStrategy::None => {
-            warn!("No hammerer specified. Exiting.");
-            return Ok(HammerResult::default());
-        }
     };
-    info!("Expected bitflips: {:?}", mapping.bit_flips);
+    Ok(hammerer)
+}
 
-    info!("Hammering pattern. This might take a while...");
-    hammerer.hammer(victim)
+/// Hammer a given memory region a number of times to profile for vulnerable addresses.
+fn hammer_profile(
+    hammerer: &mut dyn Hammering,
+    mem_config: MemConfiguration,
+    memory: &ConsecBlocks,
+    rounds: u64,
+) -> anyhow::Result<Vec<*const u8>> {
+    let mut ret = vec![];
+    let mut victim = victim::MemCheck::new(mem_config, memory);
+
+    for _ in 0..rounds {
+        let result = hammerer.hammer(&mut victim)?;
+        todo!("Implement profiling");
+    }
+    /*
+    TODO log profiling results
+       if let Some(csv_file) = &mut csv_file {
+           #[derive(Serialize)]
+           struct HammerStatistic {
+               run: i64,
+               attempt: i8,
+               alloc_duration_millis: u128,
+               hammer_duration_millis: u128,
+               victim_result: String,
+           }
+           let stat = match result {
+               Ok(ref res) => HammerStatistic {
+                   run: res.run as i64,
+                   attempt: res.attempt as i8,
+                   alloc_duration_millis: alloc_duration.as_millis(),
+                   hammer_duration_millis: hammer_duration.as_millis(),
+                   victim_result: res.victim_result.clone(),
+               },
+               Err(_) => HammerStatistic {
+                   run: -1,
+                   attempt: -1,
+                   alloc_duration_millis: alloc_duration.as_millis(),
+                   hammer_duration_millis: hammer_duration.as_millis(),
+                   victim_result: "failed".to_string(),
+               },
+           };
+           csv_file.serialize(stat)?;
+           csv_file.flush()?;
+       }
+
+       match result {
+           Ok(res) => {
+               info!("{:?}", res);
+               victim.log_report();
+               if args.statistics.is_none() {
+                   return Ok(());
+               }
+           }
+           Err(e) => {
+               error!("Hammering not successful: {:?}", e)
+           }
+       }
+    */
+    Ok(ret)
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -325,71 +368,43 @@ unsafe fn _main() -> anyhow::Result<()> {
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
-        let mut victim: Box<dyn HammerVictim> = if args.target.is_empty() {
-            warn!(
-            "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
-            );
-            Box::new(victim::MemCheck::new(mem_config, &memory))
-        } else {
-            Box::new(victim::Process::new(&args.target)?)
-        };
-
         let start = std::time::Instant::now();
-        let result = hammer(
+        let mut hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
             &pattern.mapping,
-            &mut *victim,
             mem_config,
             block_size,
             &memory,
             args.rounds,
             args.attempts,
-        );
-        let hammer_duration = std::time::Instant::now() - start;
-
-        if let Some(csv_file) = &mut csv_file {
-            #[derive(Serialize)]
-            struct HammerStatistic {
-                run: i64,
-                attempt: i8,
-                alloc_duration_millis: u128,
-                hammer_duration_millis: u128,
-                victim_result: String,
-            }
-            let stat = match result {
-                Ok(ref res) => HammerStatistic {
-                    run: res.run as i64,
-                    attempt: res.attempt as i8,
-                    alloc_duration_millis: alloc_duration.as_millis(),
-                    hammer_duration_millis: hammer_duration.as_millis(),
-                    victim_result: res.victim_result.clone(),
-                },
-                Err(_) => HammerStatistic {
-                    run: -1,
-                    attempt: -1,
-                    alloc_duration_millis: alloc_duration.as_millis(),
-                    hammer_duration_millis: hammer_duration.as_millis(),
-                    victim_result: "failed".to_string(),
-                },
-            };
-            csv_file.serialize(stat)?;
-            csv_file.flush()?;
+        )?;
+        info!("Profiling memory for vulnerable addresses");
+        let profiling = hammer_profile(&mut *hammer, mem_config, &memory, args.profiling_rounds)?;
+        if profiling.is_empty() {
+            warn!("No vulnerable addresses found");
+            continue;
+        } else {
+            info!("Profiling done. Found bitflips in {:?}", profiling);
         }
 
-        match result {
-            Ok(res) => {
-                info!("{:?}", res);
-                victim.log_report();
-                if args.statistics.is_none() {
-                    return Ok(());
-                }
+        // TODO use profiling results to determine the best addresses to inject into the victim
+
+        let mut victim = if args.target.is_empty() {
+            None
+        } else {
+            Some(victim::Process::new(&args.target)?)
+        };
+        match victim {
+            Some(ref mut victim) => {
+                let result = hammer.hammer(victim)?;
+                // TODO report results
             }
-            Err(e) => {
-                error!("Hammering not successful: {:?}", e)
+            None => {
+                warn!("No target specified.");
             }
         }
-        drop(victim);
+        drop(hammer);
         memory.dealloc();
     }
     bail!(

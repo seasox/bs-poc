@@ -286,7 +286,7 @@ impl<'a> Hammerer<'a> {
         mem_config: MemConfiguration,
         pattern: &HammeringPattern,
         mapping: &PatternAddressMapper,
-        hammering_addrs: &[AggressorPtr],
+        block_shift: usize,
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         rounds: u64,
         attempts: u8,
@@ -324,6 +324,12 @@ impl<'a> Hammerer<'a> {
 
         let acts_per_tref = pattern.total_activations / pattern.num_refresh_intervals;
 
+        let hammering_addrs = mapping.get_hammering_addresses_relocate(
+            &pattern.access_ids,
+            mem_config,
+            block_shift,
+            memory,
+        )?;
         let num_accessed_addrs = hammering_addrs
             .iter()
             .map(|x| (*x as usize) & !0xFFF)
@@ -335,7 +341,7 @@ impl<'a> Hammerer<'a> {
         let program =
             mapping
                 .code_jitter
-                .jit(acts_per_tref as u64, hammering_addrs, &hammer_log_cb)?;
+                .jit(acts_per_tref as u64, &hammering_addrs, &hammer_log_cb)?;
         if cfg!(feature = "jitter_dump") {
             program
                 .write("hammer_jit.o")
