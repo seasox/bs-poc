@@ -223,6 +223,7 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
         unsafe { crate::spoiler_measure(buf, buf.byte_add(read_page_offset * PAGE_SIZE)) };
     let meas_buf = unsafe { CArray::new(crate::measurements(measurements), page_count) };
     let meas_buf = Vec::from(&meas_buf as &[u64]);
+    // write measurements to MEASURE_LOG file
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
@@ -234,6 +235,7 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
     drop(file);
     let diff_buf = unsafe { CArray::new(crate::diffs(measurements), page_count) };
     let diff_buf = Vec::from(&diff_buf as &[u64]);
+    // write diffs to DIFF_LOG file
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
