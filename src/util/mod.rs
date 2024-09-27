@@ -1,3 +1,4 @@
+//! Utility functions and types used throughout the project.
 mod anyhow;
 mod constants;
 mod ipc;
