@@ -48,9 +48,7 @@ use std::fmt::Debug;
 use crate::allocator::hugepage::HugepageAllocator;
 use crate::util::PAGE_SIZE;
 
-use crate::hammerer::blacksmith::hammerer::BitFlip;
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
-use crate::memory::mem_configuration::MemConfiguration;
 use libc::{c_void, memcmp};
 use std::{
     alloc::{GlobalAlloc, Layout},
@@ -90,18 +88,27 @@ pub trait Initializable {
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8);
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BitFlip {
+    pub addr: *const u8,
+    pub bitmask: u8,
+    pub data: u8,
+}
+
+impl BitFlip {
+    pub fn new(addr: *const u8, bitmask: u8, data: u8) -> Self {
+        BitFlip {
+            addr,
+            bitmask,
+            data,
+        }
+    }
+}
+
 /// Trait for checking memory for bitflips
 pub trait Checkable {
-    fn check(
-        &self,
-        mem_config: MemConfiguration,
-        seed: <StdRng as SeedableRng>::Seed,
-    ) -> Vec<BitFlip>;
-    fn check_cb(
-        &self,
-        mem_config: MemConfiguration,
-        f: &mut dyn FnMut(usize) -> u8,
-    ) -> Vec<BitFlip>;
+    fn check(&self, seed: <StdRng as SeedableRng>::Seed) -> Vec<BitFlip>;
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip>;
 }
 
 /// A managed memory region that is allocated using HugepageAllocator
@@ -224,7 +231,6 @@ where
 {
     fn check(
         &self,
-        mem_config: MemConfiguration,
         seed: <StdRng as SeedableRng>::Seed,
     ) -> Vec<BitFlip> {
         let mut rng = StdRng::from_seed(seed);
@@ -260,11 +266,7 @@ where
                     _mm_clflush(addr);
                     _mm_mfence();
                     if *addr != expected {
-                        ret.push(BitFlip::new(
-                            DRAMAddr::from_virt(addr, &mem_config),
-                            *addr ^ expected,
-                            expected,
-                        ));
+                        ret.push(BitFlip::new(addr, *addr ^ expected, expected));
                     }
                 }
                 return ret;
@@ -275,7 +277,6 @@ where
 
     fn check_cb(
         &self,
-        mem_config: MemConfiguration,
         f: &mut dyn FnMut(usize) -> u8,
     ) -> Vec<BitFlip> {
         let len = self.len();
@@ -312,11 +313,7 @@ where
                     _mm_clflush(addr);
                     _mm_mfence();
                     if *addr != expected {
-                        ret.push(BitFlip::new(
-                            DRAMAddr::from_virt(addr, &mem_config),
-                            *addr ^ expected,
-                            expected,
-                        ));
+                        ret.push(BitFlip::new(addr, *addr ^ expected, expected));
                     }
                 }
             }

@@ -1,8 +1,7 @@
 use anyhow::Context;
 
-use crate::hammerer::blacksmith::hammerer::BitFlip;
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::VictimMemory;
+use crate::memory::{BitFlip, VictimMemory};
 use crate::victim::HammerVictim;
 
 pub struct HammerVictimMemCheck<'a> {
@@ -31,10 +30,9 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
     }
 
     fn check(&mut self) -> Option<String> {
-        self.flips = self.memory.check(
-            self.mem_config,
-            self.seed.with_context(|| "no seed").unwrap(),
-        );
+        self.flips = self
+            .memory
+            .check(self.seed.with_context(|| "no seed").unwrap());
         if !self.flips.is_empty() {
             Some(format!("{:?}", self.flips.clone()).to_string())
         } else {
@@ -48,13 +46,7 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         let virt_addrs: Vec<String> = self
             .flips
             .iter()
-            .map(|bf| {
-                format!(
-                    "{:?}",
-                    bf.dram_addr,
-                    //bf.dram_addr.to_virt(base_msb, self.mem_config) as usize
-                )
-            })
+            .map(|bf| format!("{:?}", bf.addr,))
             .collect();
         info!("Addresses with flips: {:?}", virt_addrs);
     }
