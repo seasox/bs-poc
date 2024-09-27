@@ -309,7 +309,7 @@ impl<'a> Hammerer<'a> {
             match paddr {
                 Ok(paddr) => {
                     let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
-                    info!(
+                    debug!(
                         "{:>06} {:02},{:04},0x{:02x},{}",
                         action,
                         dram.bank,
@@ -379,10 +379,10 @@ impl<'a> Hammering for Hammerer<'a> {
 
         for run in 0..self.rounds {
             victim.init();
+            // log PFNs of memory region
+            self.memory.log_pfns();
             info!("Hammering run {}", run);
             for attempt in 0..self.attempts {
-                // log PFNs of memory region
-                self.memory.log_pfns();
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
                     wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
