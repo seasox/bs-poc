@@ -325,12 +325,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
-        debug!("Writing into memory for testing");
-        for offset in (0..memory.len()).step_by(PAGE_SIZE) {
-            debug!("Page no {}", offset);
-            std::ptr::write_bytes(memory.addr(offset), 0xFF, PAGE_SIZE);
-        }
-
         let mut victim: Box<dyn HammerVictim> = if args.target.is_empty() {
             warn!(
             "No target specified, falling back to mem check. Consider `./hammer --config [...] your_victim your_victim_args`"
