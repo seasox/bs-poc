@@ -152,7 +152,7 @@ impl PatternAddressMapper {
             match p {
                 Ok(p) => {
                     let phys = DRAMAddr::from_virt(p as *const u8, &mem_config);
-                    info!(
+                    debug!(
                         "Relocate {:?} to {:?} (0x{:x}), phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
                         addr,
                         DRAMAddr::from_virt(relocated, &mem_config),
@@ -163,7 +163,7 @@ impl PatternAddressMapper {
                         base_idx
                     );
                 }
-                Err(_) => info!(
+                Err(_) => debug!(
                     "Relocate {:?} to {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
                     addr,
                     DRAMAddr::from_virt(relocated, &mem_config),
