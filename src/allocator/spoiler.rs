@@ -251,8 +251,9 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
         .enumerate()
         .map(|(idx, (a, b))| (idx, b - a))
         .collect_vec();
-    println!("peak_distances: {:?}", peak_distances);
+    debug!("peak_distances: {:?}", peak_distances);
     // find `cont_window_size` distances 256 pages apart
+    unsafe { libc::free(measurements as *mut libc::c_void) };
     let cont_window_size = 8; // cont window size in MB
     peak_distances
         // slide over peaks in windows of size `cont_window_size`
