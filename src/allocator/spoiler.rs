@@ -9,7 +9,7 @@ use anyhow::bail;
 use itertools::Itertools;
 
 use super::ConsecAllocator;
-use crate::allocator::util::{compact_mem, mmap, munmap};
+use crate::allocator::util::{mmap, munmap};
 use crate::retry;
 use crate::util::MB;
 use crate::{
@@ -50,11 +50,8 @@ impl ConsecAllocator for Spoiler {
                     unsafe { munmap(search_buffer, search_buffer_size) };
                     bail!("No candidates found");
                 }
-                info!(
-                    "Found {} candidates: {:?}",
-                    spoiler_candidates.len(),
-                    spoiler_candidates
-                );
+                info!("Found {} candidates", spoiler_candidates.len());
+                debug!("{:?}", spoiler_candidates);
 
                 let addrs = spoiler_candidates
                     .iter()
@@ -76,7 +73,6 @@ impl ConsecAllocator for Spoiler {
                 }
                 let mut blocks = vec![];
                 let mut prev_end = 0;
-                debug!("Candidates: {:?}", spoiler_candidates);
                 for candidate in spoiler_candidates {
                     if candidate.0 < prev_end {
                         debug!("Skipping candidate {:?}: overlaps with previous", candidate);
