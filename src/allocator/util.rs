@@ -1,6 +1,20 @@
-use std::process::Command;
+use std::{
+    cmp::min,
+    process::Command,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    thread::{sleep, spawn, JoinHandle},
+    time::Duration,
+};
 
 use anyhow::bail;
+
+use crate::{
+    memory::{BytePointer, MemBlock},
+    util::ROW_SIZE,
+};
 
 pub fn compact_mem() -> anyhow::Result<()> {
     let output = Command::new("sh")
@@ -53,4 +67,31 @@ pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
 pub unsafe fn munmap<P>(addr: *mut P, len: usize) {
     let r = libc::munmap(addr as *mut libc::c_void, len);
     assert_eq!(r, 0, "munmap: {}", std::io::Error::last_os_error());
+}
+
+/// Spawn a thread that periodically writes 0s to the allocated memory blocks.
+/// This is used to lock the memory in RAM, preventing it from being swapped out.
+pub(super) fn spawn_page_locking_thread(
+    blocks: Arc<Mutex<Vec<MemBlock>>>,
+    mem_lock: Arc<Mutex<()>>,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    spawn(move || {
+        info!(target: "loader", "Loader thread started");
+        while !stop.load(Ordering::Relaxed) {
+            let blocks = blocks.lock().unwrap().clone();
+            for block in blocks {
+                for offset in (0..block.len).step_by(ROW_SIZE) {
+                    let addr = block.addr(offset);
+                    let count = min(ROW_SIZE, block.len - offset);
+                    trace!(target: "loader", "Waiting for memory lock");
+                    let mem_lock = mem_lock.lock().unwrap();
+                    unsafe { std::ptr::write_bytes(addr, 0, count) };
+                    drop(mem_lock);
+                }
+            }
+            sleep(Duration::from_millis(100));
+        }
+        info!(target: "loader", "Stopping loader thread");
+    })
 }

@@ -1,10 +1,9 @@
 use std::{
-    cmp::min,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    thread::{sleep, spawn, JoinHandle},
+    thread::{spawn, JoinHandle},
     time::Duration,
 };
 
@@ -15,8 +14,9 @@ use rand::prelude::SliceRandom;
 
 use super::ConsecAllocator;
 use crate::{
-    memory::{AllocChecker, BytePointer, ConsecBlocks, ConsecCheck, MemBlock},
-    util::{NamedProgress, MB, ROW_SIZE},
+    allocator::util::spawn_page_locking_thread,
+    memory::{AllocChecker, ConsecBlocks, ConsecCheck, MemBlock},
+    util::{NamedProgress, MB},
 };
 
 pub struct Mmap {
@@ -31,32 +31,6 @@ impl Mmap {
             progress,
         }
     }
-}
-
-/// Spawn a thread that periodically writes 0s to the allocated memory blocks.
-fn spawn_loader_thread(
-    blocks: Arc<Mutex<Vec<MemBlock>>>,
-    mem_lock: Arc<Mutex<()>>,
-    stop: Arc<AtomicBool>,
-) -> JoinHandle<()> {
-    spawn(move || {
-        info!(target: "loader", "Loader thread started");
-        while !stop.load(Ordering::Relaxed) {
-            let blocks = blocks.lock().unwrap().clone();
-            for block in blocks {
-                for offset in (0..block.len).step_by(ROW_SIZE) {
-                    let addr = block.addr(offset);
-                    let count = min(ROW_SIZE, block.len - offset);
-                    trace!(target: "loader", "Waiting for memory lock");
-                    let mem_lock = mem_lock.lock().unwrap();
-                    unsafe { std::ptr::write_bytes(addr, 0, count) };
-                    drop(mem_lock);
-                }
-            }
-            sleep(Duration::from_millis(100));
-        }
-        info!(target: "loader", "Stopping loader thread");
-    })
 }
 
 /// Spawn a thread that allocates memory blocks and checks for consecutive blocks using the provided `checker`.
@@ -128,7 +102,7 @@ impl ConsecAllocator for Mmap {
         let mem_lock = Arc::new(Mutex::new(()));
         let stop = Arc::new(AtomicBool::new(false));
 
-        let loader_thread = spawn_loader_thread(blocks.clone(), mem_lock.clone(), stop.clone());
+        let page_locker = spawn_page_locking_thread(blocks.clone(), mem_lock.clone(), stop.clone());
 
         let progress = self.progress.as_ref().map(|progress| {
             let pg =
@@ -149,7 +123,7 @@ impl ConsecAllocator for Mmap {
 
         allocator_thread.join().unwrap();
         stop.store(true, Ordering::Relaxed);
-        loader_thread.join().unwrap();
+        page_locker.join().unwrap();
 
         let blocks = blocks.lock().unwrap().clone();
 
