@@ -55,10 +55,10 @@ impl ConsecAllocator for Spoiler {
 
                 let addrs = spoiler_candidates
                     .iter()
-                    .flat_map(|(start, end)| {
-                        (0..(end - start)).map(move |i| unsafe {
-                            search_buffer.byte_add((start + i) * PAGE_SIZE)
-                        })
+                    .flat_map(|range| {
+                        range
+                            .clone()
+                            .map(|i| unsafe { search_buffer.byte_add(i * PAGE_SIZE) })
                     })
                     .collect::<Vec<_>>();
 
@@ -74,11 +74,11 @@ impl ConsecAllocator for Spoiler {
                 let mut blocks = vec![];
                 let mut prev_end = 0;
                 for candidate in spoiler_candidates {
-                    if candidate.0 < prev_end {
+                    if candidate.start < prev_end {
                         debug!("Skipping candidate {:?}: overlaps with previous", candidate);
                         continue;
                     }
-                    let addr = unsafe { search_buffer.byte_add(candidate.0 * PAGE_SIZE) };
+                    let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
                     let offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
                     let addr = unsafe { addr.byte_add(offset) };
                     if addr.pfn().unwrap() & 0xFFFFF != 0 {
@@ -88,7 +88,7 @@ impl ConsecAllocator for Spoiler {
                             offset
                         );
                     }
-                    assert_eq!(candidate.1 - candidate.0, 8 * MB / PAGE_SIZE);
+                    assert_eq!(candidate.end - candidate.start, 8 * MB / PAGE_SIZE);
                     let block = MemBlock::new(addr, self.block_size());
                     let consecs = block.consec_pfns()?;
                     if consecs[1] - consecs[0] != 4 * MB as u64 {
@@ -97,7 +97,7 @@ impl ConsecAllocator for Spoiler {
                     }
                     info!("Found 4 MB block: {}", consecs.format_pfns());
                     blocks.push(block);
-                    prev_end = candidate.1;
+                    prev_end = candidate.end;
                 }
                 // munmap remaining pages
                 blocks.sort_by_key(|b| b.ptr() as usize);
@@ -200,12 +200,8 @@ const DIFF_LOG: &str = "log/diffs.csv";
 
 /// Find candidates for consecutive memory blocks for a given read offset.
 ///
-/// This returns start an end index for each candidate.
-fn spoiler_candidates(
-    buf: *mut u8,
-    buf_size: usize,
-    read_page_offset: usize,
-) -> Vec<(usize, usize)> {
+/// This returns a Range for start an end index for each candidate.
+fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) -> Vec<Range<usize>> {
     assert!(!buf.is_null(), "null buffer");
     assert!(buf_size > 0, "zero-sized buffer");
     assert!(buf_size % MB == 0, "buffer size must be a multiple of MB");
@@ -264,12 +260,7 @@ fn spoiler_candidates(
         // keep only windows where all peaks are 1 MB apart
         .filter(|window| window.iter().all(|(_, dist)| *dist == PAGES_PER_MB))
         // convert window to start and end index
-        .map(|window| {
-            (
-                peaks[window[0].0],
-                peaks[window[cont_window_size - 1].0 + 1],
-            )
-        })
+        .map(|window| peaks[window[0].0]..peaks[window[cont_window_size - 1].0 + 1])
         .collect_vec()
 }
 
@@ -328,7 +319,8 @@ mod tests {
                 spoiler_candidates
             );
             //let mut offset = None;
-            for (start, end) in spoiler_candidates {
+            for candidate in spoiler_candidates {
+                let (start, end) = (candidate.start, candidate.end);
                 assert!(start < end);
                 assert_eq!(end - start, 8 * MB / PAGE_SIZE);
                 let start = unsafe { buf.byte_add(start * PAGE_SIZE) };
