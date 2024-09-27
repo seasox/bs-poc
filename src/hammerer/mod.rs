@@ -25,14 +25,29 @@ use crate::victim::HammerVictim;
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 pub use dummy::Hammerer as Dummy;
 
-/// The Hammering trait. A hammerer must implement this trait to perform hammering.
-pub trait Hammering {
-    fn hammer(&self, victim: &mut dyn HammerVictim) -> anyhow::Result<HammerResult>;
+#[allow(clippy::large_enum_variant)]
+pub enum Hammerer<'a> {
+    Blacksmith(Blacksmith<'a>),
+    Dummy(Dummy),
 }
 
-#[derive(Debug, Default)]
-pub struct HammerResult {
+impl Hammering for Hammerer<'_> {
+    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> anyhow::Result<HammerResult<T>> {
+        match self {
+            Hammerer::Blacksmith(blacksmith) => blacksmith.hammer(victim),
+            Hammerer::Dummy(dummy) => dummy.hammer(victim),
+        }
+    }
+}
+
+/// The Hammering trait. A hammerer must implement this trait to perform hammering.
+pub trait Hammering {
+    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> anyhow::Result<HammerResult<T>>;
+}
+
+#[derive(Debug)]
+pub struct HammerResult<T> {
     pub run: u64,
     pub attempt: u8,
-    pub victim_result: String,
+    pub victim_result: T,
 }

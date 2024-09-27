@@ -22,19 +22,19 @@ impl<'a> HammerVictimMemCheck<'a> {
     }
 }
 
-impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
+impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
     fn init(&mut self) {
         let seed = rand::random();
         self.memory.initialize(seed);
         self.seed = Some(seed);
     }
 
-    fn check(&mut self) -> Option<String> {
+    fn check(&mut self) -> Option<Vec<BitFlip>> {
         self.flips = self
             .memory
             .check(self.seed.with_context(|| "no seed").unwrap());
         if !self.flips.is_empty() {
-            Some(format!("{:?}", self.flips.clone()).to_string())
+            Some(self.flips.clone())
         } else {
             None
         }

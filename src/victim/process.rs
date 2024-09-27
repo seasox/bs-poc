@@ -23,7 +23,7 @@ impl VictimProcess {
     }
 }
 
-impl HammerVictim for VictimProcess {
+impl HammerVictim<String> for VictimProcess {
     fn init(&mut self) {
         info!("Victim process initialized");
     }

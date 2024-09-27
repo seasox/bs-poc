@@ -379,7 +379,7 @@ impl<'a> Hammerer<'a> {
 }
 
 impl<'a> Hammering for Hammerer<'a> {
-    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult> {
+    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> Result<HammerResult<T>> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
 
@@ -422,8 +422,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     );
                 }
                 let result = victim.check();
-                if let Some(mut victim_result) = result {
-                    victim_result += &format!(", target_bank: {}", target_bank);
+                if let Some(victim_result) = result {
                     return Ok(HammerResult {
                         run,
                         attempt,

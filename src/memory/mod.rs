@@ -229,10 +229,7 @@ impl<T> Checkable for T
 where
     T: VictimMemory,
 {
-    fn check(
-        &self,
-        seed: <StdRng as SeedableRng>::Seed,
-    ) -> Vec<BitFlip> {
+    fn check(&self, seed: <StdRng as SeedableRng>::Seed) -> Vec<BitFlip> {
         let mut rng = StdRng::from_seed(seed);
         let len = self.len();
         assert_eq!(
@@ -275,10 +272,7 @@ where
         vec![]
     }
 
-    fn check_cb(
-        &self,
-        f: &mut dyn FnMut(usize) -> u8,
-    ) -> Vec<BitFlip> {
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip> {
         let len = self.len();
         if len % PAGE_SIZE != 0 {
             panic!(
