@@ -105,6 +105,20 @@ impl ConsecAllocator for Spoiler {
                     blocks.push(block);
                     prev_end = candidate.1;
                 }
+                // munmap remaining pages
+                blocks.sort_by_key(|b| b.ptr() as usize);
+                let mut base = search_buffer;
+                let search_buf_end = unsafe { search_buffer.byte_add(search_buffer_size - 1) };
+                for block in &blocks {
+                    if base >= search_buf_end {
+                        break;
+                    }
+                    let start = block.ptr() as usize;
+                    let end = block.addr(block.len() - 1);
+                    let unused_size = start - base as usize;
+                    unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
+                    base = unsafe { end.byte_add(1) };
+                }
                 Ok(blocks)
             });
             info!("Current blocks: {:?}", blocks);
