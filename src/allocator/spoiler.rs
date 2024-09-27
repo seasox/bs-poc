@@ -1,5 +1,5 @@
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{DRAMAddr, FormatPfns, PfnResolver};
+use crate::memory::{BytePointer, DRAMAddr, FormatPfns, PfnResolver};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::ops::{Deref, Range};
@@ -44,7 +44,6 @@ impl ConsecAllocator for Spoiler {
         while blocks.len() < required_blocks {
             let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
             let round_blocks = retry!(|| {
-                compact_mem()?;
                 let search_buffer = mmap(null_mut(), search_buffer_size);
                 let spoiler_candidates = spoiler_candidates(search_buffer, search_buffer_size, 0);
                 if spoiler_candidates.is_empty() {
@@ -101,7 +100,6 @@ impl ConsecAllocator for Spoiler {
                         continue;
                     }
                     info!("Found 4 MB block: {}", consecs.format_pfns());
-                    // TODO munmap remaining pages
                     blocks.push(block);
                     prev_end = candidate.1;
                 }
