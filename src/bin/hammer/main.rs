@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::bail;
+use bs_poc::allocator::hugepage::HugepageAllocator;
 use bs_poc::allocator::{CoCo, HugepageRandomized, Spoiler};
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
 use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
@@ -19,7 +20,6 @@ use bs_poc::{
     memory::ConsecCheck,
     victim,
 };
-use bs_poc::{allocator::hugepage::HugepageAllocator, util::PAGE_SIZE};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
@@ -27,7 +27,7 @@ use bs_poc::{
 };
 use clap::Parser;
 use indicatif::MultiProgress;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use serde::Serialize;
 
 /// CLI arguments for the `hammer` binary.
