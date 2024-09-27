@@ -320,7 +320,9 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     for _ in 0..repetitions {
         info!("Starting bait allocation");
+        let start = std::time::Instant::now();
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
+        let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
         debug!("Writing into memory for testing");
@@ -338,6 +340,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             Box::new(victim::Process::new(&args.target)?)
         };
 
+        let start = std::time::Instant::now();
         let result = hammer(
             &args.hammerer,
             &pattern.pattern,
@@ -349,23 +352,30 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.rounds,
             args.attempts,
         );
+        let hammer_duration = std::time::Instant::now() - start;
 
         if let Some(csv_file) = &mut csv_file {
             #[derive(Serialize)]
             struct HammerStatistic {
                 run: i64,
                 attempt: i8,
+                alloc_duration_millis: u128,
+                hammer_duration_millis: u128,
                 victim_result: String,
             }
             let stat = match result {
                 Ok(ref res) => HammerStatistic {
                     run: res.run as i64,
                     attempt: res.attempt as i8,
+                    alloc_duration_millis: alloc_duration.as_millis(),
+                    hammer_duration_millis: hammer_duration.as_millis(),
                     victim_result: res.victim_result.clone(),
                 },
                 Err(_) => HammerStatistic {
                     run: -1,
                     attempt: -1,
+                    alloc_duration_millis: alloc_duration.as_millis(),
+                    hammer_duration_millis: hammer_duration.as_millis(),
                     victim_result: "failed".to_string(),
                 },
             };
