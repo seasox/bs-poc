@@ -1,3 +1,4 @@
+# Module src/allocator
 Memory allocation strategies for allocating consecutive memory blocks.
 
 This module provides different memory allocation strategies for allocating consecutive memory blocks. The strategies include buddy allocation, CoCo, hugepage allocation, mmap, and spoiler.

@@ -1,3 +1,4 @@
+# Module src/memory
 The `memory` module provides abstractions for memory management, initialization, and checking for bitflips.
 
 The `memory` module provides the following abstractions:

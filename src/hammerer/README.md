@@ -1,3 +1,4 @@
+# Module src/hammerer
 ## Hammerer
 This modules contains the logic for performing the Rowhammer attack.
 
