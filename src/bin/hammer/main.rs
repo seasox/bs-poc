@@ -28,7 +28,7 @@ use bs_poc::{
     util::init_logging_with_progress,
 };
 use clap::Parser;
-use indicatif::MultiProgress;
+use indicatif::{MultiProgress, ProgressBar};
 use itertools::Itertools;
 use log::{info, warn};
 use serde::Serialize;
@@ -281,12 +281,17 @@ fn hammer_profile(
     mem_config: MemConfiguration,
     memory: &ConsecBlocks,
     rounds: u64,
+    progress: Option<MultiProgress>,
 ) -> anyhow::Result<Profiling> {
+    let p = progress.as_ref().map(|p| p.add(ProgressBar::new(rounds)));
     let mut bit_flips = vec![];
     let mut durations = vec![];
     let mut victim = victim::MemCheck::new(mem_config, memory);
 
     for _ in 0..rounds {
+        if let Some(p) = p.as_ref() {
+            p.inc(1)
+        }
         let start = std::time::Instant::now();
         let result = hammerer.hammer(&mut victim);
         let duration = std::time::Instant::now() - start;
@@ -372,7 +377,13 @@ unsafe fn _main() -> anyhow::Result<()> {
                 .mapping
                 .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
         );
-        let profiling = hammer_profile(&mut hammer, mem_config, &memory, args.profiling_rounds)?;
+        let profiling = hammer_profile(
+            &mut hammer,
+            mem_config,
+            &memory,
+            args.profiling_rounds,
+            Some(progress.clone()),
+        )?;
         if let Some(csv_file) = &mut csv_file {
             #[derive(Serialize)]
             struct HammerStatistic {
