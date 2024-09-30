@@ -427,7 +427,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 match result {
                     Ok(result) => {
                         info!("Hammering successful: {:?}", result.victim_result);
-                        victim.log_report();
                         break;
                     }
                     Err(e) => {

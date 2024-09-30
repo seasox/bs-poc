@@ -40,9 +40,7 @@ impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
         }
     }
 
-    fn stop(self) {}
-
-    fn log_report(&self) {
+    fn stop(self) {
         let virt_addrs: Vec<String> = self
             .flips
             .iter()

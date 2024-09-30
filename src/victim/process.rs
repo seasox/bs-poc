@@ -54,10 +54,6 @@ impl HammerVictim<String> for VictimProcess {
             }
         }
     }
-
-    fn log_report(&self) {
-        info!("Victim process report");
-    }
 }
 
 /// spawn a thread to log the victim's stderr

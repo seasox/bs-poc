@@ -16,8 +16,6 @@ pub trait HammerVictim<T> {
     fn init(&mut self) {}
     /// Check if the hammering was successful. Returns Some with an optional string describing the result if the hammering was successful, None otherwise.
     fn check(&mut self) -> Option<T>;
-    /// Log the report of the hammering (optional).
-    fn log_report(&self) {}
     /// Stop the victim. This method is called after the hammering is done. This consumes the victim.
     fn stop(self);
 }
