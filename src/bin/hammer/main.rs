@@ -144,7 +144,9 @@ impl AllocStrategy {
             AllocStrategy::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
             AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
             AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-            AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config))),
+            AllocStrategy::Spoiler => {
+                ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config, progress)))
+            }
         }
     }
 }

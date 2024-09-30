@@ -6,12 +6,13 @@ use std::ops::{Deref, Range};
 use std::ptr::null_mut;
 
 use anyhow::bail;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use itertools::Itertools;
 
 use super::ConsecAllocator;
 use crate::allocator::util::{mmap, munmap};
 use crate::retry;
-use crate::util::MB;
+use crate::util::{NamedProgress, MB};
 use crate::{
     memory::{ConsecBlocks, MemBlock},
     util::PAGE_SIZE,
@@ -19,11 +20,15 @@ use crate::{
 
 pub struct Spoiler {
     mem_config: MemConfiguration,
+    progress: Option<MultiProgress>,
 }
 
 impl Spoiler {
-    pub fn new(mem_config: MemConfiguration) -> Self {
-        Self { mem_config }
+    pub fn new(mem_config: MemConfiguration, progress: Option<MultiProgress>) -> Self {
+        Self {
+            mem_config,
+            progress,
+        }
     }
 }
 
@@ -41,6 +46,15 @@ impl ConsecAllocator for Spoiler {
         let mut blocks: Vec<MemBlock> = vec![];
         const BLOCK_SIZE: usize = 4 * MB;
         let required_blocks = size.div_ceil(BLOCK_SIZE);
+        let p = self.progress.as_ref().map(|p| {
+            p.add(
+                ProgressBar::new(required_blocks as u64)
+                    .with_style(ProgressStyle::named_bar("Allocating blocks")),
+            )
+        });
+        if let Some(p) = &p {
+            p.set_position(0);
+        }
         while blocks.len() < required_blocks {
             let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
             let round_blocks = retry!(|| {
@@ -147,8 +161,14 @@ impl ConsecAllocator for Spoiler {
                     DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config),
                     block.consec_pfns()?.format_pfns()
                 );
+                if let Some(p) = &p {
+                    p.inc(1);
+                }
                 blocks.push(block);
             }
+        }
+        if let Some(p) = &p {
+            p.finish();
         }
         Ok(ConsecBlocks { blocks })
     }
