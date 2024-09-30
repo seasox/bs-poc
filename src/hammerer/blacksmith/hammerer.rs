@@ -2,7 +2,7 @@ use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Prog
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::{GroupBy, BASE_MSB};
+use crate::util::GroupBy;
 use crate::victim::HammerVictim;
 use anyhow::{bail, Context, Result};
 use itertools::Itertools;
@@ -95,19 +95,29 @@ impl PatternAddressMapper {
     pub fn get_bitflips_relocate(
         &self,
         mem_config: MemConfiguration,
-        blocks: &ConsecBlocks,
+        block_shift: usize,
+        memory: &ConsecBlocks,
     ) -> Vec<Vec<AggressorPtr>> {
+        // TODO this still doesn't quite work...
+        let block_size = 1 << block_shift;
+        let sets = self.aggressor_sets(mem_config, block_shift);
+        let mut base_lookup: HashMap<usize, usize> = HashMap::new();
+        for (idx, (base, group)) in sets.iter().enumerate() {
+            debug!("Index/Base/Group: {}, {}, {:?}", idx, base, group);
+            base_lookup.insert(*base, idx);
+        }
         self.bit_flips
             .iter()
             .map(|flips| {
                 flips
                     .iter()
                     .map(|flip| {
-                        let addr =
-                            flip.dram_addr.to_virt(BASE_MSB as *const u8, mem_config) as usize;
-                        let offset = addr - BASE_MSB as usize;
-                        let addr = blocks.addr(offset);
-                        addr as *const u8
+                        #[allow(clippy::zero_ptr)]
+                        let addr = flip.dram_addr.to_virt(0 as *const u8, mem_config) as usize;
+                        let prefix = addr >> block_shift;
+                        let suffix = addr & (block_size - 1);
+                        let base_idx = base_lookup[&prefix];
+                        memory.addr(base_idx * block_size + suffix) as *const u8
                     })
                     .collect()
             })

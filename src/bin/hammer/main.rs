@@ -256,7 +256,7 @@ fn make_hammer<'a>(
             attempts,
         )?),
         HammerStrategy::Dummy => {
-            let flip = mapping.get_bitflips_relocate(mem_config, memory);
+            let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);
             let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
             info!(
                 "Running dummy hammerer with flip at VA 0x{:02x}",
@@ -366,6 +366,12 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.attempts,
         )?;
         info!("Profiling memory for vulnerable addresses");
+        info!(
+            "Expecting bitflips at {:?}",
+            pattern
+                .mapping
+                .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
+        );
         let profiling = hammer_profile(&mut hammer, mem_config, &memory, args.profiling_rounds)?;
         if let Some(csv_file) = &mut csv_file {
             #[derive(Serialize)]
