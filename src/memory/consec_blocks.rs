@@ -1,5 +1,4 @@
-use std::io::Write;
-use std::{collections::VecDeque, fs::OpenOptions};
+use std::collections::VecDeque;
 
 use crate::memory::{BytePointer, FormatPfns};
 
@@ -65,12 +64,6 @@ impl ConsecBlocks {
             pfns.extend(block_pfns);
         }
         let pfns = pfns.format_pfns();
-        let mut f = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("pfns.txt")
-            .expect("Failed to open pfns.txt");
-        write!(f, "\nConsecutive PFNs:\n{}\n", pfns).expect("Failed to write to pfns.txt");
         info!("PFNs:\n{}", pfns);
     }
 }
