@@ -136,6 +136,7 @@ impl AllocStrategy {
         &self,
         consec_checker: ConsecCheck,
         mem_config: MemConfiguration,
+        conflict_threshold: u64,
         progress: Option<MultiProgress>,
     ) -> allocator::ConsecAlloc {
         match self {
@@ -144,9 +145,11 @@ impl AllocStrategy {
             AllocStrategy::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
             AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
             AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-            AllocStrategy::Spoiler => {
-                ConsecAlloc::Spoiler(Box::new(Spoiler::new(mem_config, progress)))
-            }
+            AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(
+                mem_config,
+                conflict_threshold,
+                progress,
+            ))),
         }
     }
 }
@@ -331,9 +334,12 @@ unsafe fn _main() -> anyhow::Result<()> {
         config.threshold,
         Some(progress.clone()),
     )?;
-    let mut alloc_strategy =
-        args.alloc_strategy
-            .create_allocator(consec_checker, mem_config, Some(progress.clone()));
+    let mut alloc_strategy = args.alloc_strategy.create_allocator(
+        consec_checker,
+        mem_config,
+        config.threshold,
+        Some(progress.clone()),
+    );
     let block_size = alloc_strategy.block_size();
 
     let repetitions = match args.repeat {
@@ -380,7 +386,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         );
         let profiling = hammer_profile(
             &mut hammer,
-            mem_config,
             &memory,
             args.profiling_rounds,
             Some(progress.clone()),

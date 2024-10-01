@@ -1,5 +1,5 @@
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{BytePointer, DRAMAddr, FormatPfns, PfnResolver};
+use crate::memory::{construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, PfnResolver};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::ops::{Deref, Range};
@@ -20,13 +20,19 @@ use crate::{
 
 pub struct Spoiler {
     mem_config: MemConfiguration,
+    conflict_threshold: u64,
     progress: Option<MultiProgress>,
 }
 
 impl Spoiler {
-    pub fn new(mem_config: MemConfiguration, progress: Option<MultiProgress>) -> Self {
+    pub fn new(
+        mem_config: MemConfiguration,
+        conflict_threshold: u64,
+        progress: Option<MultiProgress>,
+    ) -> Self {
         Self {
             mem_config,
+            conflict_threshold,
             progress,
         }
     }
@@ -46,6 +52,7 @@ impl ConsecAllocator for Spoiler {
         let mut blocks: Vec<MemBlock> = vec![];
         const BLOCK_SIZE: usize = 4 * MB;
         let required_blocks = size.div_ceil(BLOCK_SIZE);
+        let timer = construct_memory_tuple_timer()?;
         let p = self.progress.as_ref().map(|p| {
             p.add(
                 ProgressBar::new(required_blocks as u64)
@@ -142,22 +149,36 @@ impl ConsecAllocator for Spoiler {
                     break;
                 }
                 // check for same bank
-                // TODO: this is a workaround and to be replaced w/ an actual timing based side channel
-                let bank = DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config).bank;
-                if bank != 0 {
-                    info!("Not bank 0: {}", bank);
-                    continue;
-                }
-                if let Some(last) = blocks.last() {
-                    let last_bank =
-                        DRAMAddr::from_virt(last.pfn()? as *const u8, &self.mem_config).bank;
-                    if bank != last_bank {
-                        info!("Different bank: {} != {}", bank, last_bank);
+                if let Some(last_block) = blocks.last() {
+                    let timing = unsafe {
+                        timer.time_subsequent_access_from_ram(block.ptr(), last_block.ptr(), 10000)
+                    };
+                    let same_bank = timing >= self.conflict_threshold;
+                    if !same_bank {
+                        warn!(
+                            "Bank check failed: {} < {} for blocks {:?} and {:?}",
+                            timing, self.conflict_threshold, block, last_block
+                        );
                         continue;
                     }
                 }
+                // PFN based check to confirm timings (for debugging, skipped if PageMap ist not available)
+                let pfn = block.pfn();
+                let last_pfn = blocks.last().map(|b| b.pfn()).transpose();
+                if let (Ok(pfn), Ok(Some(last_pfn))) = (&pfn, &last_pfn) {
+                    let bank = DRAMAddr::from_virt(*pfn as *const u8, &self.mem_config).bank;
+                    if bank != 0 {
+                        info!("Not bank 0: {}", bank);
+                        //continue;
+                    }
+                    let last_bank =
+                        DRAMAddr::from_virt(*last_pfn as *const u8, &self.mem_config).bank;
+                    assert_eq!(bank, last_bank);
+                } else {
+                    warn!("Skipped PFN check: {:?} {:?}", pfn, last_pfn);
+                }
                 info!(
-                    "Adding block {:?}:\n{}",
+                    "Adding block (phys) {:?}:\n{}",
                     DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config),
                     block.consec_pfns()?.format_pfns()
                 );
