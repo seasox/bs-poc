@@ -1,20 +1,17 @@
 use anyhow::Context;
 
-use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BitFlip, VictimMemory};
 use crate::victim::HammerVictim;
 
 pub struct HammerVictimMemCheck<'a> {
-    mem_config: MemConfiguration,
     memory: &'a dyn VictimMemory,
     seed: Option<[u8; 32]>,
     flips: Vec<BitFlip>,
 }
 
 impl<'a> HammerVictimMemCheck<'a> {
-    pub fn new(mem_config: MemConfiguration, memory: &'a dyn VictimMemory) -> Self {
+    pub fn new(memory: &'a dyn VictimMemory) -> Self {
         HammerVictimMemCheck {
-            mem_config,
             memory,
             seed: None,
             flips: vec![],

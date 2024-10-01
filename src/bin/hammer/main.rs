@@ -280,7 +280,6 @@ struct Profiling {
 /// Hammer a given memory region a number of times to profile for vulnerable addresses.
 fn hammer_profile(
     hammerer: &mut Hammerer,
-    mem_config: MemConfiguration,
     memory: &ConsecBlocks,
     rounds: u64,
     progress: Option<MultiProgress>,
@@ -288,7 +287,7 @@ fn hammer_profile(
     let p = progress.as_ref().map(|p| p.add(ProgressBar::new(rounds)));
     let mut bit_flips = vec![];
     let mut durations = vec![];
-    let mut victim = victim::MemCheck::new(mem_config, memory);
+    let mut victim = victim::MemCheck::new(memory);
 
     for _ in 0..rounds {
         if let Some(p) = p.as_ref() {
