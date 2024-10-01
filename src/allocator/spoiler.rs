@@ -44,8 +44,6 @@ impl ConsecAllocator for Spoiler {
     }
 
     fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
-        const PAGE_COUNT: usize = 256 * 512;
-
         //let hugeblock_len = 1 << 30;
         //let v = mmap_block(null_mut(), hugeblock_len);
 
@@ -63,79 +61,7 @@ impl ConsecAllocator for Spoiler {
             p.set_position(0);
         }
         while blocks.len() < required_blocks {
-            let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
-            let round_blocks = retry!(|| {
-                let search_buffer = mmap(null_mut(), search_buffer_size);
-                let spoiler_candidates = spoiler_candidates(search_buffer, search_buffer_size, 0);
-                if spoiler_candidates.is_empty() {
-                    unsafe { munmap(search_buffer, search_buffer_size) };
-                    bail!("No candidates found");
-                }
-                info!("Found {} candidates", spoiler_candidates.len());
-                debug!("{:?}", spoiler_candidates);
-
-                let addrs = spoiler_candidates
-                    .iter()
-                    .flat_map(|range| {
-                        range
-                            .clone()
-                            .map(|i| unsafe { search_buffer.byte_add(i * PAGE_SIZE) })
-                    })
-                    .collect::<Vec<_>>();
-
-                let to_munmap = (0..512 * MB)
-                    .step_by(PAGE_SIZE)
-                    .map(|i| unsafe { search_buffer.byte_add(i) })
-                    .filter(|ptr| !addrs.contains(ptr))
-                    .collect_vec();
-
-                for ptr in to_munmap {
-                    unsafe { munmap(ptr, PAGE_SIZE) };
-                }
-                let mut blocks = vec![];
-                let mut prev_end = 0;
-                for candidate in spoiler_candidates {
-                    if candidate.start < prev_end {
-                        debug!("Skipping candidate {:?}: overlaps with previous", candidate);
-                        continue;
-                    }
-                    let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
-                    let offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
-                    let addr = unsafe { addr.byte_add(offset) };
-                    if addr.pfn().unwrap() & 0xFFFFF != 0 {
-                        error!(
-                            "Not aligned to 1 MB boundary: {:?}, offset {}",
-                            addr.pfn().unwrap(),
-                            offset
-                        );
-                    }
-                    assert_eq!(candidate.end - candidate.start, 8 * MB / PAGE_SIZE);
-                    let block = MemBlock::new(addr, self.block_size());
-                    let consecs = block.consec_pfns()?;
-                    if consecs[1] - consecs[0] != 4 * MB as u64 {
-                        warn!("Not a 4 MB block: {}", consecs.format_pfns());
-                        continue;
-                    }
-                    info!("Found 4 MB block: {}", consecs.format_pfns());
-                    blocks.push(block);
-                    prev_end = candidate.end;
-                }
-                // munmap remaining pages
-                blocks.sort_by_key(|b| b.ptr() as usize);
-                let mut base = search_buffer;
-                let search_buf_end = unsafe { search_buffer.byte_add(search_buffer_size - 1) };
-                for block in &blocks {
-                    if base >= search_buf_end {
-                        break;
-                    }
-                    let start = block.ptr() as usize;
-                    let end = block.addr(block.len() - 1);
-                    let unused_size = start - base as usize;
-                    unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
-                    base = unsafe { end.byte_add(1) };
-                }
-                Ok(blocks)
-            });
+            let round_blocks = retry!(|| self.spoiler_round());
             info!("Current blocks: {:?}", blocks);
             info!(
                 "Banks: {:?}",
@@ -234,6 +160,84 @@ fn _spoiler(requested_size: usize) -> anyhow::Result<ConsecBlocks> {
         }
     }
     todo!()
+}
+
+impl Spoiler {
+    /// Perform a spoiler round to find consecutive memory blocks.
+    fn spoiler_round(&self) -> anyhow::Result<Vec<MemBlock>> {
+        const PAGE_COUNT: usize = 256 * 512;
+        let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
+        let search_buffer = mmap(null_mut(), search_buffer_size);
+        let spoiler_candidates = spoiler_candidates(search_buffer, search_buffer_size, 0);
+        if spoiler_candidates.is_empty() {
+            unsafe { munmap(search_buffer, search_buffer_size) };
+            bail!("No candidates found");
+        }
+        info!("Found {} candidates", spoiler_candidates.len());
+        debug!("{:?}", spoiler_candidates);
+
+        let addrs = spoiler_candidates
+            .iter()
+            .flat_map(|range| {
+                range
+                    .clone()
+                    .map(|i| unsafe { search_buffer.byte_add(i * PAGE_SIZE) })
+            })
+            .collect::<Vec<_>>();
+
+        let to_munmap = (0..512 * MB)
+            .step_by(PAGE_SIZE)
+            .map(|i| unsafe { search_buffer.byte_add(i) })
+            .filter(|ptr| !addrs.contains(ptr))
+            .collect_vec();
+
+        for ptr in to_munmap {
+            unsafe { munmap(ptr, PAGE_SIZE) };
+        }
+        let mut blocks = vec![];
+        let mut prev_end = 0;
+        for candidate in spoiler_candidates {
+            if candidate.start < prev_end {
+                debug!("Skipping candidate {:?}: overlaps with previous", candidate);
+                continue;
+            }
+            let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
+            let offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
+            let addr = unsafe { addr.byte_add(offset) };
+            if addr.pfn().unwrap() & 0xFFFFF != 0 {
+                error!(
+                    "Not aligned to 1 MB boundary: {:?}, offset {}",
+                    addr.pfn().unwrap(),
+                    offset
+                );
+            }
+            assert_eq!(candidate.end - candidate.start, 8 * MB / PAGE_SIZE);
+            let block = MemBlock::new(addr, self.block_size());
+            let consecs = block.consec_pfns()?;
+            if consecs[1] - consecs[0] != 4 * MB as u64 {
+                warn!("Not a 4 MB block: {}", consecs.format_pfns());
+                continue;
+            }
+            info!("Found 4 MB block: {}", consecs.format_pfns());
+            blocks.push(block);
+            prev_end = candidate.end;
+        }
+        // munmap remaining pages
+        blocks.sort_by_key(|b| b.ptr() as usize);
+        let mut base = search_buffer;
+        let search_buf_end = unsafe { search_buffer.byte_add(search_buffer_size - 1) };
+        for block in &blocks {
+            if base >= search_buf_end {
+                break;
+            }
+            let start = block.ptr() as usize;
+            let end = block.addr(block.len() - 1);
+            let unused_size = start - base as usize;
+            unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
+            base = unsafe { end.byte_add(1) };
+        }
+        Ok(blocks)
+    }
 }
 
 const MEASURE_LOG: &str = "log/measurements.csv";
