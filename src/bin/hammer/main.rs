@@ -38,13 +38,13 @@ use serde::Serialize;
 /// This struct defines the command line arguments that can be passed to the `hammer` binary.
 #[derive(Debug, Parser)]
 struct CliArgs {
-    ///The `blacksmith` config file. The default is `config/bs-config.json`.
+    ///The `blacksmith` config file.
     #[clap(long = "config", default_value = "config/bs-config.json")]
     config: String,
-    /// The JSON file containing hammering patterns to load. The default is `config/fuzz-summary.json`.
+    /// The JSON file containing hammering patterns to load.
     #[clap(long = "load-json", default_value = "config/fuzz-summary.json")]
     load_json: String,
-    /// The pattern ID to load from the `blacksmith` JSON file. The default is `39ad622b-3bfe-4161-b860-dad5f3e6dd68`.
+    /// The pattern ID to load from the `blacksmith` JSON file.
     #[clap(
         long = "pattern",
         default_value = "39ad622b-3bfe-4161-b860-dad5f3e6dd68"
@@ -53,13 +53,13 @@ struct CliArgs {
     /// The mapping ID to load from the `blacksmith` JSON file. Optional argument, will determine most optimal pattern if omitted.
     #[clap(long = "mapping")]
     mapping: Option<String>,
-    /// Some allocation strategies require a check for consecutive memory. This option allows you to specify the type of check to use. The default is `bank-timing`.
+    /// Some allocation strategies require a check for consecutive memory. This option allows you to specify the type of check to use.
     #[clap(long = "consec-check", default_value = "bank-timing")]
     consec_check: ConsecCheckType,
-    /// The allocation strategy to use. The default is `spoiler`.
+    /// The allocation strategy to use.
     #[clap(long = "alloc-strategy", default_value = "spoiler")]
     alloc_strategy: AllocStrategy,
-    /// The hammering strategy to use. The default is `blacksmith`.
+    /// The hammering strategy to use.
     #[clap(long = "hammerer", default_value = "blacksmith")]
     hammerer: HammerStrategy,
     /// Repeat the hammering until the target reports a successful attack. If --repeat is specified without a value, the hammering will
@@ -71,20 +71,20 @@ struct CliArgs {
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
     #[arg(long)]
     repeat: Option<Option<usize>>,
-    /// The number of rounds to profile for vulnerable addresses. The default is 50.
+    /// The number of rounds to profile for vulnerable addresses.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
-    #[arg(long, default_value = "50")]
+    #[arg(long, default_value = "10")]
     profiling_rounds: u64,
-    /// The number of rounds to hammer per repetition. The default is 1.
+    /// The number of rounds to hammer per repetition.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
     /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
     /// victim will initialize the memory with a random seed, while a process victim might generate a new private key for each round.
     #[arg(long, default_value = "1")]
     rounds: u64,
-    /// The number of hammering attempts per round. The default is 100.
+    /// The number of hammering attempts per round.
     /// An attempt denotes a single run of the hammering code. Usually, hammerers need several attempts to successfully flip a bit in the victim.
     /// The default value of 100 is a good starting point for the blacksmith hammerer.
-    #[arg(long, default_value = "100")]
+    #[arg(long, default_value = "20")]
     attempts: u8,
     /// Do a stats run. This will run the hammerer and store the results in the provided file. The default is `None`, causing no stats to be stored.
     /// When `stats` is set, the hammering process will not exit after the first successful attack, but continue hammering until `repeat` is reached.
