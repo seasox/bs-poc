@@ -176,24 +176,6 @@ impl Spoiler {
         info!("Found {} candidates", spoiler_candidates.len());
         debug!("{:?}", spoiler_candidates);
 
-        let addrs = spoiler_candidates
-            .iter()
-            .flat_map(|range| {
-                range
-                    .clone()
-                    .map(|i| unsafe { search_buffer.byte_add(i * PAGE_SIZE) })
-            })
-            .collect::<Vec<_>>();
-
-        let to_munmap = (0..512 * MB)
-            .step_by(PAGE_SIZE)
-            .map(|i| unsafe { search_buffer.byte_add(i) })
-            .filter(|ptr| !addrs.contains(ptr))
-            .collect_vec();
-
-        for ptr in to_munmap {
-            unsafe { munmap(ptr, PAGE_SIZE) };
-        }
         let mut blocks = vec![];
         let mut prev_end = 0;
         for candidate in spoiler_candidates {
