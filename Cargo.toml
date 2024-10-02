@@ -6,6 +6,7 @@ license = "MIT"
 
 [features]
 jitter_dump = []
+spoiler_dump = []
 
 [profile.release-with-debug]
 inherits = "release"

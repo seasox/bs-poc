@@ -222,7 +222,9 @@ impl Spoiler {
     }
 }
 
+#[cfg(feature = "spoiler_dump")]
 const MEASURE_LOG: &str = "log/measurements.csv";
+#[cfg(feature = "spoiler_dump")]
 const DIFF_LOG: &str = "log/diffs.csv";
 
 /// Find candidates for consecutive memory blocks for a given read offset.
@@ -249,30 +251,35 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
     let measurements = unsafe {
         crate::spoiler_measure(buf, buf_size, buf.byte_add(read_page_offset * PAGE_SIZE))
     };
-    let meas_buf = unsafe { CArray::new(crate::measurements(measurements), page_count) };
-    let meas_buf = Vec::from(&meas_buf as &[u64]);
-    // write measurements to MEASURE_LOG file
-    let mut file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(MEASURE_LOG)
-        .unwrap();
-    for (idx, measurement) in meas_buf.iter().enumerate() {
-        writeln!(file, "{},{},{}", read_page_offset, idx, measurement).unwrap();
+
+    let diff_buf =
+        unsafe { Vec::from(&CArray::new(crate::diffs(measurements), page_count) as &[u64]) };
+    #[cfg(feature = "spoiler_dump")]
+    {
+        let meas_buf = unsafe {
+            Vec::from(&CArray::new(crate::measurements(measurements), page_count) as &[u64])
+        };
+        // write measurements to MEASURE_LOG file
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(MEASURE_LOG)
+            .unwrap();
+        for (idx, measurement) in meas_buf.iter().enumerate() {
+            writeln!(file, "{},{},{}", read_page_offset, idx, measurement).unwrap();
+        }
+        drop(file);
+        // write diffs to DIFF_LOG file
+        let mut file = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(DIFF_LOG)
+            .unwrap();
+        for (idx, diff) in diff_buf.iter().enumerate() {
+            writeln!(file, "{},{},{}", read_page_offset, idx, diff).unwrap();
+        }
+        drop(file);
     }
-    drop(file);
-    let diff_buf = unsafe { CArray::new(crate::diffs(measurements), page_count) };
-    let diff_buf = Vec::from(&diff_buf as &[u64]);
-    // write diffs to DIFF_LOG file
-    let mut file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open(DIFF_LOG)
-        .unwrap();
-    for (idx, diff) in diff_buf.iter().enumerate() {
-        writeln!(file, "{},{},{}", read_page_offset, idx, diff).unwrap();
-    }
-    drop(file);
     // find peaks in diff_buf. Peaks are read accesses to pages stalled caused by read-after-write pipeline conflicts.
     let peaks = diff_buf.peaks_indices(THRESH_LOW..THRESH_HIGH);
     let peak_distances = peaks
