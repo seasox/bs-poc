@@ -8,6 +8,7 @@ fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
         .header("lib/spoiler/include/spoiler.h")
         .header("lib/spoiler/include/misc.h")
         .allowlist_function("spoiler_measure")
+        .allowlist_function("spoiler_free")
         .allowlist_function("measurements")
         .allowlist_function("diffs")
         .allowlist_function("auto_spoiler")

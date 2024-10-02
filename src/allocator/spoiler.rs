@@ -246,8 +246,9 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
     let page_count = 256 * buf_size / MB; // 256 pages per MB
 
     // measure the buffer using the spoiler primitive
-    let measurements =
-        unsafe { crate::spoiler_measure(buf, buf.byte_add(read_page_offset * PAGE_SIZE)) };
+    let measurements = unsafe {
+        crate::spoiler_measure(buf, buf_size, buf.byte_add(read_page_offset * PAGE_SIZE))
+    };
     let meas_buf = unsafe { CArray::new(crate::measurements(measurements), page_count) };
     let meas_buf = Vec::from(&meas_buf as &[u64]);
     // write measurements to MEASURE_LOG file
@@ -281,8 +282,8 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
         .map(|(idx, (a, b))| (idx, b - a))
         .collect_vec();
     debug!("peak_distances: {:?}", peak_distances);
+    unsafe { crate::spoiler_free(measurements) };
     // find `cont_window_size` distances 256 pages apart
-    unsafe { libc::free(measurements as *mut libc::c_void) };
     let cont_window_size = 8; // cont window size in MB
     peak_distances
         // slide over peaks in windows of size `cont_window_size`

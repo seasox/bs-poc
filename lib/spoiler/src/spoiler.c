@@ -269,13 +269,16 @@ void log_measurements(const char *fname, uint64_t *measurementBuffer, size_t cou
 
 struct measurement
 {
-	uint64_t measurementBuffer[PAGE_COUNT];
-	uint64_t diffBuffer[PAGE_COUNT];
+	uint64_t *measurementBuffer;
+	uint64_t *diffBuffer;
 };
 
-struct measurement *spoiler_measure(uint8_t *buffer, uint8_t *read)
+struct measurement *spoiler_measure(uint8_t *buffer, size_t buf_size, uint8_t *read)
 {
 	struct measurement *ret = malloc(sizeof(struct measurement));
+	size_t page_count = buf_size / PAGE_SIZE;
+	ret->measurementBuffer = malloc(page_count * sizeof(uint64_t));
+	ret->diffBuffer = malloc(page_count * sizeof(uint64_t));
 
 	////////////////////////////////SPOILER////////////////////////////////////
 	// Warmup loop to avoid initial spike in timings
@@ -288,7 +291,7 @@ struct measurement *spoiler_measure(uint8_t *buffer, uint8_t *read)
 	{
 		int t2_prev = 0;
 		// for each page in [WINDOW...PAGE_COUNT)
-		for (int p = WINDOW; p < PAGE_COUNT; p++)
+		for (int p = WINDOW; p < page_count; p++)
 		{
 			uint64_t total = 0;
 			int cc = 0;
@@ -329,12 +332,20 @@ struct measurement *spoiler_measure(uint8_t *buffer, uint8_t *read)
 	return ret;
 }
 
-struct addr_space *auto_spoiler(uint8_t *buffer)
+void spoiler_free(struct measurement *m)
+{
+	free(m->measurementBuffer);
+	free(m->diffBuffer);
+	free(m);
+}
+
+struct addr_space *auto_spoiler(uint8_t *buffer, size_t buf_size)
 {
 	clock_t start = clock();
-	struct measurement *m = spoiler_measure(buffer, buffer);
-	log_measurements("measurements.csv", m->measurementBuffer, PAGE_COUNT);
-	log_measurements("diffs.csv", m->diffBuffer, PAGE_COUNT);
+	size_t page_count = buf_size / PAGE_SIZE;
+	struct measurement *m = spoiler_measure(buffer, buf_size, buffer);
+	log_measurements("measurements.csv", m->measurementBuffer, page_count);
+	log_measurements("diffs.csv", m->diffBuffer, page_count);
 
 	const uint64_t THRESH_LOW = 400;
 	const uint64_t THRESH_HI = 800;
@@ -342,8 +353,8 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	// JB: find clusters in diffBuffer, probably for debugging?
 	{
 		// Logic to find threshold values
-		const uint64_t search_space = PAGE_COUNT; // This can be reduced to speed up the process
-		assert(search_space <= PAGE_COUNT);
+		const uint64_t search_space = page_count; // This can be reduced to speed up the process
+		assert(search_space <= page_count);
 
 		// Start clock
 		clock_t cl = clock();
@@ -406,7 +417,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	int peaks[PEAKS] = {0}; // Segmentation fault (core dumped) if less than the number of peaks found
 	int peak_index = 0;
 	int apart[PEAKS] = {0};
-	for (int p = 0; p < PAGE_COUNT; p++)
+	for (int p = 0; p < page_count; p++)
 	{
 		if (m->diffBuffer[p] > THRESH_LOW && m->diffBuffer[p] < THRESH_HI)
 		{
@@ -443,7 +454,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 		{
 			clock_t cl = clock() - start;
 			float timer = ((float)cl) / CLOCKS_PER_SEC;
-			printf("Found %d MB contiguous memory within %luMB buffer in %f seconds.\n", cont_window, PAGE_COUNT * PAGE_SIZE / 1024 / 1024, timer);
+			printf("Found %d MB contiguous memory within %luMB buffer in %f seconds.\n", cont_window, page_count * PAGE_SIZE / 1024 / 1024, timer);
 
 			// printf("Contiguous memory found in %f seconds.\n", timer);
 			cont_start = peaks[j];
@@ -453,7 +464,7 @@ struct addr_space *auto_spoiler(uint8_t *buffer)
 	}
 	if (cont_start == 0)
 	{
-		printf("Unable to detect required contiguous memory of %dMB within %luMB buffer\n", cont_window, PAGE_COUNT * PAGE_SIZE / 1024 / 1024);
+		printf("Unable to detect required contiguous memory of %dMB within %luMB buffer\n", cont_window, page_count * PAGE_SIZE / 1024 / 1024);
 		return NULL;
 	}
 
