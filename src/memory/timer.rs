@@ -7,7 +7,7 @@ use anyhow::bail;
 
 pub trait MemoryTupleTimer {
     /// time_subsequent_access_from_ram measures the access time when accessing both memory locations back to back from ram.
-    /// 
+    ///
     /// # Safety
     /// * `a` and `b` must be valid pointers to memory locations
     unsafe fn time_subsequent_access_from_ram(
