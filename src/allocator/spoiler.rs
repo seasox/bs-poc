@@ -1,7 +1,5 @@
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, PfnResolver};
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::ops::{Deref, Range};
 use std::ptr::null_mut;
 
@@ -141,34 +139,14 @@ impl<T> Deref for CArray<T> {
     }
 }
 
-fn _spoiler(requested_size: usize) -> anyhow::Result<ConsecBlocks> {
-    let block_size = 8 * MB;
-    let rounds = requested_size.div_ceil(block_size);
-    for _ in 0..rounds {
-        const BUF_SIZE: usize = 512; // buf size in MB
-        const PAGE_COUNT: usize = 256 * BUF_SIZE; // 256 pages per MB
-        let buf: *mut u8 = mmap(null_mut(), 512 * MB);
-        assert!(!buf.is_null());
-        // sieve candidates for consecutive memory
-        let mut candidates = spoiler_candidates(buf, BUF_SIZE * MB, 0);
-        for read_page_offset in 1..PAGE_COUNT {
-            if candidates.is_empty() {
-                bail!("No candidates found");
-            }
-            let new_candidates = spoiler_candidates(buf, BUF_SIZE * MB, read_page_offset);
-            candidates.retain(|candidate| new_candidates.contains(candidate));
-        }
-    }
-    todo!()
-}
-
 impl Spoiler {
     /// Perform a spoiler round to find consecutive memory blocks.
     fn spoiler_round(&self) -> anyhow::Result<Vec<MemBlock>> {
-        const PAGE_COUNT: usize = 256 * 512;
-        let search_buffer_size = PAGE_COUNT * PAGE_SIZE;
+        let search_buffer_size = 512 * MB;
+        let cont_size = 8 * MB;
         let search_buffer = mmap(null_mut(), search_buffer_size);
-        let spoiler_candidates = spoiler_candidates(search_buffer, search_buffer_size, 0);
+        let spoiler_candidates =
+            spoiler_candidates(search_buffer, search_buffer_size, 0, cont_size);
         if spoiler_candidates.is_empty() {
             unsafe { munmap(search_buffer, search_buffer_size) };
             bail!("No candidates found");
@@ -193,7 +171,7 @@ impl Spoiler {
                     offset
                 );
             }
-            assert_eq!(candidate.end - candidate.start, 8 * MB / PAGE_SIZE);
+            assert_eq!(candidate.end - candidate.start, cont_size / PAGE_SIZE);
             let block = MemBlock::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
             if consecs[1] - consecs[0] != 4 * MB as u64 {
@@ -230,16 +208,22 @@ const DIFF_LOG: &str = "log/diffs.csv";
 /// Find candidates for consecutive memory blocks for a given read offset.
 ///
 /// This returns a Range for start an end index for each candidate.
-fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) -> Vec<Range<usize>> {
+fn spoiler_candidates(
+    buf: *mut u8,
+    buf_size: usize,
+    read_page_offset: usize,
+    continuous_size: usize,
+) -> Vec<Range<usize>> {
     assert!(!buf.is_null(), "null buffer");
     assert!(buf_size > 0, "zero-sized buffer");
     assert!(buf_size % MB == 0, "buffer size must be a multiple of MB");
-
+    assert!(continuous_size > 0, "zero-sized continuous_size");
     assert_eq!(
-        buf_size,
-        512 * MB,
-        "Only 512 MB supported, other sizes TODO."
+        continuous_size % MB,
+        0,
+        "continuous_size must be a multiple of 1 MB"
     );
+
     const THRESH_LOW: u64 = 400;
     const THRESH_HIGH: u64 = 800;
 
@@ -291,7 +275,7 @@ fn spoiler_candidates(buf: *mut u8, buf_size: usize, read_page_offset: usize) ->
     debug!("peak_distances: {:?}", peak_distances);
     unsafe { crate::spoiler_free(measurements) };
     // find `cont_window_size` distances 256 pages apart
-    let cont_window_size = 8; // cont window size in MB
+    let cont_window_size = continuous_size / MB; // cont window size in MB
     peak_distances
         // slide over peaks in windows of size `cont_window_size`
         .windows(cont_window_size)
@@ -323,12 +307,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::remove_file, ptr::null_mut};
+    use std::ptr::null_mut;
 
     use crate::{
         allocator::{
             compact_mem,
-            spoiler::{spoiler_candidates, DIFF_LOG, MEASURE_LOG},
+            spoiler::spoiler_candidates,
             util::{mmap, munmap},
         },
         memory::{FormatPfns, MemBlock},
@@ -347,10 +331,9 @@ mod tests {
         let pfns = block.consec_pfns().unwrap().format_pfns();
         println!("PFN ranges: {}", pfns);
         assert_ne!(buf, null_mut());
-        remove_file(MEASURE_LOG).ok();
-        remove_file(DIFF_LOG).ok();
+        let consec_size = 4 * MB;
         for offset in 0..256 * 8 {
-            let spoiler_candidates = spoiler_candidates(buf, BUF_SIZE, offset);
+            let spoiler_candidates = spoiler_candidates(buf, BUF_SIZE, offset, consec_size);
             println!(
                 "Found {} spoiler_candidates: {:?}",
                 spoiler_candidates.len(),
@@ -363,7 +346,7 @@ mod tests {
                 assert_eq!(end - start, 8 * MB / PAGE_SIZE);
                 let start = unsafe { buf.byte_add(start * PAGE_SIZE) };
                 println!("Start: {:x}", start as usize);
-                let block = MemBlock::new(start, 8 * MB);
+                let block = MemBlock::new(start, consec_size);
                 let pfns = block.consec_pfns().unwrap().format_pfns();
                 println!("PFN ranges:\n{}", pfns);
                 /*
