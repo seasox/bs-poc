@@ -1,5 +1,8 @@
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, PfnResolver};
+use crate::memory::{
+    construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, PfnOffsetResolver, PfnResolver,
+};
+use std::fmt::Display;
 use std::ops::{Deref, Range};
 use std::ptr::null_mut;
 
@@ -10,7 +13,7 @@ use itertools::Itertools;
 use super::ConsecAllocator;
 use crate::allocator::util::{mmap, munmap};
 use crate::retry;
-use crate::util::{NamedProgress, MB};
+use crate::util::{NamedProgress, KB, MB, ROW_SIZE};
 use crate::{
     memory::{ConsecBlocks, MemBlock},
     util::PAGE_SIZE,
@@ -59,7 +62,7 @@ impl ConsecAllocator for Spoiler {
             p.set_position(0);
         }
         while blocks.len() < required_blocks {
-            let round_blocks = retry!(|| self.spoiler_round());
+            let round_blocks = retry!(|| self.spoiler_round(required_blocks));
             info!("Current blocks: {:?}", blocks);
             info!(
                 "Banks: {:?}",
@@ -144,9 +147,9 @@ impl<T> Deref for CArray<T> {
 
 impl Spoiler {
     /// Perform a spoiler round to find consecutive memory blocks.
-    fn spoiler_round(&self) -> anyhow::Result<Vec<MemBlock>> {
-        let search_buffer_size = 512 * MB;
-        let cont_size = 8 * MB;
+    fn spoiler_round(&self, max_candidates: usize) -> anyhow::Result<Vec<MemBlock>> {
+        let search_buffer_size = 2048 * MB;
+        let cont_size = 5 * MB;
         let search_buffer = mmap(null_mut(), search_buffer_size);
         let spoiler_candidates =
             spoiler_candidates(search_buffer, search_buffer_size, 0, cont_size);
@@ -157,33 +160,93 @@ impl Spoiler {
         info!("Found {} candidates", spoiler_candidates.len());
         debug!("{:?}", spoiler_candidates);
 
+        let progress = self.progress.as_ref().map(|progress| {
+            progress.add(
+                ProgressBar::new(spoiler_candidates.len() as u64)
+                    .with_style(ProgressStyle::named_bar("Spoiler round")),
+            )
+        });
+
         let mut blocks = vec![];
-        let mut prev_end = 0;
-        for candidate in spoiler_candidates {
-            if candidate.start < prev_end {
-                debug!("Skipping candidate {:?}: overlaps with previous", candidate);
+        let timer = construct_memory_tuple_timer()?;
+        let mut intervals = Intervals::new();
+        for candidate in spoiler_candidates.into_iter().rev() {
+            if blocks.len() >= max_candidates {
+                break;
+            }
+            match &progress {
+                Some(p) => p.inc(1),
+                None => {}
+            }
+            if intervals.contains(candidate.start) || intervals.contains(candidate.end) {
+                info!("Skipping candidate {:?}: overlaps with previous", candidate);
                 continue;
             }
             let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
-            let offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
-            let addr = unsafe { addr.byte_add(offset) };
+            let offset = {
+                let block = MemBlock::new(addr, cont_size);
+                let offset = block
+                    .pfn_offset(&self.mem_config, self.conflict_threshold, &*timer, None)
+                    .map(|o| o * ROW_SIZE);
+                info!("Consecutive PFNs:\n{}", block.consec_pfns()?.format_pfns());
+                match offset {
+                    Some(offset) => {
+                        info!(
+                            "Offset: {:x}, VA/PFN {:x}/{:x}",
+                            offset,
+                            block.addr(offset) as usize,
+                            block.pfn()?
+                        );
+                        offset
+                    }
+                    None => {
+                        warn!("No offset found");
+                        continue;
+                    }
+                }
+            };
+            // TODO: maybe refactor this to MemBlock#pfn_offset()
+            // find offset in row. Since allocations are page aligned, we might land in the middle of a row instead of at the start. This check ensures that we are at the start of a row.
+            // measure the timing of the current offset and (offset + 4KB + 4MB):
+            // - if we are at the start of a row, then we should measure a bank conflict, since offset+4KB is in the same row, hence offset+4KB+4MB is in the same bank
+            // - if we are in the middle of a row, then we should not measure a bank conflict, since adding 4KB to the current offset changes the row, hence offset+4KB+4MB is in a different bank
+            let row_timing = unsafe {
+                timer.time_subsequent_access_from_ram(
+                    addr.byte_add(offset),
+                    addr.byte_add(offset + 4 * KB + 2 * MB),
+                    10000,
+                )
+            };
+            let is_row_start = row_timing >= self.conflict_threshold;
+            let offset = if is_row_start {
+                offset
+            } else {
+                offset - 4 * KB
+            };
+            // We now know that (addr + offset) & 0xFFFFF == pfn & 0xFFFFF
+            let pfn_offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
+            let alignment_offset = unsafe { 0x100000 - (addr.byte_add(offset) as usize & 0xFFFFF) };
+            info!("row start: {}", is_row_start);
+            info!("Offset align/pfn: {:x}/{:x}", alignment_offset, pfn_offset);
+            let addr = unsafe { addr.byte_add(alignment_offset) };
             if addr.pfn().unwrap() & 0xFFFFF != 0 {
-                error!(
-                    "Not aligned to 1 MB boundary: {:?}, offset {}",
+                warn!(
+                    "Not aligned to 1 MB boundary: {:x}, offset {}",
                     addr.pfn().unwrap(),
-                    offset
+                    alignment_offset
                 );
             }
             assert_eq!(candidate.end - candidate.start, cont_size / PAGE_SIZE);
             let block = MemBlock::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
-            if consecs[1] - consecs[0] != 4 * MB as u64 {
-                warn!("Not a 4 MB block: {}", consecs.format_pfns());
-                continue;
+            info!("Found candidate: {}", consecs.format_pfns());
+            if consecs[0].end - consecs[0].start != 4 * MB as u64 {
+                warn!("Not a 4 MB block!");
+                //continue;
             }
-            info!("Found 4 MB block: {}", consecs.format_pfns());
+            intervals.add(candidate);
+            info!("Current ranges: {}", intervals);
             blocks.push(block);
-            prev_end = candidate.end;
         }
         // munmap remaining pages
         blocks.sort_by_key(|b| b.ptr() as usize);
@@ -194,10 +257,9 @@ impl Spoiler {
                 break;
             }
             let start = block.ptr() as usize;
-            let end = block.addr(block.len() - 1);
             let unused_size = start - base as usize;
             unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
-            base = unsafe { end.byte_add(1) };
+            base = unsafe { block.ptr().byte_add(block.len()) };
         }
         Ok(blocks)
     }
@@ -289,6 +351,40 @@ fn spoiler_candidates(
         .collect_vec()
 }
 
+/// A collection of intervals.
+struct Intervals<T>(Vec<Range<T>>);
+
+impl<T> Intervals<T> {
+    fn new() -> Self {
+        Self(vec![])
+    }
+    fn add(&mut self, interval: Range<T>) {
+        self.0.push(interval);
+    }
+}
+
+impl<T: Ord> Intervals<T> {
+    /// Check if a point is contained in any of the intervals.
+    fn contains(&self, point: T) -> bool {
+        self.0.iter().any(|range| range.contains(&point))
+    }
+}
+
+/// Display implementation for Intervals.
+impl<T: Copy + Display + Ord> Display for Intervals<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.0
+                .iter()
+                .sorted_by_key(|r| r.start)
+                .map(|range| format!("[{}, {})", range.start, range.end))
+                .join("")
+        )
+    }
+}
+
 trait PeakIndices<T> {
     fn peaks_indices(&self, peak_range: Range<T>) -> Vec<usize>;
 }
@@ -321,6 +417,8 @@ mod tests {
         memory::{FormatPfns, MemBlock},
         util::{MB, PAGE_SIZE},
     };
+
+    use super::Intervals;
 
     #[test]
     #[ignore = "spoiler test needs root permissions. This test is mainly a playground for the spoiler strategy."]
@@ -370,6 +468,29 @@ mod tests {
         unsafe {
             munmap(buf, BUF_SIZE);
             munmap(b, 2048 * MB);
+        }
+    }
+
+    #[test]
+    fn test_intervals() {
+        let mut intervals = Intervals::new();
+        intervals.add(0..10);
+        intervals.add(10..20);
+        intervals.add(31..41);
+        for i in -10..0 {
+            assert!(!intervals.contains(i));
+        }
+        for i in 0..20 {
+            assert!(intervals.contains(i));
+        }
+        for i in 20..31 {
+            assert!(!intervals.contains(i));
+        }
+        for i in 31..41 {
+            assert!(intervals.contains(i));
+        }
+        for i in 41..=50 {
+            assert!(!intervals.contains(i));
         }
     }
 }

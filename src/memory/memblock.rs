@@ -1,4 +1,4 @@
-use std::{cell::RefCell, ptr::null_mut};
+use std::{cell::RefCell, ops::Range, ptr::null_mut};
 
 use crate::{
     memory::PfnResolver,
@@ -110,17 +110,18 @@ impl CachedPfnOffset for MemBlock {
 impl MemBlock {
     pub fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
         trace!("Get consecutive PFNs for vaddr 0x{:x}", self.ptr as u64);
+        let mut consecs = vec![];
         let mut phys_prev = self.pfn()?;
-        let mut consecs = vec![phys_prev];
+        let mut range_start = phys_prev;
         for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
             let phys = self.addr(offset).pfn()?;
             if phys != phys_prev + PAGE_SIZE as u64 {
-                consecs.push(phys_prev + PAGE_SIZE as u64);
-                consecs.push(phys);
+                consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
+                range_start = phys;
             }
             phys_prev = phys;
         }
-        consecs.push(self.addr(self.len - PAGE_SIZE).pfn()? + PAGE_SIZE as u64);
+        consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
         trace!("PFN check done");
         Ok(consecs)
     }
@@ -130,13 +131,18 @@ pub trait FormatPfns {
     fn format_pfns(&self) -> String;
 }
 
-type ConsecPfns = Vec<u64>;
+type ConsecPfns = Vec<Range<u64>>;
 
 impl FormatPfns for ConsecPfns {
     fn format_pfns(&self) -> String {
         let mut pfns = String::from("");
-        for (p1, p2) in self.windows(2).map(|w| (w[0], w[1])).step_by(2) {
-            pfns += &format!("{:09x}..[{:04} KB]..{:09x}\n", p1, (p2 - p1) / 1024, p2);
+        for range in self {
+            pfns += &format!(
+                "{:09x}..[{:04} KB]..{:09x}\n",
+                range.start,
+                (range.end - range.start) / 1024,
+                range.end
+            );
         }
         pfns
     }

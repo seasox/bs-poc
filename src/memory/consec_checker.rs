@@ -120,7 +120,7 @@ impl AllocChecker for ConsecCheckPfn {
         let consecs = block.consec_pfns()?;
         let pfns = consecs.format_pfns();
         info!("PFNs: {}", pfns);
-        let first_block_bytes = (consecs[1] - consecs[0]) as usize;
+        let first_block_bytes = (consecs[0].end - consecs[0].start) as usize;
         let is_consec = first_block_bytes >= block.len;
         if is_consec {
             info!(

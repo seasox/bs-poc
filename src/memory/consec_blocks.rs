@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, ops::Range};
 
 use crate::memory::{BytePointer, FormatPfns};
 
@@ -45,24 +45,31 @@ impl BytePointer for ConsecBlocks {
 }
 
 impl ConsecBlocks {
-    pub fn log_pfns(&self) {
+    pub fn consec_pfns(&self) -> anyhow::Result<Vec<Range<u64>>> {
         let mut pfns = vec![];
         for block in &self.blocks {
-            let block_pfns = match block.consec_pfns() {
-                Ok(pfns) => pfns,
-                Err(e) => {
-                    error!("Failed to get PFNs: {:?}", e);
-                    return;
-                }
-            };
-            let mut block_pfns = VecDeque::from(block_pfns);
-            let is_cons = pfns.last().map_or(false, |last| *last == block_pfns[0]);
+            let mut block_pfns = VecDeque::from(block.consec_pfns()?);
+            let is_cons = pfns
+                .last()
+                .map_or(false, |last: &Range<u64>| last.start == block_pfns[0].end);
             if is_cons {
-                pfns.pop();
-                block_pfns.pop_front();
+                let prev = pfns.pop();
+                let next = block_pfns.pop_front();
+                pfns.push(prev.unwrap().start..next.unwrap().end);
             }
             pfns.extend(block_pfns);
         }
+        Ok(pfns)
+    }
+
+    pub fn log_pfns(&self) {
+        let pfns = match self.consec_pfns() {
+            Ok(pfns) => pfns,
+            Err(e) => {
+                error!("Failed to get PFNs: {:?}", e);
+                return;
+            }
+        };
         let pfns = pfns.format_pfns();
         info!("PFNs:\n{}", pfns);
     }
