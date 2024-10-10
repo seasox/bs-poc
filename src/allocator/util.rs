@@ -37,14 +37,14 @@ pub fn compact_mem() -> anyhow::Result<()> {
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
-    use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE};
+    use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
     let v = unsafe {
         libc::mmap(
             addr,
             len,
             PROT_READ | PROT_WRITE,
-            MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE,
+            MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE,
             -1,
             0,
         )
