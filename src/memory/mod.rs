@@ -43,6 +43,7 @@ pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
 use anyhow::Result;
 use rand::{rngs::StdRng, Rng, SeedableRng};
+use serde::Serialize;
 use std::fmt::Debug;
 
 use crate::allocator::hugepage::HugepageAllocator;
@@ -88,9 +89,9 @@ pub trait Initializable {
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8);
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct BitFlip {
-    pub addr: *const u8,
+    pub addr: usize,
     pub bitmask: u8,
     pub data: u8,
 }
@@ -98,7 +99,7 @@ pub struct BitFlip {
 impl BitFlip {
     pub fn new(addr: *const u8, bitmask: u8, data: u8) -> Self {
         BitFlip {
-            addr,
+            addr: addr as usize,
             bitmask,
             data,
         }

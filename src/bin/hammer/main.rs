@@ -1,7 +1,8 @@
 use std::{
     fmt::Debug,
     fs::File,
-    io::{stdin, BufReader},
+    io::{stdin, BufReader, BufWriter, Write},
+    ops::Range,
     time::Duration,
 };
 
@@ -29,7 +30,6 @@ use bs_poc::{
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
-use itertools::Itertools;
 use log::{info, warn};
 use serde::Serialize;
 
@@ -276,7 +276,7 @@ fn make_hammer<'a>(
 
 #[derive(Debug)]
 struct Profiling {
-    bit_flips: Vec<BitFlip>,
+    bit_flips: Vec<Vec<BitFlip>>,
     durations: Vec<Duration>,
 }
 
@@ -286,7 +286,7 @@ fn hammer_profile(
     memory: &ConsecBlocks,
     rounds: u64,
     progress: Option<MultiProgress>,
-) -> anyhow::Result<Profiling> {
+) -> Profiling {
     let p = progress.as_ref().map(|p| p.add(ProgressBar::new(rounds)));
     let mut bit_flips = vec![];
     let mut durations = vec![];
@@ -299,24 +299,25 @@ fn hammer_profile(
         let start = std::time::Instant::now();
         let result = hammerer.hammer(&mut victim);
         let duration = std::time::Instant::now() - start;
+        durations.push(duration);
         match result {
             Ok(result) => {
                 info!(
                     "Profiling hammering round successful: {:?}",
                     result.victim_result
                 );
-                durations.push(duration);
-                bit_flips.extend(result.victim_result);
+                bit_flips.push(result.victim_result);
             }
             Err(e) => {
                 warn!("Profiling hammering round not successful: {:?}", e);
+                bit_flips.push(vec![]);
             }
         }
     }
-    Ok(Profiling {
+    Profiling {
         bit_flips,
         durations,
-    })
+    }
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -348,18 +349,14 @@ unsafe fn _main() -> anyhow::Result<()> {
         None => 1,
     };
 
-    let mut csv_file = args
-        .statistics
-        .as_ref()
-        .map(csv::Writer::from_path)
-        .transpose()?;
-    if csv_file.is_some() {
-        info!(
-            "Writing statistics to file {}",
-            args.statistics.as_ref().unwrap()
-        );
+    #[derive(Serialize)]
+    struct HammerStatistic {
+        alloc_duration_millis: u128,
+        memory_regions: Vec<Range<u64>>,
+        hammer_durations_millis: Vec<u128>,
+        bit_flips: Vec<Vec<BitFlip>>,
     }
-
+    let mut stats = vec![];
     for _ in 0..repetitions {
         info!("Starting bait allocation");
         let start = std::time::Instant::now();
@@ -389,26 +386,26 @@ unsafe fn _main() -> anyhow::Result<()> {
             &memory,
             args.profiling_rounds,
             Some(progress.clone()),
-        )?;
-        if let Some(csv_file) = &mut csv_file {
-            #[derive(Serialize)]
-            struct HammerStatistic {
-                alloc_duration_millis: u128,
-                hammer_duration_millis: String,
-                bit_flips: String,
-            }
-            let stat = HammerStatistic {
+        );
+        // write stats
+        if let Some(stats_file) = &args.statistics {
+            stats.push(HammerStatistic {
                 alloc_duration_millis: alloc_duration.as_millis(),
-                hammer_duration_millis: profiling.durations.iter().map(|d| d.as_millis()).join(","),
-                bit_flips: profiling
-                    .bit_flips
+                memory_regions: memory.consec_pfns()?,
+                hammer_durations_millis: profiling
+                    .durations
                     .iter()
-                    .map(|bf| format!("{:?}", bf.addr))
-                    .collect_vec()
-                    .join(","),
-            };
-            csv_file.serialize(stat)?;
-            csv_file.flush()?;
+                    .map(|d| d.as_millis())
+                    .collect(),
+                bit_flips: profiling.bit_flips.clone(),
+            });
+            info!(
+                "Writing statistics to file {}",
+                args.statistics.as_ref().unwrap()
+            );
+            let mut json_file = BufWriter::new(File::create(stats_file)?);
+            serde_json::to_writer_pretty(&mut json_file, &stats)?;
+            json_file.flush()?;
         }
         if profiling.bit_flips.is_empty() {
             warn!("No vulnerable addresses found");
@@ -433,7 +430,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 match result {
                     Ok(result) => {
                         info!("Hammering successful: {:?}", result.victim_result);
-                        break;
                     }
                     Err(e) => {
                         warn!("Hammering not successful: {:?}", e);
