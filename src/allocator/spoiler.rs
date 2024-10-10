@@ -70,7 +70,8 @@ impl ConsecAllocator for Spoiler {
             );
             for block in round_blocks {
                 if blocks.len() >= required_blocks {
-                    break;
+                    block.dealloc();
+                    continue;
                 }
                 // check for same bank
                 if let Some(last_block) = blocks.last() {
@@ -83,6 +84,7 @@ impl ConsecAllocator for Spoiler {
                             "Bank check failed: {} < {} for blocks {:?} and {:?}",
                             timing, self.conflict_threshold, block, last_block
                         );
+                        block.dealloc();
                         continue;
                     }
                 }
@@ -93,6 +95,7 @@ impl ConsecAllocator for Spoiler {
                     let bank = DRAMAddr::from_virt(*pfn as *const u8, &self.mem_config).bank;
                     if bank != 0 {
                         info!("Not bank 0: {}", bank);
+                        //block.dealloc();
                         //continue;
                     }
                     let last_bank =
