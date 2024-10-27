@@ -391,7 +391,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         if let Some(stats_file) = &args.statistics {
             stats.push(HammerStatistic {
                 alloc_duration_millis: alloc_duration.as_millis(),
-                memory_regions: memory.consec_pfns()?,
+                memory_regions: memory.consec_pfns().unwrap_or_default(),
                 hammer_durations_millis: profiling
                     .durations
                     .iter()

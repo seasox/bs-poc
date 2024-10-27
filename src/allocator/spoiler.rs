@@ -61,6 +61,10 @@ impl ConsecAllocator for Spoiler {
         if let Some(p) = &p {
             p.set_position(0);
         }
+        info!(
+            "Running SPOILER attack to find {} blocks. This might take some time...",
+            required_blocks
+        );
         while blocks.len() < required_blocks {
             let round_blocks = retry!(|| self.spoiler_round(required_blocks));
             info!("Current blocks: {:?}", blocks);
@@ -68,7 +72,10 @@ impl ConsecAllocator for Spoiler {
                 "Banks: {:?}",
                 blocks
                     .iter()
-                    .map(|b| DRAMAddr::from_virt(b.pfn().unwrap() as *const u8, &self.mem_config))
+                    .map(|b| DRAMAddr::from_virt(
+                        b.pfn().unwrap_or_default() as *const u8,
+                        &self.mem_config
+                    ))
                     .collect_vec()
             );
             for block in round_blocks {
@@ -97,7 +104,7 @@ impl ConsecAllocator for Spoiler {
                 if let (Ok(pfn), Ok(Some(last_pfn))) = (&pfn, &last_pfn) {
                     let bank = DRAMAddr::from_virt(*pfn as *const u8, &self.mem_config).bank;
                     if bank != 0 {
-                        info!("Not bank 0: {}", bank);
+                        debug!("Not bank 0: {}", bank);
                         //block.dealloc();
                         //continue;
                     }
@@ -157,7 +164,7 @@ impl Spoiler {
             unsafe { munmap(search_buffer, search_buffer_size) };
             bail!("No candidates found");
         }
-        info!("Found {} candidates", spoiler_candidates.len());
+        debug!("Found {} candidates", spoiler_candidates.len());
         debug!("{:?}", spoiler_candidates);
 
         let progress = self.progress.as_ref().map(|progress| {
@@ -179,7 +186,7 @@ impl Spoiler {
                 None => {}
             }
             if intervals.contains(candidate.start) || intervals.contains(candidate.end) {
-                info!("Skipping candidate {:?}: overlaps with previous", candidate);
+                debug!("Skipping candidate {:?}: overlaps with previous", candidate);
                 continue;
             }
             let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
@@ -226,8 +233,8 @@ impl Spoiler {
             // We now know that (addr + offset) & 0xFFFFF == pfn & 0xFFFFF
             let pfn_offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
             let alignment_offset = unsafe { 0x100000 - (addr.byte_add(offset) as usize & 0xFFFFF) };
-            info!("row start: {}", is_row_start);
-            info!("Offset align/pfn: {:x}/{:x}", alignment_offset, pfn_offset);
+            debug!("row start: {}", is_row_start);
+            debug!("Offset align/pfn: {:x}/{:x}", alignment_offset, pfn_offset);
             let addr = unsafe { addr.byte_add(alignment_offset) };
             if addr.pfn().unwrap() & 0xFFFFF != 0 {
                 warn!(
@@ -239,13 +246,13 @@ impl Spoiler {
             assert_eq!(candidate.end - candidate.start, cont_size / PAGE_SIZE);
             let block = MemBlock::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
-            info!("Found candidate: {}", consecs.format_pfns());
+            debug!("Found candidate: {}", consecs.format_pfns());
             if consecs[0].end - consecs[0].start != 4 * MB as u64 {
                 warn!("Not a 4 MB block!");
                 //continue;
             }
             intervals.add(candidate);
-            info!("Current ranges: {}", intervals);
+            debug!("Current ranges: {}", intervals);
             blocks.push(block);
         }
         // munmap remaining pages
