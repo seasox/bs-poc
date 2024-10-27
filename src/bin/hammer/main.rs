@@ -409,6 +409,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         }
         if profiling.bit_flips.is_empty() {
             warn!("No vulnerable addresses found");
+            memory.dealloc();
             continue;
         } else {
             info!(
