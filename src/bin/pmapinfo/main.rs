@@ -1,5 +1,8 @@
 use std::env;
 
+use bs_poc::memory::PageMapInfo;
+use pagemap::PageMapError;
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
 
@@ -8,19 +11,27 @@ fn main() -> anyhow::Result<()> {
     } else {
         args[1].parse().expect("Invalid PID")
     };
-
-    let mut pagemap = pagemap::PageMap::new(pid as u64)?;
-
-    let maps = pagemap.maps()?;
-    for map in maps {
+    let pmapinfo = PageMapInfo::load(pid as u64)?;
+    for map in pmapinfo.maps() {
         println!("{:?}", map);
-        if map.path() == Some("[vsyscall]") {
-            // vsyscall is not resolvable on modern linux systems
-            continue;
+        let pagemap = pmapinfo.pagemap(map);
+        match pagemap {
+            Some(pagemap) => {
+                for (va, pmap) in pagemap {
+                    let pfn = pmap.pfn();
+                    match pfn {
+                        Ok(pfn) => {
+                            println!("{:#x}    {:#x}", va, pfn);
+                        }
+                        Err(e) => match e {
+                            PageMapError::PageNotPresent => println!("{:#x}", va),
+                            _ => println!("{:#x}    {}", va, e),
+                        },
+                    }
+                }
+            }
+            None => println!("No pagemap for this region"),
         }
-        let pmap = pagemap.pagemap_region(&map.memory_region())?;
-        println!("{:?}", pmap);
     }
-
     Ok(())
 }
