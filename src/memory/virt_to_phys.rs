@@ -1,9 +1,11 @@
 use anyhow::{bail, Context, Result};
+use pagemap::{MemoryRegion, PageMapError};
 
-use crate::util::PAGE_SHIFT;
+use crate::util::{Anyhow, PAGE_SHIFT};
 
 pub trait VirtToPhysResolver {
     fn get_phys(&mut self, virt: u64) -> Result<u64>;
+    fn get_phys_range(&mut self, region: MemoryRegion) -> Result<Vec<u64>>;
 }
 
 /// LinuxPageMap uses /proc/self/pagemap to translate virtual to physical addresses.
@@ -24,6 +26,22 @@ impl LinuxPageMap {
 }
 
 impl VirtToPhysResolver for LinuxPageMap {
+    fn get_phys_range(&mut self, memory_region: MemoryRegion) -> Result<Vec<u64>> {
+        let entry = self
+            .pagemap_wrapper
+            .pagemap_region(&memory_region)
+            .with_context(|| {
+                format!(
+                    "failed to query pagemap for memory region {:?}",
+                    memory_region
+                )
+            })?;
+        entry
+            .into_iter()
+            .map(|e| e.pfn().map(|p| (p << PAGE_SHIFT)))
+            .collect::<Result<_, PageMapError>>()
+            .anyhow()
+    }
     fn get_phys(&mut self, virt: u64) -> Result<u64> {
         //calc virtual address of page containing ptr_to_start
         let vaddr_start_page = virt & !0xFFF;
