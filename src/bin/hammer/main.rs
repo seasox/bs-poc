@@ -417,8 +417,31 @@ unsafe fn _main() -> anyhow::Result<()> {
                 profiling.bit_flips
             );
         }
-
-        // TODO use profiling results to determine the best addresses to inject into the victim
+        // Find address to use for injection by majority vote
+        let majority = profiling
+            .bit_flips
+            .iter()
+            .flat_map(|bit_flips| bit_flips.iter().map(|bit_flip| bit_flip.addr))
+            .fold(std::collections::HashMap::new(), |mut counts, addr| {
+                *counts.entry(addr).or_insert(0) += 1;
+                counts
+            })
+            .into_iter()
+            .max_by_key(|(_, count)| *count);
+        let (addr, count) = match majority {
+            Some((addr, count)) => (addr, count),
+            None => {
+                warn!("No vulnerable addresses found");
+                memory.dealloc();
+                continue;
+            }
+        };
+        info!(
+            "Using address {:?} (phys {:x}) for injection, occured {} times",
+            addr,
+            (addr as *const u8).pfn().unwrap_or_default(),
+            count
+        );
 
         let victim = if args.target.is_empty() {
             None
