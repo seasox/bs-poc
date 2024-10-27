@@ -431,14 +431,14 @@ impl<'a> Hammering for Hammerer<'a> {
                         result, run, attempt
                     );
                 }
-                let result = victim.check();
-                if let Some(victim_result) = result {
-                    return Ok(HammerResult {
-                        run,
-                        attempt,
-                        victim_result,
-                    });
-                }
+            }
+            let result = victim.check();
+            if let Some(victim_result) = result {
+                return Ok(HammerResult {
+                    run,
+                    attempt: self.attempts,
+                    victim_result,
+                });
             }
         }
         bail!("No success")
