@@ -1,7 +1,6 @@
 use crate::hammerer::HammerResult;
 use crate::hammerer::Hammering;
 use crate::victim::HammerVictim;
-use anyhow::bail;
 use std::arch::x86_64::_mm_clflush;
 
 pub struct Hammerer {
@@ -25,14 +24,11 @@ impl Hammering for Hammerer {
             *self.flip_addr = !*self.flip_addr;
             _mm_clflush(self.flip_addr);
         }
-        let result = victim.check();
-        if let Some(victim_result) = result {
-            return Ok(HammerResult {
-                run: 0,
-                attempt: 0,
-                victim_result,
-            });
-        }
-        bail!("Hammering not successful")
+        let victim_result = victim.check()?;
+        Ok(HammerResult {
+            run: 0,
+            attempt: 0,
+            victim_result,
+        })
     }
 }
