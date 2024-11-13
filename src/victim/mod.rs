@@ -16,8 +16,8 @@ pub use self::stack_process::StackProcess;
 pub trait HammerVictim<T> {
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self) {}
-    /// Check if the hammering was successful. Returns Some with an optional value of type T describing the result if the hammering was successful, None otherwise.
-    fn check(&mut self) -> Option<T>;
+    /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.
+    fn check(&mut self) -> anyhow::Result<T>;
     /// Stop the victim. This method is called after the hammering is done. This consumes the victim.
     fn stop(self);
 }

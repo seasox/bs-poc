@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 
 use crate::memory::{BitFlip, VictimMemory};
 use crate::victim::HammerVictim;
@@ -26,14 +26,14 @@ impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
         self.seed = Some(seed);
     }
 
-    fn check(&mut self) -> Option<Vec<BitFlip>> {
+    fn check(&mut self) -> anyhow::Result<Vec<BitFlip>> {
         self.flips = self
             .memory
             .check(self.seed.with_context(|| "no seed").unwrap());
         if !self.flips.is_empty() {
-            Some(self.flips.clone())
+            Ok(self.flips.clone())
         } else {
-            None
+            bail!("No flips detected")
         }
     }
 
