@@ -1,6 +1,7 @@
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{
-    construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, PfnOffsetResolver, PfnResolver,
+    construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, GetConsecPfns,
+    PfnOffsetResolver, PfnResolver,
 };
 use std::fmt::Display;
 use std::ops::{Deref, Range};
