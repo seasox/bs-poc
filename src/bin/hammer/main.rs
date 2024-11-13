@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::memory::mem_configuration::MemConfiguration;
+use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator,
     allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},

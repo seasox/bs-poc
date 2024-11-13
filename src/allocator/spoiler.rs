@@ -421,7 +421,7 @@ mod tests {
             spoiler::spoiler_candidates,
             util::{mmap, munmap},
         },
-        memory::{FormatPfns, MemBlock},
+        memory::{FormatPfns, GetConsecPfns, MemBlock},
         util::{MB, PAGE_SIZE},
     };
 

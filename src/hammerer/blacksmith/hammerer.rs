@@ -1,7 +1,9 @@
 use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
+use crate::memory::{
+    BytePointer, ConsecBlocks, DRAMAddr, GetConsecPfns, LinuxPageMap, VirtToPhysResolver,
+};
 use crate::util::GroupBy;
 use crate::victim::HammerVictim;
 use anyhow::{bail, Context, Result};

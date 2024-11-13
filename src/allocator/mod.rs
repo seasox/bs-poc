@@ -22,7 +22,7 @@ pub use util::compact_mem;
 
 use crate::hammerer::blacksmith::hammerer::PatternAddressMapper;
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::ConsecBlocks;
+use crate::memory::{ConsecBlocks, GetConsecPfns};
 
 /// Allocate memory using an allocation strategy.
 ///

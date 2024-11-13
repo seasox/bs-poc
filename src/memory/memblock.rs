@@ -107,14 +107,50 @@ impl CachedPfnOffset for MemBlock {
     }
 }
 
-impl MemBlock {
-    pub fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
+pub trait GetConsecPfns {
+    fn consec_pfns(&self) -> anyhow::Result<ConsecPfns>;
+
+    fn log_pfns(&self) {
+        let pfns = match self.consec_pfns() {
+            Ok(pfns) => pfns,
+            Err(e) => {
+                error!("Failed to get PFNs: {:?}", e);
+                return;
+            }
+        };
+        let pfns = pfns.format_pfns();
+        info!("PFNs:\n{}", pfns);
+    }
+}
+
+impl GetConsecPfns for MemBlock {
+    fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
         trace!("Get consecutive PFNs for vaddr 0x{:x}", self.ptr as u64);
         let mut consecs = vec![];
         let mut phys_prev = self.pfn()?;
         let mut range_start = phys_prev;
         for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
             let phys = self.addr(offset).pfn()?;
+            if phys != phys_prev + PAGE_SIZE as u64 {
+                consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
+                range_start = phys;
+            }
+            phys_prev = phys;
+        }
+        consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
+        trace!("PFN check done");
+        Ok(consecs)
+    }
+}
+
+impl<T> GetConsecPfns for (*mut T, usize) {
+    fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
+        trace!("Get consecutive PFNs for vaddr 0x{:x}", self.0 as u64);
+        let mut consecs = vec![];
+        let mut phys_prev = self.0.pfn()?;
+        let mut range_start = phys_prev;
+        for offset in (PAGE_SIZE..self.1).step_by(PAGE_SIZE) {
+            let phys = unsafe { self.0.byte_add(offset).pfn()? };
             if phys != phys_prev + PAGE_SIZE as u64 {
                 consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
                 range_start = phys;
