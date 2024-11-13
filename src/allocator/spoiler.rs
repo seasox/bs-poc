@@ -269,6 +269,10 @@ impl Spoiler {
             unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
             base = unsafe { block.ptr().byte_add(block.len()) };
         }
+        if base < search_buf_end {
+            let unused_size = search_buf_end as usize - base as usize;
+            unsafe { libc::munmap(base as *mut libc::c_void, unused_size) };
+        }
         Ok(blocks)
     }
 }
