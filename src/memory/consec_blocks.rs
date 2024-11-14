@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ops::Range};
 
-use crate::memory::{BytePointer, FormatPfns};
+use crate::memory::BytePointer;
 
 use super::{GetConsecPfns, MemBlock, VictimMemory};
 
