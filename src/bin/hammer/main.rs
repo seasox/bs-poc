@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator,
     allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
@@ -26,6 +25,10 @@ use bs_poc::{
     memory::PfnResolver,
 };
 use bs_poc::{hammerer::Hammering, victim::stack_process::InjectionConfig};
+use bs_poc::{
+    memory::{mem_configuration::MemConfiguration, GetConsecPfns},
+    util::PAGE_SIZE,
+};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
     retry,
@@ -454,8 +457,9 @@ unsafe fn _main() -> anyhow::Result<()> {
                 &args.target,
                 InjectionConfig {
                     flippy_page: addr as *mut libc::c_void,
-                    bait_count_after: 8,
-                    bait_count_before: 10,
+                    flippy_page_size: PAGE_SIZE,
+                    bait_count_after: 5,
+                    bait_count_before: 0,
                 },
             )?)
         };
