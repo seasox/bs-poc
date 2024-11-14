@@ -1,7 +1,6 @@
-use crate::memory::{MemBlock, PfnResolver};
-use crate::util::{AttackState, PipeIPC, IPC, PAGE_SIZE};
+use crate::util::{AttackState, PipeIPC, IPC};
 use crate::victim::HammerVictim;
-use anyhow::Context;
+use anyhow::{bail, Context};
 use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdin, ChildStdout, Command};
 use std::thread;
@@ -28,18 +27,18 @@ impl HammerVictim<String> for VictimProcess {
         info!("Victim process initialized");
     }
 
-    fn check(&mut self) -> Option<String> {
+    fn check(&mut self) -> anyhow::Result<String> {
         info!("Victim process check");
         self.pipe
             .send(AttackState::AttackerHammerDone)
             .expect("send");
         info!("Reading pipe");
-        let state = self.pipe.receive().expect("receive");
+        let state = self.pipe.receive()?;
         info!("Received state: {:?}", state);
         if state == AttackState::VictimHammerSuccess {
-            Some(String::default())
+            Ok("Success".to_string())
         } else {
-            None
+            bail!("hammer failed");
         }
     }
 
@@ -81,8 +80,9 @@ fn spawn_victim(victim: String, args: &[String]) -> anyhow::Result<Child> {
         ))
 }
 
-fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
+fn inject_page<P: IPC<AttackState>>(_channel: &mut P) -> anyhow::Result<()> {
     todo!("Inject page into victim process");
+    /*
     channel.send(AttackState::AttackerReady)?;
 
     let b = MemBlock::mmap(PAGE_SIZE)?;
@@ -96,6 +96,7 @@ fn inject_page<P: IPC<AttackState>>(channel: &mut P) -> anyhow::Result<()> {
     b.dealloc();
     warn!("TODO release victim page (determined by mapping)");
     Ok(())
+    */
 }
 
 pub fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
