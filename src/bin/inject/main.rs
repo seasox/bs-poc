@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
     //const NUM_PAGES: usize = 1 << 21; // 8 GB
     //const ALLOC_SIZE: usize = NUM_PAGES * PAGE_SIZE;
     let args = CliArgs::parse();
+    info!("CLI args: {:?}", args);
     let bs_config = BlacksmithConfig::from_jsonfile(&args.config)?;
     let mem_config = MemConfiguration::from_blacksmith(&bs_config);
     //0..64 {
@@ -165,54 +166,54 @@ fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyP
     let pmap = PageMapInfo::load(pid as u64)?.0;
     let mut flippy_region = None;
     for (map, pagemap) in pmap {
-        info!("Region: {:?}", map.0);
-        debug!("Region size: {}", map.0.memory_region().size());
         for (idx, (va, pmap)) in pagemap.iter().enumerate() {
             let pfn = pmap.pfn();
             match pfn {
                 Ok(pfn) => {
                     if target_page == pfn {
-                        info!("[{}]  {:#x}    {:#x} [REUSED TARGET PAGE]", idx, va, pfn);
                         flippy_region = Some(FlippyPage {
                             maps_entry: map.0.clone(),
                             region_offset: idx,
                         });
-                    } else {
-                        info!("[{}]  {:#x}    {:#x}", idx, va, pfn);
-                    }
-                    if let Some("[stack]") = map.0.path() {
-                        let mut stack_contents = String::new();
-                        let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
-                        match contents {
-                            Ok(contents) => {
-                                match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
-                                    Some(offset) => {
-                                        info!("Found pattern at offset {}", offset);
+                        info!("Region: {:?}", map.0);
+                        debug!("Region size: {}", map.0.memory_region().size());
+                        info!("[{}]  {:#x}    {:#x} [REUSED TARGET PAGE]", idx, va, pfn);
+                        if let Some("[stack]") = map.0.path() {
+                            let mut stack_contents = String::new();
+                            let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
+                            match contents {
+                                Ok(contents) => {
+                                    match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
+                                        Some(offset) => {
+                                            info!("Found pattern at offset {}", offset);
+                                        }
+                                        None => {
+                                            info!("Pattern not found");
+                                        }
                                     }
-                                    None => {
-                                        info!("Pattern not found");
+                                    for (i, byte) in contents.iter().enumerate() {
+                                        stack_contents += &format!("{:02x}", byte);
+                                        if i % 8 == 7 {
+                                            stack_contents += " ";
+                                        }
+                                        if i % 64 == 63 {
+                                            stack_contents += "\n";
+                                        }
                                     }
+                                    info!("Content:\n{}", stack_contents);
                                 }
-                                for (i, byte) in contents.iter().enumerate() {
-                                    stack_contents += &format!("{:02x}", byte);
-                                    if i % 8 == 7 {
-                                        stack_contents += " ";
-                                    }
-                                    if i % 64 == 63 {
-                                        stack_contents += "\n";
-                                    }
+                                Err(e) => {
+                                    info!("Failed to read stack contents: {}", e);
                                 }
-                                info!("Content:\n{}", stack_contents);
-                            }
-                            Err(e) => {
-                                info!("Failed to read stack contents: {}", e);
                             }
                         }
+                    } else {
+                        //info!("[{}]  {:#x}    {:#x}", idx, va, pfn);
                     }
                 }
                 Err(e) => match e {
                     pagemap::PageMapError::PageNotPresent => {
-                        info!("[{}]  {:#x}    ???", idx, va);
+                        //info!("[{}]  {:#x}    ???", idx, va);
                     }
                     _ => bail!(e),
                 },
