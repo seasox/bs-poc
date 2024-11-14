@@ -8,6 +8,7 @@ pub mod coco;
 pub mod hugepage;
 pub mod hugepage_rnd;
 pub mod mmap;
+pub mod pfn;
 pub mod spoiler;
 pub mod util;
 
@@ -16,6 +17,7 @@ pub use coco::CoCo;
 use hugepage::HugepageAllocator;
 pub use hugepage_rnd::HugepageRandomized;
 pub use mmap::Mmap;
+pub use pfn::Pfn;
 pub use spoiler::Spoiler;
 
 pub use util::compact_mem;
@@ -83,6 +85,7 @@ pub enum ConsecAlloc {
     Hugepage(HugepageAllocator),
     HugepageRnd(HugepageRandomized),
     Mmap(Mmap),
+    Pfn(Pfn),
     Spoiler(Box<Spoiler>),
 }
 
@@ -94,6 +97,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::Hugepage(alloc) => alloc.block_size(),
             ConsecAlloc::HugepageRnd(alloc) => alloc.block_size(),
             ConsecAlloc::Mmap(alloc) => alloc.block_size(),
+            ConsecAlloc::Pfn(alloc) => alloc.block_size(),
             ConsecAlloc::Spoiler(alloc) => alloc.block_size(),
         }
     }
@@ -105,6 +109,7 @@ impl ConsecAllocator for ConsecAlloc {
             ConsecAlloc::Hugepage(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::HugepageRnd(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::Mmap(alloc) => alloc.alloc_consec_blocks(size),
+            ConsecAlloc::Pfn(alloc) => alloc.alloc_consec_blocks(size),
             ConsecAlloc::Spoiler(alloc) => alloc.alloc_consec_blocks(size),
         }
     }
