@@ -1,6 +1,7 @@
 use std::ptr::null_mut;
 
 use anyhow::bail;
+use pagemap::PageMap;
 
 use crate::{
     allocator::util::{mmap, munmap},
@@ -48,6 +49,22 @@ impl StackProcess {
         cmd.stderr(std::process::Stdio::piped());
         // dealloc
         info!("deallocating bait");
+
+        // DEBUG: get VMA
+        let mut pmap = PageMap::new(std::process::id() as u64)?;
+        info!("PageMap: {:?}", pmap);
+        let maps = pmap.maps()?;
+        let mentry = maps
+            .into_iter()
+            .find(|m| {
+                m.memory_region().start_address() <= injection_config.flippy_page as u64
+                    && m.memory_region().last_address() >= injection_config.flippy_page as u64
+            })
+            .expect("MapsEntry not found");
+        info!(
+            "Found MapsEntry for addr {}: {:?}",
+            injection_config.flippy_page as u64, mentry
+        );
         unsafe {
             if injection_config.bait_count_before != 0 {
                 munmap(bait, injection_config.bait_count_before * PAGE_SIZE);
