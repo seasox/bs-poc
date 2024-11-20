@@ -1,12 +1,9 @@
 use std::ptr::null_mut;
 
 use anyhow::bail;
-use libc::{mprotect, PROT_READ};
-use pagemap::PageMap;
 
 use crate::{
     allocator::util::{mmap, munmap},
-    memory::PfnResolver,
     util::PAGE_SIZE,
 };
 

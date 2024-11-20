@@ -10,16 +10,15 @@ use bs_poc::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{
-        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, GetConsecPfns, MemBlock,
-        PageMapInfo, PfnResolver,
+        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock, PageMapInfo,
+        PfnResolver,
     },
     util::{KB, MB, PAGE_SIZE},
     victim::{stack_process::InjectionConfig, HammerVictim, StackProcess},
 };
 use clap::{arg, Parser};
-use libc::{mprotect, PROT_READ};
 use log::{debug, info, warn};
-use pagemap::{MapsEntry, PageMap};
+use pagemap::MapsEntry;
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -148,7 +147,9 @@ fn read_memory_from_proc(pid: u32, va: u64, size: u64) -> std::io::Result<Vec<u8
 
 #[derive(Debug)]
 struct FlippyPage {
+    #[allow(dead_code)]
     maps_entry: MapsEntry,
+    #[allow(dead_code)]
     region_offset: usize, // page offset in the region
 }
 
