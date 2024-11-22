@@ -399,7 +399,7 @@ impl<'a> Hammering for Hammerer<'a> {
             victim.init();
             // log PFNs of memory region
             self.memory.log_pfns();
-            info!("Hammering run {}", run);
+            trace!("Hammering run {}", run);
             for attempt in 0..self.attempts {
                 let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
                 let wait_until_start_hammering_us =
@@ -417,7 +417,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     wait_until_start_hammering_us as u128
                 );
                 self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
-                debug!("call into jitted program");
+                trace!("call into jitted program");
                 unsafe {
                     let mut aux = 0;
                     _mm_mfence();
@@ -427,7 +427,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     _mm_mfence();
                     let time = __rdtscp(&mut aux) - time;
                     _mm_mfence();
-                    info!("Run {};{}: JIT call took {} cycles", run, attempt, time);
+                    debug!("Run {};{}: JIT call took {} cycles", run, attempt, time);
                     debug!(
                         "jit call done: 0x{:02X} (attempt {}:{})",
                         result, run, attempt
