@@ -1,11 +1,12 @@
 use std::{cell::RefCell, ops::Range, ptr::null_mut};
 
 use crate::{
-    memory::PfnResolver,
+    memory::{LinuxPageMap, PfnResolver, VirtToPhysResolver},
     util::{MB, PAGE_SIZE, ROW_SIZE},
 };
 use anyhow::bail;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
+use pagemap::MemoryRegion;
 
 use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset};
 
@@ -125,21 +126,7 @@ pub trait GetConsecPfns {
 
 impl GetConsecPfns for MemBlock {
     fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
-        trace!("Get consecutive PFNs for vaddr 0x{:x}", self.ptr as u64);
-        let mut consecs = vec![];
-        let mut phys_prev = self.pfn()?;
-        let mut range_start = phys_prev;
-        for offset in (PAGE_SIZE..self.len).step_by(PAGE_SIZE) {
-            let phys = self.addr(offset).pfn()?;
-            if phys != phys_prev + PAGE_SIZE as u64 {
-                consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
-                range_start = phys;
-            }
-            phys_prev = phys;
-        }
-        consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
-        trace!("PFN check done");
-        Ok(consecs)
+        (self.ptr, self.len).consec_pfns()
     }
 }
 
@@ -147,10 +134,17 @@ impl<T> GetConsecPfns for (*mut T, usize) {
     fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
         trace!("Get consecutive PFNs for vaddr 0x{:x}", self.0 as u64);
         let mut consecs = vec![];
-        let mut phys_prev = self.0.pfn()?;
+        // optimization: get PFN range
+        let mut resolver = LinuxPageMap::new()?;
+        let pfns = resolver.get_phys_range(MemoryRegion::from((self.0 as u64, unsafe {
+            self.0.byte_add(self.1) as u64
+        })))?;
+        if pfns.is_empty() {
+            bail!("Empty PFN range");
+        }
+        let mut phys_prev = pfns[0];
         let mut range_start = phys_prev;
-        for offset in (PAGE_SIZE..self.1).step_by(PAGE_SIZE) {
-            let phys = unsafe { self.0.byte_add(offset).pfn()? };
+        for phys in pfns.into_iter().skip(1) {
             if phys != phys_prev + PAGE_SIZE as u64 {
                 consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
                 range_start = phys;
