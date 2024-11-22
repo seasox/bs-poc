@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
                     },
                 )?;
                 let pid = victim.pid();
-                std::thread::sleep(Duration::from_millis(100));
+                victim.init();
                 let flippy_region = find_flippy_page(target_pfn, pid)?;
                 if let Some(flippy_region) = &flippy_region {
                     info!("Flippy page reused in region {:?}", flippy_region);
