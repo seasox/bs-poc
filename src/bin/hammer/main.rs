@@ -462,7 +462,7 @@ unsafe fn _main() -> anyhow::Result<()> {
                     flippy_page: addr as *mut libc::c_void,
                     flippy_page_size: PAGE_SIZE,
                     bait_count_after: 5,
-                    bait_count_before: 0,
+                    bait_count_before: 9,
                 },
             )?)
         };
