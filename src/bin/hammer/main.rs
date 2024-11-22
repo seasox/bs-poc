@@ -7,14 +7,13 @@ use std::{
 };
 
 use anyhow::bail;
+use bs_poc::{allocator::hugepage::HugepageAllocator, memory::BitFlip};
 use bs_poc::{
-    allocator,
-    allocator::{BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap},
+    allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
     hammerer,
     memory::ConsecCheck,
     victim,
 };
-use bs_poc::{allocator::hugepage::HugepageAllocator, memory::BitFlip};
 use bs_poc::{
     allocator::{CoCo, HugepageRandomized, Spoiler},
     hammerer::Hammerer,
@@ -133,6 +132,8 @@ pub enum AllocStrategy {
     HugepageRnd,
     /// Allocate consecutive memory using `mmap`. This will `mmap` a large buffer and find consecutive memory using the provided `ConsecCheckType`
     Mmap,
+    /// Allocate a large block of memory and use pagemap to find consecutive blocks
+    Pfn,
     /// Allocate consecutive memory using the Spoiler attack. This strategy will measure read-after-write pipeline conflicts to determine consecutive memory.
     Spoiler,
 }
@@ -151,6 +152,7 @@ impl AllocStrategy {
             AllocStrategy::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
             AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
             AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
+            AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::default()),
             AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(
                 mem_config,
                 conflict_threshold,
