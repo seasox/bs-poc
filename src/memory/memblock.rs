@@ -1,7 +1,7 @@
 use std::{cell::RefCell, ops::Range, ptr::null_mut};
 
 use crate::{
-    memory::{LinuxPageMap, PfnResolver, VirtToPhysResolver},
+    memory::{LinuxPageMap, VirtToPhysResolver},
     util::{MB, PAGE_SIZE, ROW_SIZE},
 };
 use anyhow::bail;
@@ -214,7 +214,7 @@ impl MemBlock {
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::memblock::PfnResolver;
+    use crate::memory::PfnResolver;
     use rand::{thread_rng, Rng};
 
     use crate::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
