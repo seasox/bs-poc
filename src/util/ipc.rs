@@ -4,14 +4,16 @@ use anyhow::bail;
 
 use super::Anyhow;
 
-pub trait IPC<T: Eq + std::fmt::Debug> {
+pub trait IPC<T: Eq + std::fmt::Debug, U: Eq + std::fmt::Debug> {
     fn send(&mut self, msg: T) -> anyhow::Result<()>;
-    fn receive(&mut self) -> anyhow::Result<T>;
-    fn wait_for(&mut self, msg: T) -> anyhow::Result<T> {
+    fn receive(&mut self) -> anyhow::Result<U>;
+    fn wait_for(&mut self, msg: U) -> anyhow::Result<U> {
+        debug!("Waiting for message {:?}", msg);
         let r = self.receive()?;
         if r != msg {
             bail!("Expected message {:?}, got {:?}", msg, r);
         }
+        debug!("Received message {:?}", r);
         Ok(r)
     }
 }
@@ -52,7 +54,40 @@ impl<R: Read, W: Write> PipeIPC<R, W> {
     }
 }
 
-impl<R: Read, W: Write> IPC<AttackState> for PipeIPC<R, W> {
+impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
+    fn send(&mut self, msg: u8) -> anyhow::Result<()> {
+        debug!("Sending message {:?}", msg);
+        let success = self.output.write(&[msg]);
+        match success {
+            Ok(nbytes) => {
+                if nbytes != 1 {
+                    bail!("write failed: wrote {} bytes", nbytes);
+                }
+                self.output.flush()?;
+                Ok(())
+            }
+            Err(e) => bail!("write failed: {:?}", e),
+        }
+    }
+    fn receive(&mut self) -> anyhow::Result<String> {
+        let mut ret = vec![];
+        let mut buf = [0u8; 1];
+        while buf[0] != b'\n' {
+            let success = self.input.read(&mut buf);
+            if success.is_err() {
+                bail!("read failed: {:?}", success.err().unwrap());
+            }
+            let nbytes = success.unwrap();
+            assert_eq!(nbytes, 1);
+            if buf[0] != b'\n' {
+                ret.push(buf[0]);
+            }
+        }
+        String::from_utf8(ret).anyhow()
+    }
+}
+
+impl<R: Read, W: Write> IPC<AttackState, AttackState> for PipeIPC<R, W> {
     fn send(&mut self, msg: AttackState) -> anyhow::Result<()> {
         let success = self.output.write(&[msg as u8]);
         match success {

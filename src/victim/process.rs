@@ -33,12 +33,12 @@ impl HammerVictim<String> for VictimProcess {
             .send(AttackState::AttackerHammerDone)
             .expect("send");
         info!("Reading pipe");
-        let state = self.pipe.receive()?;
+        let state: AttackState = self.pipe.receive()?;
         info!("Received state: {:?}", state);
         if state == AttackState::VictimHammerSuccess {
             Ok("Success".to_string())
         } else {
-            bail!("hammer failed");
+            bail!("hammer failed")
         }
     }
 
@@ -80,7 +80,7 @@ fn spawn_victim(victim: String, args: &[String]) -> anyhow::Result<Child> {
         ))
 }
 
-fn inject_page<P: IPC<AttackState>>(_channel: &mut P) -> anyhow::Result<()> {
+fn inject_page<P: IPC<AttackState, AttackState>>(_channel: &mut P) -> anyhow::Result<()> {
     todo!("Inject page into victim process");
     /*
     channel.send(AttackState::AttackerReady)?;
@@ -99,7 +99,7 @@ fn inject_page<P: IPC<AttackState>>(_channel: &mut P) -> anyhow::Result<()> {
     */
 }
 
-pub fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
+pub(crate) fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
     let child_in = child.stdin.take().context("piped_channel stdin")?;
     let child_out = child.stdout.take().context("piped_channel stdout")?;
     Ok(PipeIPC::new(child_out, child_in))

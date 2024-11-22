@@ -13,10 +13,11 @@ use bs_poc::{
         mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock, PageMapInfo,
         PfnResolver,
     },
-    util::{KB, MB, PAGE_SIZE},
+    util::{find_pattern, KB, MB, PAGE_SIZE},
     victim::{stack_process::InjectionConfig, HammerVictim, StackProcess},
 };
 use clap::{arg, Parser};
+use indicatif::MultiProgress;
 use log::{debug, info, warn};
 use pagemap::MapsEntry;
 
@@ -108,7 +109,7 @@ fn main() -> anyhow::Result<()> {
                         bait_count_before: bait_before,
                     },
                 )?;
-                let pid = victim.pid().expect("Failed to get child PID");
+                let pid = victim.pid();
                 std::thread::sleep(Duration::from_millis(100));
                 let flippy_region = find_flippy_page(target_pfn, pid)?;
                 if let Some(flippy_region) = &flippy_region {
@@ -153,12 +154,6 @@ struct FlippyPage {
     maps_entry: MapsEntry,
     #[allow(dead_code)]
     region_offset: usize, // page offset in the region
-}
-
-fn find_pattern(vec: &[u8], pattern: u8, length: usize) -> Option<usize> {
-    let target_sequence: Vec<u8> = vec![pattern; length];
-    vec.windows(length)
-        .position(|window| window == target_sequence.as_slice())
 }
 
 fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {

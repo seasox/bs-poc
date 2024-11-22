@@ -52,6 +52,12 @@ pub fn make_vec<T>(n: usize, f: impl Fn(usize) -> T) -> Vec<T> {
     v
 }
 
+pub fn find_pattern(vec: &[u8], pattern: u8, length: usize) -> Option<usize> {
+    let target_sequence: Vec<u8> = vec![pattern; length];
+    vec.windows(length)
+        .position(|window| window == target_sequence.as_slice())
+}
+
 #[macro_export]
 macro_rules! retry {
     ($f:expr) => {{
