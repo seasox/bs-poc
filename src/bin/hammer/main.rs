@@ -450,6 +450,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             (addr as *const u8).pfn().unwrap_or_default(),
             count
         );
+        let addr = addr & !0xfff; // mask out the lowest 12 bits
 
         let victim = if args.target.is_empty() {
             None
