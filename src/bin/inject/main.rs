@@ -67,6 +67,7 @@ fn main() -> anyhow::Result<()> {
     //let bait_before = args.bait_before;
     let bait_before_range = args.bait_before.map(|b| b..b + 1).unwrap_or(0..30);
     let bait_after_range = args.bait_after.map(|b| b..b + 1).unwrap_or(0..30);
+    let progress = MultiProgress::new();
     for bait_before in bait_before_range {
         for bait_after in bait_after_range.clone() {
             println!("bait_before,bait_after: {},{}", bait_before, bait_after);
@@ -74,7 +75,8 @@ fn main() -> anyhow::Result<()> {
                 // allocate bait page, get PFN
                 let x = match args.alloc_strategy {
                     AllocStrategy::Spoiler => {
-                        let mut spoiler = Spoiler::new(mem_config, bs_config.threshold, None);
+                        let mut spoiler =
+                            Spoiler::new(mem_config, bs_config.threshold, Some(progress.clone()));
                         spoiler.alloc_consec_blocks(4 * MB)?
                     }
                     AllocStrategy::Pfn => {
