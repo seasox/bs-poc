@@ -88,6 +88,8 @@ impl StackProcess {
                 info!("Flippy page reused in region {:?}", flippy_region);
             }
             Ok(None) => {
+                child.kill().expect("kill");
+                child.wait().expect("wait");
                 bail!("Flippy page not reused");
             }
             Err(e) => {
@@ -209,7 +211,10 @@ impl HammerVictim<String> for StackProcess {
         }
     }
 
-    fn stop(self) {}
+    fn stop(mut self) {
+        self.child.kill().expect("kill");
+        self.child.wait().expect("wait");
+    }
 }
 
 #[cfg(test)]

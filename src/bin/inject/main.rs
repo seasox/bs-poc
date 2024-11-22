@@ -100,7 +100,7 @@ fn main() -> anyhow::Result<()> {
 
                 info!("PFN: {:?}", flippy_page.pfn());
                 info!("Launching victim");
-                let mut victim = StackProcess::new(
+                let mut victim = match StackProcess::new(
                     &args.target,
                     InjectionConfig {
                         flippy_page,
@@ -108,7 +108,14 @@ fn main() -> anyhow::Result<()> {
                         bait_count_after: bait_after,
                         bait_count_before: bait_before,
                     },
-                )?;
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!("Error creating victim: {:?}", e);
+                        println!("None");
+                        continue;
+                    }
+                };
                 let pid = victim.pid();
                 victim.init();
                 let flippy_region = find_flippy_page(target_pfn, pid)?;
@@ -126,6 +133,7 @@ fn main() -> anyhow::Result<()> {
                     bail!("YES MAN: {},{}", bait_before, bait_after);
                 }
                 info!("Child output:\n{}", output);
+                victim.stop();
                 x.dealloc();
             }
         }
