@@ -21,6 +21,7 @@ use super::HammerVictim;
 pub struct StackProcess {
     child: std::process::Child,
     pipe: PipeIPC<ChildStdout, ChildStdin>,
+    flippy_page: Option<FlippyPage>,
 }
 
 /// The injection configuration.
@@ -83,9 +84,10 @@ impl StackProcess {
 
         // todo: maybe check injection (prime+probe?)
         std::thread::sleep(Duration::from_millis(100));
-        match find_flippy_page(target_pfn, child.id()) {
-            Ok(Some(flippy_region)) => {
-                info!("Flippy page reused in region {:?}", flippy_region);
+        let flippy_page = match find_flippy_page(target_pfn, child.id()) {
+            Ok(Some(flippy_page)) => {
+                info!("Flippy page reused in region {:?}", flippy_page);
+                Some(flippy_page)
             }
             Ok(None) => {
                 child.kill().expect("kill");
@@ -94,10 +96,15 @@ impl StackProcess {
             }
             Err(e) => {
                 warn!("Error while checking flippy page reuse: {}", e);
+                None
             }
-        }
+        };
         let pipe = piped_channel(&mut child)?;
-        Ok(Self { child, pipe })
+        Ok(Self {
+            child,
+            pipe,
+            flippy_page,
+        })
     }
 
     pub fn pid(&self) -> u32 {
