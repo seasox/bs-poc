@@ -2,7 +2,6 @@ use std::{
     fs::OpenOptions,
     io::{Read, Seek, SeekFrom},
     ptr::null_mut,
-    time::Duration,
 };
 
 use anyhow::bail;
