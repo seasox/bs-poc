@@ -92,7 +92,7 @@ struct CliArgs {
     /// The number of hammering attempts per round.
     /// An attempt denotes a single run of the hammering code. Usually, hammerers need several attempts to successfully flip a bit in the victim.
     /// The default value of 100 is a good starting point for the blacksmith hammerer.
-    #[arg(long, default_value = "20")]
+    #[arg(long, default_value = "100")]
     attempts: u8,
     /// Do a stats run. This will run the hammerer and store the results in the provided file. The default is `None`, causing no stats to be stored.
     /// When `stats` is set, the hammering process will not exit after the first successful attack, but continue hammering until `repeat` is reached.
