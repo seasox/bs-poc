@@ -9,6 +9,12 @@ pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::process::VictimProcess as Process;
 pub use self::stack_process::StackProcess;
 
+#[derive(Debug)]
+pub enum HammerVictimError {
+    NoFlips,
+    Error(anyhow::Error),
+}
+
 /// The HammerVictim trait. A victim must implement this trait to be used as a target for the hammer attack.
 ///
 /// The trait provides methods to initialize the victim, check if the hammering was successful, and log the report.
@@ -17,7 +23,7 @@ pub trait HammerVictim<T> {
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self) {}
     /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.
-    fn check(&mut self) -> anyhow::Result<T>;
+    fn check(&mut self) -> Result<T, HammerVictimError>;
     /// Stop the victim. This method is called after the hammering is done. This consumes the victim.
     fn stop(self);
 }

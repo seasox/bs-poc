@@ -13,7 +13,7 @@ use bs_poc::{
         PfnResolver,
     },
     util::{find_pattern, KB, MB, PAGE_SIZE},
-    victim::{stack_process::InjectionConfig, HammerVictim, StackProcess},
+    victim::{stack_process::InjectionConfig, HammerVictim, HammerVictimError, StackProcess},
 };
 use clap::{arg, Parser};
 use indicatif::MultiProgress;
@@ -126,7 +126,8 @@ fn main() -> anyhow::Result<()> {
                 println!("{:?}", flippy_region);
                 let output = match victim.check() {
                     Ok(output) => output,
-                    Err(e) => e.to_string(),
+                    Err(HammerVictimError::NoFlips) => "No flips".to_string(),
+                    Err(HammerVictimError::Error(e)) => e.to_string(),
                 };
                 if output.contains(&format!("{:x}", target_pfn)) {
                     bail!("YES MAN: {},{}", bait_before, bait_after);

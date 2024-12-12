@@ -1,9 +1,11 @@
 use crate::util::{AttackState, PipeIPC, IPC};
 use crate::victim::HammerVictim;
-use anyhow::{bail, Context};
+use anyhow::Context;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdin, ChildStdout, Command};
 use std::thread;
+
+use super::HammerVictimError;
 
 pub struct VictimProcess {
     victim: Child,
@@ -27,18 +29,18 @@ impl HammerVictim<String> for VictimProcess {
         info!("Victim process initialized");
     }
 
-    fn check(&mut self) -> anyhow::Result<String> {
+    fn check(&mut self) -> Result<String, HammerVictimError> {
         info!("Victim process check");
         self.pipe
             .send(AttackState::AttackerHammerDone)
             .expect("send");
         info!("Reading pipe");
-        let state: AttackState = self.pipe.receive()?;
+        let state: AttackState = self.pipe.receive().map_err(HammerVictimError::Error)?;
         info!("Received state: {:?}", state);
         if state == AttackState::VictimHammerSuccess {
             Ok("Success".to_string())
         } else {
-            bail!("hammer failed")
+            Err(HammerVictimError::NoFlips)
         }
     }
 

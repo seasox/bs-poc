@@ -5,8 +5,8 @@ use crate::memory::{
     BytePointer, ConsecBlocks, DRAMAddr, GetConsecPfns, LinuxPageMap, VirtToPhysResolver,
 };
 use crate::util::GroupBy;
-use crate::victim::HammerVictim;
-use anyhow::{bail, Context, Result};
+use crate::victim::{HammerVictim, HammerVictimError};
+use anyhow::{Context, Result};
 use itertools::Itertools;
 use rand::Rng;
 use serde::Deserialize;
@@ -370,15 +370,11 @@ impl<'a> Hammerer<'a> {
         })
     }
 
-    fn do_random_accesses(
-        &self,
-        rows: &[AggressorPtr],
-        wait_until_start_hammering_us: u128,
-    ) -> Result<()> {
+    fn do_random_accesses(&self, rows: &[AggressorPtr], wait_until_start_hammering_us: u128) {
         let start = SystemTime::now();
         while SystemTime::now()
             .duration_since(start)
-            .with_context(|| "time went backwards")?
+            .expect("time went backwards")
             .as_micros()
             < wait_until_start_hammering_us
         {
@@ -386,12 +382,14 @@ impl<'a> Hammerer<'a> {
                 let _ = unsafe { std::ptr::read_volatile(row) };
             }
         }
-        Ok(())
     }
 }
 
 impl<'a> Hammering for Hammerer<'a> {
-    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> Result<HammerResult<T>> {
+    fn hammer<T>(
+        &self,
+        victim: &mut dyn HammerVictim<T>,
+    ) -> Result<HammerResult<T>, HammerVictimError> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
 
@@ -416,7 +414,7 @@ impl<'a> Hammering for Hammerer<'a> {
                     "do random memory accesses for {} us before running jitted code",
                     wait_until_start_hammering_us as u128
                 );
-                self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128)?;
+                self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128);
                 trace!("call into jitted program");
                 unsafe {
                     let mut aux = 0;
@@ -443,11 +441,12 @@ impl<'a> Hammering for Hammerer<'a> {
                         victim_result,
                     });
                 }
-                Err(e) => {
+                Err(HammerVictimError::NoFlips) => {}
+                Err(HammerVictimError::Error(e)) => {
                     error!("Victim check failed: {:?}", e);
                 }
             }
         }
-        bail!("No success")
+        Err(HammerVictimError::NoFlips)
     }
 }

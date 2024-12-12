@@ -1,6 +1,7 @@
 use crate::hammerer::HammerResult;
 use crate::hammerer::Hammering;
 use crate::victim::HammerVictim;
+use crate::victim::HammerVictimError;
 use std::arch::x86_64::_mm_clflush;
 
 pub struct Hammerer {
@@ -14,7 +15,10 @@ impl Hammerer {
 }
 
 impl Hammering for Hammerer {
-    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> anyhow::Result<HammerResult<T>> {
+    fn hammer<T>(
+        &self,
+        victim: &mut dyn HammerVictim<T>,
+    ) -> Result<HammerResult<T>, HammerVictimError> {
         victim.init();
         unsafe {
             debug!(

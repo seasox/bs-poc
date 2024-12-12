@@ -21,7 +21,7 @@
 pub mod blacksmith;
 pub mod dummy;
 
-use crate::victim::HammerVictim;
+use crate::victim::{HammerVictim, HammerVictimError};
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 pub use dummy::Hammerer as Dummy;
 
@@ -32,7 +32,10 @@ pub enum Hammerer<'a> {
 }
 
 impl Hammering for Hammerer<'_> {
-    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> anyhow::Result<HammerResult<T>> {
+    fn hammer<T>(
+        &self,
+        victim: &mut dyn HammerVictim<T>,
+    ) -> Result<HammerResult<T>, HammerVictimError> {
         match self {
             Hammerer::Blacksmith(blacksmith) => blacksmith.hammer(victim),
             Hammerer::Dummy(dummy) => dummy.hammer(victim),
@@ -42,7 +45,10 @@ impl Hammering for Hammerer<'_> {
 
 /// The Hammering trait. A hammerer must implement this trait to perform hammering.
 pub trait Hammering {
-    fn hammer<T>(&self, victim: &mut dyn HammerVictim<T>) -> anyhow::Result<HammerResult<T>>;
+    fn hammer<T>(
+        &self,
+        victim: &mut dyn HammerVictim<T>,
+    ) -> Result<HammerResult<T>, HammerVictimError>;
 }
 
 #[derive(Debug)]
