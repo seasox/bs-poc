@@ -1,7 +1,6 @@
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{
-    construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, GetConsecPfns,
-    PfnOffsetResolver, PfnResolver,
+    construct_memory_tuple_timer, BytePointer, DRAMAddr, FormatPfns, GetConsecPfns, PfnResolver,
 };
 use std::fmt::Display;
 use std::ops::{Deref, Range};
@@ -14,7 +13,7 @@ use itertools::Itertools;
 use super::ConsecAllocator;
 use crate::allocator::util::{mmap, munmap};
 use crate::retry;
-use crate::util::{NamedProgress, KB, MB, ROW_SIZE};
+use crate::util::{NamedProgress, MB};
 use crate::{
     memory::{ConsecBlocks, MemBlock},
     util::PAGE_SIZE,
@@ -154,13 +153,44 @@ impl<T> Deref for CArray<T> {
 }
 
 impl Spoiler {
+    /// allocate a 2 MB physically aligned memory block.
+    fn allocate_2m_aligned() -> anyhow::Result<MemBlock> {
+        const ALIGNMENT: usize = 2 * MB;
+        let aligned = unsafe {
+            libc::mmap(
+                null_mut(),
+                ALIGNMENT,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        if aligned == libc::MAP_FAILED {
+            bail!("mmap THP failed: {:?}", std::io::Error::last_os_error());
+        }
+        if unsafe { libc::madvise(aligned, 2 * MB, libc::MADV_HUGEPAGE) } != 0 {
+            bail!("madvise failed: {:?}", std::io::Error::last_os_error());
+        }
+        unsafe { libc::memset(aligned, 0, 2 * MB) };
+        unsafe { libc::mlock(aligned, PAGE_SIZE) };
+        debug!("Aligned PFNs: {:?}", (aligned, 2 * MB).consec_pfns()?);
+        assert_eq!(aligned as usize & (ALIGNMENT - 1), 0);
+        assert_eq!(aligned.pfn().unwrap_or(0) as usize & (ALIGNMENT - 1), 0);
+        Ok(MemBlock::new(aligned as *mut u8, 2 * MB))
+    }
+
     /// Perform a spoiler round to find consecutive memory blocks.
     fn spoiler_round(&self, max_candidates: usize) -> anyhow::Result<Vec<MemBlock>> {
         let search_buffer_size = 2048 * MB;
         let cont_size = 5 * MB;
+        let aligned = Self::allocate_2m_aligned()?;
+        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or(0));
         let search_buffer = mmap(null_mut(), search_buffer_size);
         let spoiler_candidates =
-            spoiler_candidates(search_buffer, search_buffer_size, 0, cont_size);
+            spoiler_candidates(search_buffer, search_buffer_size, aligned.ptr(), cont_size);
+        debug!("Base PFN: {:x}", aligned.pfn()?);
+        aligned.dealloc();
         if spoiler_candidates.is_empty() {
             unsafe { munmap(search_buffer, search_buffer_size) };
             bail!("No candidates found");
@@ -176,7 +206,6 @@ impl Spoiler {
         });
 
         let mut blocks = vec![];
-        let timer = construct_memory_tuple_timer()?;
         let mut intervals = Intervals::new();
         for candidate in spoiler_candidates.into_iter().rev() {
             if blocks.len() >= max_candidates {
@@ -191,59 +220,6 @@ impl Spoiler {
                 continue;
             }
             let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
-            let offset = {
-                let block = MemBlock::new(addr, cont_size);
-                let offset = block
-                    .pfn_offset(&self.mem_config, self.conflict_threshold, &*timer, None)
-                    .map(|o| o * ROW_SIZE);
-                info!("Consecutive PFNs:\n{}", block.consec_pfns()?.format_pfns());
-                match offset {
-                    Some(offset) => {
-                        info!(
-                            "Offset: {:x}, VA/PFN {:x}/{:x}",
-                            offset,
-                            block.addr(offset) as usize,
-                            block.pfn()?
-                        );
-                        offset
-                    }
-                    None => {
-                        warn!("No offset found");
-                        continue;
-                    }
-                }
-            };
-            // TODO: maybe refactor this to MemBlock#pfn_offset()
-            // find offset in row. Since allocations are page aligned, we might land in the middle of a row instead of at the start. This check ensures that we are at the start of a row.
-            // measure the timing of the current offset and (offset + 4KB + 4MB):
-            // - if we are at the start of a row, then we should measure a bank conflict, since offset+4KB is in the same row, hence offset+4KB+4MB is in the same bank
-            // - if we are in the middle of a row, then we should not measure a bank conflict, since adding 4KB to the current offset changes the row, hence offset+4KB+4MB is in a different bank
-            let row_timing = unsafe {
-                timer.time_subsequent_access_from_ram(
-                    addr.byte_add(offset),
-                    addr.byte_add(offset + 4 * KB + 2 * MB),
-                    10000,
-                )
-            };
-            let is_row_start = row_timing >= self.conflict_threshold;
-            let offset = if is_row_start {
-                offset
-            } else {
-                offset - 4 * KB
-            };
-            // We now know that (addr + offset) & 0xFFFFF == pfn & 0xFFFFF
-            let pfn_offset = 0x100000 - (addr.pfn()? as usize & 0xFFFFF);
-            let alignment_offset = unsafe { 0x100000 - (addr.byte_add(offset) as usize & 0xFFFFF) };
-            debug!("row start: {}", is_row_start);
-            debug!("Offset align/pfn: {:x}/{:x}", alignment_offset, pfn_offset);
-            let addr = unsafe { addr.byte_add(alignment_offset) };
-            if addr.pfn().unwrap() & 0xFFFFF != 0 {
-                warn!(
-                    "Not aligned to 1 MB boundary: {:x}, offset {}",
-                    addr.pfn().unwrap(),
-                    alignment_offset
-                );
-            }
             assert_eq!(candidate.end - candidate.start, cont_size / PAGE_SIZE);
             let block = MemBlock::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
@@ -288,7 +264,7 @@ const DIFF_LOG: &str = "log/diffs.csv";
 fn spoiler_candidates(
     buf: *mut u8,
     buf_size: usize,
-    read_page_offset: usize,
+    read_page: *mut u8,
     continuous_size: usize,
 ) -> Vec<Range<usize>> {
     assert!(!buf.is_null(), "null buffer");
@@ -309,9 +285,7 @@ fn spoiler_candidates(
     let page_count = 256 * buf_size / MB; // 256 pages per MB
 
     // measure the buffer using the spoiler primitive
-    let measurements = unsafe {
-        crate::spoiler_measure(buf, buf_size, buf.byte_add(read_page_offset * PAGE_SIZE))
-    };
+    let measurements = unsafe { crate::spoiler_measure(buf, buf_size, read_page) };
 
     let diff_buf =
         unsafe { Vec::from(&CArray::new(crate::diffs(measurements), page_count) as &[u64]) };
@@ -446,7 +420,12 @@ mod tests {
         assert_ne!(buf, null_mut());
         let consec_size = 4 * MB;
         for offset in 0..256 * 8 {
-            let spoiler_candidates = spoiler_candidates(buf, BUF_SIZE, offset, consec_size);
+            let spoiler_candidates = spoiler_candidates(
+                buf,
+                BUF_SIZE,
+                unsafe { buf.byte_add(offset * PAGE_SIZE) },
+                consec_size,
+            );
             println!(
                 "Found {} spoiler_candidates: {:?}",
                 spoiler_candidates.len(),
