@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 
 use anyhow::bail;
 
@@ -70,20 +70,18 @@ impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
         }
     }
     fn receive(&mut self) -> anyhow::Result<String> {
-        let mut ret = vec![];
-        let mut buf = [0u8; 1];
-        while buf[0] != b'\n' {
-            let success = self.input.read(&mut buf);
-            if success.is_err() {
-                bail!("read failed: {:?}", success.err().unwrap());
-            }
-            let nbytes = success.unwrap();
-            assert_eq!(nbytes, 1);
-            if buf[0] != b'\n' {
-                ret.push(buf[0]);
-            }
+        let mut reader = BufReader::new(&mut self.input);
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line)?;
+        if bytes_read == 0 {
+            bail!("EOF reached");
         }
-        String::from_utf8(ret).anyhow()
+        // Remove the trailing newline character if it exists.
+        if !line.ends_with('\n') {
+            bail!("line does not end with newline");
+        }
+        line.pop();
+        Ok(line)
     }
 }
 
