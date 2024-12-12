@@ -8,25 +8,52 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug bait_alloc",
+            "name": "hammer [DEBUG]",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=bait_alloc",
+                    "--bin=hammer",
                     "--package=bs_poc"
                 ],
                 "filter": {
-                    "name": "bait_alloc",
+                    "name": "hammer",
                     "kind": "bin"
                 }
             },
             "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=config/fuzz-summary.json",
+                "--alloc-strategy=pfn",
+                "--profiling-rounds=10",
+                "--attempts=100"
+            ],
+            "env": {
+                "RUST_LOG": "debug"
+            },
+            "cwd": "${workspaceFolder}",
+        },
+        {
+            "name": "hammer [SUDO] [DEBUG]",
+            "type": "lldb",
+            "request": "launch",
+            "initCommands": [
+                "platform select remote-linux", // For example: 'remote-linux', 'remote-macosx', 'remote-android', etc.
+                "platform connect connect://127.0.0.1:23809",
+                "settings set target.inherit-env false", // See note below.
+            ],
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=hammer",
+                    "--package=bs_poc"
+                ],
+                "filter": {
+                    "name": "hammer",
+                    "kind": "bin"
+                }
+            },
+            "args": [
                 "--alloc-strategy=hugepage-rnd",
-                "--pattern=39ad622b-3bfe-4161-b860-dad5f3e6dd68",
-                "--mapping=4d16a3db-c991-419a-b6fe-3a7f41113a8e",
-                "--consec-check=none"
+                "--profiling-rounds=10",
+                "--attempts=100"
             ],
             "env": {
                 "RUST_LOG": "debug"
@@ -36,139 +63,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug bs_poc RSA",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=bs_poc",
-                    "--package=bs_poc"
-                ],
-                "filter": {
-                    "name": "bs_poc",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=fuzz-summary.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=rsa",
-            ],
-            "env": {
-                "RUST_LOG": "debug"
-            },
-            "cwd": "${workspaceFolder}",
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug bs_poc MemCheck",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=bs_poc",
-                    "--package=bs_poc"
-                ],
-                "filter": {
-                    "name": "bs_poc",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=config/fuzz-summary.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=mem-check",
-            ],
-            "env": {
-                "RUST_LOG": "debug"
-            },
-            "cwd": "${workspaceFolder}",
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug bs_poc RSA",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=bs_poc",
-                    "--package=bs_poc"
-                ],
-                "filter": {
-                    "name": "bs_poc",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=fuzz-summary.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=rsa",
-            ],
-            "env": {
-                "RUST_LOG": "debug"
-            },
-            "cwd": "${workspaceFolder}",
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Run bs_poc MemCheck",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--release",
-                    "--bin=bs_poc",
-                    "--package=bs_poc"
-                ],
-                "filter": {
-                    "name": "bs_poc",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=fuzz-summary.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=mem-check",
-            ],
-            "env": {
-                "RUST_LOG": "info"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Run bs_poc RSA",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--release",
-                    "--bin=bs_poc",
-                    "--package=bs_poc"
-                ],
-                "filter": {
-                    "name": "bs_poc",
-                    "kind": "bin"
-                }
-            },
-            "args": [
-                "--config=config/esprimo-d757_i5-6400_gskill-F4-2133C15-16GIS.json",
-                "--load-json=fuzz-summary.json",
-                "--pattern=fe557207-465b-4cc4-8979-b9646bdca83b",
-                "--hammer-mode=rsa",
-            ],
-            "env": {
-                "RUST_LOG": "info"
-            },
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug executable 'check_addr'",
+            "name": "check_addr [DEBUG]",
             "cargo": {
                 "args": [
                     "build",
@@ -192,7 +87,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Run executable 'check_addr'",
+            "name": "check_addr [RUN]",
             "cargo": {
                 "args": [
                     "build",
@@ -217,14 +112,14 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests",
+            "name": "Tests [DEBUG]",
             "cargo": {
                 "args": [
                     "test",
                     "--no-run",
                 ],
                 "filter": {
-                    "name": "bs_poc",
+                    "name": "tests",
                     "kind": "bin"
                 }
             },
