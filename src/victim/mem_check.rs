@@ -1,70 +1,47 @@
-use anyhow::{bail, Context};
-
-use crate::memory::{BitFlip, VictimMemory};
+use crate::memory::{BitFlip, DataPattern, VictimMemory};
 use crate::victim::HammerVictim;
 
-#[derive(Copy, Clone)]
-enum MemorySeed {
-    Random([u8; 32]),
-    Fixed([u8; 32]),
-}
-
-impl MemorySeed {
-    fn get(&self) -> [u8; 32] {
-        match self {
-            MemorySeed::Random(seed) => *seed,
-            MemorySeed::Fixed(seed) => *seed,
-        }
-    }
-}
+use super::HammerVictimError;
 
 pub struct HammerVictimMemCheck<'a> {
     memory: &'a dyn VictimMemory,
-    seed: Option<MemorySeed>,
+    pub pattern: DataPattern,
 }
 
 impl<'a> HammerVictimMemCheck<'a> {
     pub fn new(memory: &'a dyn VictimMemory) -> Self {
-        HammerVictimMemCheck { memory, seed: None }
+        HammerVictimMemCheck {
+            memory,
+            pattern: DataPattern::Random(rand::random()),
+        }
     }
 
     pub fn new_with_seed(memory: &'a dyn VictimMemory, seed: [u8; 32]) -> Self {
         HammerVictimMemCheck {
             memory,
-            seed: Some(MemorySeed::Fixed(seed)),
+            pattern: DataPattern::Random(seed),
         }
     }
 
-    pub fn seed(&self) -> Option<[u8; 32]> {
-        match self.seed {
-            Some(MemorySeed::Random(seed)) => Some(seed),
-            Some(MemorySeed::Fixed(seed)) => Some(seed),
-            None => None,
+    pub fn new_stripe(memory: &'a dyn VictimMemory) -> Self {
+        HammerVictimMemCheck {
+            memory,
+            pattern: DataPattern::StripeOneZero,
         }
     }
 }
 
 impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
     fn init(&mut self) {
-        let seed = match self.seed {
-            Some(MemorySeed::Fixed(seed)) => seed,
-            _ => {
-                let seed = rand::random();
-                self.seed = Some(MemorySeed::Random(seed));
-                seed
-            }
-        };
-        self.memory.initialize(seed);
+        self.memory.initialize(self.pattern.clone());
     }
 
-    fn check(&mut self) -> anyhow::Result<Vec<BitFlip>> {
-        let flips = self
-            .memory
-            .check(self.seed.with_context(|| "no seed").unwrap().get());
+    fn check(&mut self) -> Result<Vec<BitFlip>, HammerVictimError> {
+        let flips = self.memory.check(self.pattern.clone());
         if !flips.is_empty() {
             Ok(flips.clone())
         } else {
-            bail!("No flips detected")
+            Err(HammerVictimError::NoFlips)
         }
     }
 
