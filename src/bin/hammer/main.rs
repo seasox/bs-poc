@@ -348,6 +348,8 @@ unsafe fn _main() -> anyhow::Result<()> {
     let mem_config = MemConfiguration::from_blacksmith(&config);
     let pattern = load_pattern(&args)?;
 
+    info!("Args: {:?}", args);
+
     let consec_checker = create_consec_checker_from_cli(
         args.consec_check,
         mem_config,
