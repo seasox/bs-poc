@@ -16,12 +16,13 @@ use crate::{
     victim::process::piped_channel,
 };
 
-use super::HammerVictim;
+use super::{HammerVictim, HammerVictimError};
 
 pub struct StackProcess {
     child: std::process::Child,
     pipe: PipeIPC<ChildStdout, ChildStdin>,
-    flippy_page: Option<FlippyPage>,
+    stderr_logger: Option<thread::JoinHandle<()>>,
+    _flippy_page: Option<FlippyPage>,
 }
 
 /// The injection configuration.
@@ -82,6 +83,27 @@ impl StackProcess {
         let mut child = cmd.spawn()?;
         info!("Victim launched");
 
+        // Log victim stderr
+        let stderr_logger = if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+
+            // Spawn a thread to handle logging from stderr
+            let handle = thread::spawn(move || {
+                for line in reader.lines() {
+                    match line {
+                        Ok(log_line) => {
+                            info!("{}", log_line);
+                        }
+                        Err(err) => error!("Error reading line from child process: {}", err),
+                    }
+                }
+            });
+            Some(handle)
+        } else {
+            eprintln!("Failed to capture stderr");
+            None
+        };
+
         // todo: maybe check injection (prime+probe?)
         std::thread::sleep(Duration::from_millis(100));
         let flippy_page = match find_flippy_page(target_pfn, child.id()) {
@@ -103,7 +125,8 @@ impl StackProcess {
         Ok(Self {
             child,
             pipe,
-            flippy_page,
+            stderr_logger,
+            _flippy_page: flippy_page,
         })
     }
 
