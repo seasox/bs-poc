@@ -121,6 +121,11 @@ impl StackProcess {
                 None
             }
         };
+        if let Some(flippy_page) = &flippy_page {
+            if flippy_page.maps_entry.path() != Some("[stack]") {
+                bail!("Flippy page not in stack");
+            }
+        }
         let pipe = piped_channel(&mut child)?;
         Ok(Self {
             child,
