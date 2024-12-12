@@ -9,7 +9,7 @@ use std::{
 use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
-    memory::{BitFlip, Initializable},
+    memory::{BitFlip, DataPattern, Initializable},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
@@ -288,7 +288,7 @@ fn make_hammer<'a>(
 #[derive(Debug)]
 struct RoundProfile {
     bit_flips: Vec<BitFlip>,
-    seed: [u8; 32],
+    pattern: DataPattern,
     duration: Duration,
 }
 #[derive(Debug)]
@@ -298,7 +298,7 @@ struct Profiling {
 
 /// Hammer a given memory region a number of times to profile for vulnerable addresses.
 fn hammer_profile(
-    hammerer: &mut Hammerer,
+    hammerer: &Hammerer,
     memory: &ConsecBlocks,
     num_rounds: u64,
     progress: Option<MultiProgress>,
@@ -307,7 +307,7 @@ fn hammer_profile(
         .as_ref()
         .map(|p| p.add(ProgressBar::new(num_rounds)));
     let mut rounds = vec![];
-    let mut victim = victim::MemCheck::new(memory);
+    let mut victim = victim::MemCheck::new_stripe(memory);
 
     for _ in 0..num_rounds {
         if let Some(p) = p.as_ref() {
@@ -329,10 +329,10 @@ fn hammer_profile(
                 vec![]
             }
         };
-        let seed = victim.seed().expect("no seed");
+        let pattern = victim.pattern.clone();
         rounds.push(RoundProfile {
             bit_flips,
-            seed,
+            pattern,
             duration,
         });
     }
@@ -468,13 +468,14 @@ unsafe fn _main() -> anyhow::Result<()> {
             count
         );
         // find round with flips in `addr`, get seed
-        let seed = profiling
+        let pattern = profiling
             .rounds
             .iter()
             .find(|r| r.bit_flips.iter().any(|b| b.addr == addr))
             .expect("no round with flips in addr")
-            .seed;
-        memory.initialize(seed);
+            .pattern
+            .clone();
+        memory.initialize(pattern);
         let addr = addr & !0xfff; // mask out the lowest 12 bits
 
         let victim = if args.target.is_empty() {

@@ -49,7 +49,7 @@ use serde::Serialize;
 use std::fmt::Debug;
 
 use crate::allocator::hugepage::HugepageAllocator;
-use crate::util::PAGE_SIZE;
+use crate::util::{PAGE_SIZE, ROW_SIZE};
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
@@ -85,9 +85,16 @@ pub trait BytePointer {
     fn len(&self) -> usize;
 }
 
+#[derive(Clone, Debug)]
+pub enum DataPattern {
+    Random(/* seed: */ [u8; 32]),
+    StripeZeroOne,
+    StripeOneZero,
+}
+
 /// Trait for initializing memory with random values
 pub trait Initializable {
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed);
+    fn initialize(&self, pattern: DataPattern);
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8);
 }
 
@@ -110,7 +117,7 @@ impl BitFlip {
 
 /// Trait for checking memory for bitflips
 pub trait Checkable {
-    fn check(&self, seed: <StdRng as SeedableRng>::Seed) -> Vec<BitFlip>;
+    fn check(&self, pattern: DataPattern) -> Vec<BitFlip>;
     fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip>;
 }
 
@@ -182,14 +189,24 @@ impl<T> Initializable for T
 where
     T: VictimMemory,
 {
-    fn initialize(&self, seed: <StdRng as SeedableRng>::Seed) {
-        let mut rng = StdRng::from_seed(seed);
-        info!(
-            "initialize buffer with pseudo-random values from seed {:?}",
-            seed
-        );
-        self.initialize_cb(&mut |_: usize| rng.gen());
-        debug!("memory init done");
+    fn initialize(&self, pattern: DataPattern) {
+        match pattern {
+            DataPattern::Random(seed) => {
+                let mut rng = StdRng::from_seed(seed);
+                info!(
+                    "initialize buffer with pseudo-random values from seed {:?}",
+                    seed
+                );
+                self.initialize_cb(&mut |_: usize| rng.gen());
+                debug!("memory init done");
+            }
+            DataPattern::StripeZeroOne => self.initialize_cb(&mut |offset: usize| {
+                ((offset / ROW_SIZE) % 2) as u8 * 0xFF // even rows are 0xFF, odd rows are 0x00
+            }),
+            DataPattern::StripeOneZero => self.initialize_cb(&mut |offset: usize| {
+                (1 - ((offset / ROW_SIZE) % 2) as u8) * 0xFF // even rows are 0x00, odd rows are 0xFF
+            }),
+        }
     }
 
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8) {
@@ -232,47 +249,19 @@ impl<T> Checkable for T
 where
     T: VictimMemory,
 {
-    fn check(&self, seed: <StdRng as SeedableRng>::Seed) -> Vec<BitFlip> {
-        let mut rng = StdRng::from_seed(seed);
-        let len = self.len();
-        assert_eq!(
-            len % PAGE_SIZE,
-            0,
-            "memory len must be divisible by PAGE_SIZE"
-        );
-        unsafe {
-            for page_no in (0..len).step_by(PAGE_SIZE) {
-                let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-                for expected in expected.iter_mut() {
-                    *expected = rng.gen();
-                }
-                _mm_clflush(self.addr(page_no));
-                _mm_mfence();
-                let cmp = memcmp(
-                    self.addr(page_no) as *const c_void,
-                    expected.as_ptr() as *const c_void,
-                    PAGE_SIZE,
-                );
-                if cmp == 0 {
-                    continue;
-                }
-                debug!(
-                    "Found bitflip in page {}. Determining exact flip position",
-                    page_no
-                );
-                let mut ret = vec![];
-                for (i, &expected) in expected.iter().enumerate() {
-                    let addr = self.addr(page_no + i);
-                    _mm_clflush(addr);
-                    _mm_mfence();
-                    if *addr != expected {
-                        ret.push(BitFlip::new(addr, *addr ^ expected, expected));
-                    }
-                }
-                return ret;
+    fn check(&self, pattern: DataPattern) -> Vec<BitFlip> {
+        match pattern {
+            DataPattern::Random(seed) => {
+                let mut rng = StdRng::from_seed(seed);
+                self.check_cb(&mut |_: usize| rng.gen())
             }
+            DataPattern::StripeZeroOne => self.check_cb(&mut |offset: usize| {
+                ((offset / ROW_SIZE) % 2) as u8 * 0xFF // even rows are 0xFF, odd rows are 0x00
+            }),
+            DataPattern::StripeOneZero => self.check_cb(&mut |offset: usize| {
+                (1 - ((offset / ROW_SIZE) % 2) as u8) * 0xFF // even rows are 0x00, odd rows are 0xFF
+            }),
         }
-        vec![]
     }
 
     fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip> {
