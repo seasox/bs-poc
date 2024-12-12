@@ -1,8 +1,9 @@
 use std::{
     fs::OpenOptions,
-    io::{Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     process::{ChildStdin, ChildStdout},
     ptr::null_mut,
+    thread,
     time::Duration,
 };
 
@@ -224,31 +225,31 @@ fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyP
     Ok(flippy_region)
 }
 
-const PATTERN: u8 = 0b10101010;
 impl HammerVictim<String> for StackProcess {
-    fn init(&mut self) {
-        self.pipe
-            .wait_for("pattern:".to_string())
-            .expect("wait_for");
-        self.pipe.send(PATTERN).expect("send");
-        self.pipe.send(b'\n').expect("send");
-    }
+    fn init(&mut self) {}
 
-    fn check(&mut self) -> anyhow::Result<String> {
+    fn check(&mut self) -> Result<String, HammerVictimError> {
         self.pipe
-            .wait_for("press enter to start memcmp".to_string())?;
-        self.pipe.send(b'\n')?;
-        let resp: String = self.pipe.receive()?;
+            .wait_for("press enter to start check".to_string())
+            .map_err(HammerVictimError::Error)?;
+        self.pipe.send(b'\n').map_err(HammerVictimError::Error)?;
+        let resp: String = self.pipe.receive().map_err(HammerVictimError::Error)?;
         if resp.starts_with("FLIPPED") {
             Ok(resp)
         } else {
-            bail!("Expected FLIPPED, got {}", resp)
+            Err(HammerVictimError::Error(anyhow::format_err!(
+                "Expected FLIPPED, got {}",
+                resp
+            )))
         }
     }
 
     fn stop(mut self) {
         self.child.kill().expect("kill");
         self.child.wait().expect("wait");
+        if let Some(stderr_logger) = self.stderr_logger {
+            stderr_logger.join().expect("join");
+        }
     }
 }
 
@@ -256,7 +257,11 @@ impl HammerVictim<String> for StackProcess {
 mod tests {
     use std::ptr::null_mut;
 
-    use crate::{allocator::util::mmap, util::PAGE_SIZE, victim::HammerVictim};
+    use crate::{
+        allocator::util::mmap,
+        util::PAGE_SIZE,
+        victim::{HammerVictim, HammerVictimError},
+    };
 
     #[test]
     fn test_stack_process() -> anyhow::Result<()> {
@@ -273,10 +278,11 @@ mod tests {
             stack_process.init();
             let resp = stack_process.check();
             assert!(resp.is_err());
-            assert_eq!(
-                resp.unwrap_err().to_string(),
-                "Expected FLIPPED, got no flips"
-            );
+            if let Err(HammerVictimError::Error(e)) = resp {
+                assert_eq!(e.to_string(), "Expected FLIPPED, got no flips");
+            } else {
+                panic!("Expected HammerVictimError::Error");
+            }
         }
         Ok(())
     }
