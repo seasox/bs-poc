@@ -44,12 +44,12 @@ pub use self::pfn_resolver::PfnResolver;
 pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
 use anyhow::Result;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng};
 use serde::Serialize;
 use std::fmt::Debug;
 
 use crate::allocator::hugepage::HugepageAllocator;
-use crate::util::{PAGE_SIZE, ROW_SIZE};
+use crate::util::PAGE_SIZE;
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
@@ -87,15 +87,47 @@ pub trait BytePointer {
 
 #[derive(Clone, Debug)]
 pub enum DataPattern {
-    Random(/* seed: */ [u8; 32]),
-    StripeZeroOne,
-    StripeOneZero,
+    Random(Box<StdRng>),
+    StripeZero(/* zeroes: */ Vec<AggressorPtr>),
+    StripeOne(/*  ones:   */ Vec<AggressorPtr>),
+}
+
+impl DataPattern {
+    fn get(&mut self, addr: *const u8) -> [u8; PAGE_SIZE] {
+        match self {
+            DataPattern::Random(rng) => {
+                let mut arr = [0u8; PAGE_SIZE];
+                for byte in arr.iter_mut() {
+                    *byte = rng.gen();
+                }
+                arr
+            }
+            DataPattern::StripeZero(zeroes) => {
+                for &row in zeroes.iter() {
+                    if (row as usize) == addr as usize & !(0x1FFF) {
+                        trace!("setting aggressor page to 0x00 at addr {:p}", addr);
+                        return [0x00; PAGE_SIZE];
+                    }
+                }
+                [0xFF; PAGE_SIZE]
+            }
+            DataPattern::StripeOne(ones) => {
+                for &row in ones.iter() {
+                    if (row as usize) == addr as usize & !(0x1FFF) {
+                        trace!("setting aggressor page to 0xFF at addr {:p}", addr);
+                        return [0xFF; PAGE_SIZE];
+                    }
+                }
+                [0x00; PAGE_SIZE]
+            }
+        }
+    }
 }
 
 /// Trait for initializing memory with random values
 pub trait Initializable {
     fn initialize(&self, pattern: DataPattern);
-    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8);
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]);
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -118,7 +150,7 @@ impl BitFlip {
 /// Trait for checking memory for bitflips
 pub trait Checkable {
     fn check(&self, pattern: DataPattern) -> Vec<BitFlip>;
-    fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip>;
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) -> Vec<BitFlip>;
 }
 
 /// A managed memory region that is allocated using HugepageAllocator
@@ -189,27 +221,19 @@ impl<T> Initializable for T
 where
     T: VictimMemory,
 {
-    fn initialize(&self, pattern: DataPattern) {
-        match pattern {
-            DataPattern::Random(seed) => {
-                let mut rng = StdRng::from_seed(seed);
-                info!(
-                    "initialize buffer with pseudo-random values from seed {:?}",
-                    seed
-                );
-                self.initialize_cb(&mut |_: usize| rng.gen());
-                debug!("memory init done");
+    fn initialize(&self, mut pattern: DataPattern) {
+        info!(
+            "initialize buffer with pattern {}",
+            match pattern {
+                DataPattern::Random(_) => "random",
+                DataPattern::StripeZero(_) => "stripe zero",
+                DataPattern::StripeOne(_) => "stripe one",
             }
-            DataPattern::StripeZeroOne => self.initialize_cb(&mut |offset: usize| {
-                ((offset / ROW_SIZE) % 2) as u8 * 0xFF // even rows are 0xFF, odd rows are 0x00
-            }),
-            DataPattern::StripeOneZero => self.initialize_cb(&mut |offset: usize| {
-                (1 - ((offset / ROW_SIZE) % 2) as u8) * 0xFF // even rows are 0x00, odd rows are 0xFF
-            }),
-        }
+        );
+        self.initialize_cb(&mut |offset: usize| pattern.get(self.addr(offset)));
     }
 
-    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> u8) {
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) {
         let len = self.len();
         if len % 8 != 0 {
             panic!("memory len must be divisible by 8");
@@ -221,13 +245,10 @@ where
             );
         }
 
-        info!("initialize {} bytes", len);
+        debug!("initialize {} bytes", len);
 
         for offset in (0..len).step_by(PAGE_SIZE) {
-            let mut value: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-            for (i, v) in value.iter_mut().enumerate() {
-                *v = f(offset + i);
-            }
+            let value = f(offset);
             unsafe {
                 std::ptr::write_volatile(self.addr(offset) as *mut [u8; PAGE_SIZE], value);
             }
@@ -249,22 +270,11 @@ impl<T> Checkable for T
 where
     T: VictimMemory,
 {
-    fn check(&self, pattern: DataPattern) -> Vec<BitFlip> {
-        match pattern {
-            DataPattern::Random(seed) => {
-                let mut rng = StdRng::from_seed(seed);
-                self.check_cb(&mut |_: usize| rng.gen())
-            }
-            DataPattern::StripeZeroOne => self.check_cb(&mut |offset: usize| {
-                ((offset / ROW_SIZE) % 2) as u8 * 0xFF // even rows are 0xFF, odd rows are 0x00
-            }),
-            DataPattern::StripeOneZero => self.check_cb(&mut |offset: usize| {
-                (1 - ((offset / ROW_SIZE) % 2) as u8) * 0xFF // even rows are 0x00, odd rows are 0xFF
-            }),
-        }
+    fn check(&self, mut pattern: DataPattern) -> Vec<BitFlip> {
+        self.check_cb(&mut |offset: usize| pattern.get(self.addr(offset)))
     }
 
-    fn check_cb(&self, f: &mut dyn FnMut(usize) -> u8) -> Vec<BitFlip> {
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) -> Vec<BitFlip> {
         let len = self.len();
         if len % PAGE_SIZE != 0 {
             panic!(
@@ -275,10 +285,7 @@ where
 
         let mut ret = vec![];
         for offset in (0..len).step_by(PAGE_SIZE) {
-            let mut expected: [u8; PAGE_SIZE] = [0u8; PAGE_SIZE];
-            for (i, expected) in expected.iter_mut().enumerate() {
-                *expected = f(offset + i);
-            }
+            let expected: [u8; PAGE_SIZE] = f(offset);
             unsafe {
                 _mm_clflush(self.addr(offset));
                 _mm_mfence();

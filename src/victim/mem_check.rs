@@ -9,25 +9,8 @@ pub struct HammerVictimMemCheck<'a> {
 }
 
 impl<'a> HammerVictimMemCheck<'a> {
-    pub fn new(memory: &'a dyn VictimMemory) -> Self {
-        HammerVictimMemCheck {
-            memory,
-            pattern: DataPattern::Random(rand::random()),
-        }
-    }
-
-    pub fn new_with_seed(memory: &'a dyn VictimMemory, seed: [u8; 32]) -> Self {
-        HammerVictimMemCheck {
-            memory,
-            pattern: DataPattern::Random(seed),
-        }
-    }
-
-    pub fn new_stripe(memory: &'a dyn VictimMemory) -> Self {
-        HammerVictimMemCheck {
-            memory,
-            pattern: DataPattern::StripeOneZero,
-        }
+    pub fn new(memory: &'a dyn VictimMemory, pattern: DataPattern) -> Self {
+        HammerVictimMemCheck { memory, pattern }
     }
 }
 

@@ -9,6 +9,7 @@ use std::{
 use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
+    hammerer::blacksmith::jitter::AggressorPtr,
     memory::{BitFlip, DataPattern, Initializable},
 };
 use bs_poc::{
@@ -39,6 +40,7 @@ use bs_poc::{
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
 use log::{info, warn};
+use rand::{rngs::StdRng, SeedableRng};
 use serde::Serialize;
 
 /// CLI arguments for the `hammer` binary.
@@ -300,6 +302,7 @@ struct Profiling {
 fn hammer_profile(
     hammerer: &Hammerer,
     memory: &ConsecBlocks,
+    aggressors: Vec<AggressorPtr>,
     num_rounds: u64,
     progress: Option<MultiProgress>,
 ) -> Profiling {
@@ -307,13 +310,19 @@ fn hammer_profile(
         .as_ref()
         .map(|p| p.add(ProgressBar::new(num_rounds)));
     let mut rounds = vec![];
-    let mut victim = victim::MemCheck::new_stripe(memory);
 
-    for _ in 0..num_rounds {
+    for round in 0..num_rounds * 3 {
         if let Some(p) = p.as_ref() {
             p.inc(1)
         }
         let start = std::time::Instant::now();
+        let pattern = match round % 3 {
+            0 => DataPattern::StripeZero(aggressors.clone()),
+            1 => DataPattern::StripeOne(aggressors.clone()),
+            2 => DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
+            _ => unreachable!("Congratulations! Your computer re-invented math"),
+        };
+        let mut victim = victim::MemCheck::new(memory, pattern.clone());
         let result = hammerer.hammer(&mut victim);
         let duration = std::time::Instant::now() - start;
         let bit_flips = match result {
@@ -329,7 +338,6 @@ fn hammer_profile(
                 vec![]
             }
         };
-        let pattern = victim.pattern.clone();
         rounds.push(RoundProfile {
             bit_flips,
             pattern,
@@ -402,6 +410,12 @@ unsafe fn _main() -> anyhow::Result<()> {
                 .mapping
                 .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
         );
+        let aggressors = pattern.mapping.get_hammering_addresses_relocate(
+            &pattern.pattern.access_ids,
+            mem_config,
+            block_size.ilog2() as usize,
+            &memory,
+        )?;
         let profile_hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
@@ -415,6 +429,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         let profiling = hammer_profile(
             &profile_hammer,
             &memory,
+            aggressors,
             args.profiling_rounds,
             Some(progress.clone()),
         );
