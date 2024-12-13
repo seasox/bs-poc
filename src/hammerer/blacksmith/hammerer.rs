@@ -14,7 +14,7 @@ use serde_with::serde_as;
 use std::arch::x86_64::{__rdtscp, _mm_mfence};
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::{collections::HashMap, fs::File, io::BufReader};
 
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
@@ -368,13 +368,8 @@ impl<'a> Hammerer<'a> {
     }
 
     fn do_random_accesses(&self, rows: &[AggressorPtr], wait_until_start_hammering_us: u128) {
-        let start = SystemTime::now();
-        while SystemTime::now()
-            .duration_since(start)
-            .expect("time went backwards")
-            .as_micros()
-            < wait_until_start_hammering_us
-        {
+        let start = Instant::now();
+        while start.elapsed().as_micros() < wait_until_start_hammering_us {
             for row in rows {
                 let _ = unsafe { std::ptr::read_volatile(row) };
             }
