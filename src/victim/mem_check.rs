@@ -16,10 +16,12 @@ impl<'a> HammerVictimMemCheck<'a> {
 
 impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
     fn init(&mut self) {
+        debug!("initialize victim");
         self.memory.initialize(self.pattern.clone());
     }
 
     fn check(&mut self) -> Result<Vec<BitFlip>, HammerVictimError> {
+        debug!("check victim");
         let flips = self.memory.check(self.pattern.clone());
         if !flips.is_empty() {
             Ok(flips.clone())
