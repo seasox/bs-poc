@@ -363,7 +363,6 @@ impl<'a> Hammerer<'a> {
             hammering_addrs: hammering_addrs.to_vec(),
             program,
             mem_config,
-            rounds,
             attempts,
         })
     }
