@@ -22,6 +22,7 @@
 mod consec_blocks;
 mod consec_checker;
 mod dram_addr;
+mod hugepage;
 mod keyed_cache;
 mod memblock;
 mod pagemap_info;
@@ -36,6 +37,7 @@ pub mod mem_configuration;
 pub use self::consec_blocks::ConsecBlocks;
 pub use self::consec_checker::*;
 pub use self::dram_addr::DRAMAddr;
+pub use self::hugepage::Hugepage;
 pub use self::memblock::*;
 pub use self::pagemap_info::PageMapInfo;
 pub use self::pfn_offset::PfnOffset;
@@ -43,18 +45,15 @@ pub use self::pfn_offset_resolver::PfnOffsetResolver;
 pub use self::pfn_resolver::PfnResolver;
 pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
-use anyhow::Result;
 use rand::{rngs::StdRng, Rng};
 use serde::Serialize;
 use std::fmt::Debug;
 
-use crate::allocator::hugepage::HugepageAllocator;
 use crate::util::PAGE_SIZE;
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
 use std::{
-    alloc::{GlobalAlloc, Layout},
     arch::x86_64::{_mm_clflush, _mm_mfence},
     fmt,
 };
@@ -151,69 +150,6 @@ impl BitFlip {
 pub trait Checkable {
     fn check(&self, pattern: DataPattern) -> Vec<BitFlip>;
     fn check_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) -> Vec<BitFlip>;
-}
-
-/// A managed memory region that is allocated using HugepageAllocator
-#[derive(Debug)]
-pub struct Memory {
-    allocator: HugepageAllocator,
-    addr: AggressorPtr,
-    layout: Layout,
-}
-
-impl Memory {
-    pub fn new(size: usize) -> Result<Self> {
-        let allocator = HugepageAllocator::default();
-        let layout = Layout::from_size_align(size, 1)?;
-        if layout.size() == 0 {
-            return Err(anyhow::Error::new(MemoryError::ZeroSizeLayout));
-        }
-        let dst: *mut u8;
-        unsafe {
-            dst = allocator.alloc(layout);
-        }
-        if dst.is_null() {
-            return Err(anyhow::Error::new(MemoryError::AllocFailed));
-        }
-        // makes sure that (1) memory is initialized and (2) page map for buffer is present (for virt_to_phys)
-        unsafe { std::ptr::write_bytes(dst, 0, layout.size()) };
-        let addr = dst as AggressorPtr;
-        Ok(Memory {
-            allocator,
-            addr,
-            layout,
-        })
-    }
-}
-
-impl VictimMemory for Memory {}
-
-impl BytePointer for Memory {
-    fn addr(&self, offset: usize) -> *mut u8 {
-        assert!(
-            offset < self.layout.size(),
-            "Offset {} >= {}",
-            offset,
-            self.layout.size()
-        );
-        unsafe { self.addr.byte_add(offset) as *mut u8 }
-    }
-
-    fn ptr(&self) -> *mut u8 {
-        self.addr as *mut u8
-    }
-
-    fn len(&self) -> usize {
-        self.layout.size()
-    }
-}
-
-impl Memory {
-    pub fn dealloc(self) {
-        unsafe {
-            self.allocator.dealloc(self.addr as *mut u8, self.layout);
-        }
-    }
 }
 
 /// Blanket implementations for Initializable trait for VictimMemory
