@@ -300,7 +300,7 @@ fn hammer_profile(
 ) -> Profiling {
     let p = progress
         .as_ref()
-        .map(|p| p.add(ProgressBar::new(num_rounds)));
+        .map(|p| p.add(ProgressBar::new(num_rounds * 3)));
     let mut rounds = vec![];
 
     for round in 0..num_rounds * 3 {
