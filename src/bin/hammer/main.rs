@@ -254,6 +254,7 @@ fn make_hammer<'a>(
     block_size: usize,
     memory: &'a ConsecBlocks,
     attempts: u8,
+    check_each_attempt: bool,
 ) -> anyhow::Result<Hammerer<'a>> {
     let block_shift = block_size.ilog2();
     let hammerer: Hammerer<'a> = match hammerer {
@@ -264,6 +265,7 @@ fn make_hammer<'a>(
             block_shift as usize,
             memory,
             attempts,
+            check_each_attempt,
         )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);
@@ -393,6 +395,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             block_size,
             &memory,
             args.attempts,
+            false,
         )?;
         info!("Profiling memory for vulnerable addresses");
         info!(
@@ -415,6 +418,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             block_size,
             &memory,
             args.attempts,
+            true,
         )?;
         let profiling = hammer_profile(
             &profile_hammer,

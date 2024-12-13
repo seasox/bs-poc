@@ -290,6 +290,7 @@ pub struct Hammerer<'a> {
     mem_config: MemConfiguration,
     program: Program,
     attempts: u8,
+    check_each_attempt: bool,
 }
 
 impl<'a> Hammerer<'a> {
@@ -300,6 +301,7 @@ impl<'a> Hammerer<'a> {
         block_shift: usize,
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         attempts: u8,
+        check_each_attempt: bool,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -364,6 +366,7 @@ impl<'a> Hammerer<'a> {
             program,
             mem_config,
             attempts,
+            check_each_attempt,
         })
     }
 
@@ -416,7 +419,7 @@ impl<'a> Hammering for Hammerer<'a> {
                 debug!("Run {}: JIT call took {} cycles", attempt, time);
                 debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
             }
-            if attempt == self.attempts - 1 {
+            if self.check_each_attempt || attempt == self.attempts - 1 {
                 let result = victim.check();
                 match result {
                     Ok(victim_result) => {
