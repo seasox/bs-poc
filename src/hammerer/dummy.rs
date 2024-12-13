@@ -30,7 +30,6 @@ impl Hammering for Hammerer {
         }
         let victim_result = victim.check()?;
         Ok(HammerResult {
-            run: 0,
             attempt: 0,
             victim_result,
         })

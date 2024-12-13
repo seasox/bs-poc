@@ -53,7 +53,6 @@ pub trait Hammering {
 
 #[derive(Debug)]
 pub struct HammerResult<T> {
-    pub run: u64,
     pub attempt: u8,
     pub victim_result: T,
 }

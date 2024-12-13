@@ -289,7 +289,6 @@ pub struct Hammerer<'a> {
     hammering_addrs: Vec<AggressorPtr>,
     mem_config: MemConfiguration,
     program: Program,
-    rounds: u64,
     attempts: u8,
 }
 
@@ -300,7 +299,6 @@ impl<'a> Hammerer<'a> {
         mapping: &PatternAddressMapper,
         block_shift: usize,
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
-        rounds: u64,
         attempts: u8,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
@@ -392,58 +390,51 @@ impl<'a> Hammering for Hammerer<'a> {
     ) -> Result<HammerResult<T>, HammerVictimError> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
-
-        for run in 0..self.rounds {
-            victim.init();
-            // log PFNs of memory region
-            self.memory.log_pfns();
-            trace!("Hammering run {}", run);
-            for attempt in 0..self.attempts {
-                let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
-                let wait_until_start_hammering_us =
-                    wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
-                let target_bank =
-                    DRAMAddr::from_virt(self.hammering_addrs[0], &self.mem_config).bank;
-                let random_rows = get_random_nonaccessed_rows::<1024>(
-                    self.memory,
-                    &self.hammering_addrs,
-                    &self.mem_config,
-                    target_bank,
-                );
-                debug!(
-                    "do random memory accesses for {} us before running jitted code",
-                    wait_until_start_hammering_us as u128
-                );
-                self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128);
-                trace!("call into jitted program");
-                unsafe {
-                    let mut aux = 0;
-                    _mm_mfence();
-                    let time = __rdtscp(&mut aux);
-                    _mm_mfence();
-                    let result = self.program.call();
-                    _mm_mfence();
-                    let time = __rdtscp(&mut aux) - time;
-                    _mm_mfence();
-                    debug!("Run {};{}: JIT call took {} cycles", run, attempt, time);
-                    debug!(
-                        "jit call done: 0x{:02X} (attempt {}:{})",
-                        result, run, attempt
-                    );
-                }
+        victim.init();
+        // log PFNs of memory region
+        self.memory.log_pfns();
+        for attempt in 0..self.attempts {
+            let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
+            let wait_until_start_hammering_us =
+                wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
+            let target_bank = DRAMAddr::from_virt(self.hammering_addrs[0], &self.mem_config).bank;
+            let random_rows = get_random_nonaccessed_rows::<1024>(
+                self.memory,
+                &self.hammering_addrs,
+                &self.mem_config,
+                target_bank,
+            );
+            debug!(
+                "do random memory accesses for {} us before running jitted code",
+                wait_until_start_hammering_us as u128
+            );
+            self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128);
+            trace!("call into jitted program");
+            unsafe {
+                let mut aux = 0;
+                _mm_mfence();
+                let time = __rdtscp(&mut aux);
+                _mm_mfence();
+                let result = self.program.call();
+                _mm_mfence();
+                let time = __rdtscp(&mut aux) - time;
+                _mm_mfence();
+                debug!("Run {}: JIT call took {} cycles", attempt, time);
+                debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
             }
-            let result = victim.check();
-            match result {
-                Ok(victim_result) => {
-                    return Ok(HammerResult {
-                        run,
-                        attempt: self.attempts,
-                        victim_result,
-                    });
-                }
-                Err(HammerVictimError::NoFlips) => {}
-                Err(HammerVictimError::Error(e)) => {
-                    error!("Victim check failed: {:?}", e);
+            if attempt == self.attempts - 1 {
+                let result = victim.check();
+                match result {
+                    Ok(victim_result) => {
+                        return Ok(HammerResult {
+                            attempt,
+                            victim_result,
+                        });
+                    }
+                    Err(HammerVictimError::NoFlips) => {}
+                    Err(HammerVictimError::Error(e)) => {
+                        error!("Victim check failed: {:?}", e);
+                    }
                 }
             }
         }

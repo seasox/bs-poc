@@ -85,12 +85,6 @@ struct CliArgs {
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
     #[arg(long, default_value = "10")]
     profiling_rounds: u64,
-    /// The number of rounds to hammer per repetition.
-    /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
-    /// At the start of a round, the victim is initialized. The concrete intialization depends on the victim implementation. For example, a MemCheck
-    /// victim will initialize the memory with a random seed, while a process victim might generate a new private key for each round.
-    #[arg(long, default_value = "1")]
-    rounds: u64,
     /// The number of hammering attempts per round.
     /// An attempt denotes a single run of the hammering code. Usually, hammerers need several attempts to successfully flip a bit in the victim.
     /// The default value of 100 is a good starting point for the blacksmith hammerer.
@@ -259,7 +253,6 @@ fn make_hammer<'a>(
     mem_config: MemConfiguration,
     block_size: usize,
     memory: &'a ConsecBlocks,
-    rounds: u64,
     attempts: u8,
 ) -> anyhow::Result<Hammerer<'a>> {
     let block_shift = block_size.ilog2();
@@ -270,7 +263,6 @@ fn make_hammer<'a>(
             mapping,
             block_shift as usize,
             memory,
-            rounds,
             attempts,
         )?),
         HammerStrategy::Dummy => {
@@ -328,8 +320,8 @@ fn hammer_profile(
         let bit_flips = match result {
             Ok(result) => {
                 info!(
-                    "Profiling hammering round successful: {:?}",
-                    result.victim_result
+                    "Profiling hammering round successful at attempt {}: {:?}",
+                    result.attempt, result.victim_result
                 );
                 result.victim_result
             }
@@ -400,7 +392,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             mem_config,
             block_size,
             &memory,
-            args.rounds,
             args.attempts,
         )?;
         info!("Profiling memory for vulnerable addresses");
@@ -423,7 +414,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             mem_config,
             block_size,
             &memory,
-            1,
             args.attempts,
         )?;
         let profiling = hammer_profile(
