@@ -115,12 +115,12 @@ pub trait GetConsecPfns {
         let pfns = match self.consec_pfns() {
             Ok(pfns) => pfns,
             Err(e) => {
-                error!("Failed to get PFNs: {:?}", e);
+                warn!("Failed to get PFNs: {:?}", e);
                 return;
             }
         };
         let pfns = pfns.format_pfns();
-        info!("PFNs:\n{}", pfns);
+        debug!("PFNs:\n{}", pfns);
     }
 }
 
