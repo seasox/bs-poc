@@ -385,6 +385,7 @@ impl<'a> Hammering for Hammerer<'a> {
         &self,
         victim: &mut dyn HammerVictim<T>,
     ) -> Result<HammerResult<T>, HammerVictimError> {
+        info!("Hammering with {} attempts", self.attempts);
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
         victim.init();
@@ -423,6 +424,7 @@ impl<'a> Hammering for Hammerer<'a> {
                 let result = victim.check();
                 match result {
                     Ok(victim_result) => {
+                        info!("Hammering done after {} attempts", attempt);
                         return Ok(HammerResult {
                             attempt,
                             victim_result,
@@ -435,6 +437,7 @@ impl<'a> Hammering for Hammerer<'a> {
                 }
             }
         }
+        info!("Hammering done. No flips found.");
         Err(HammerVictimError::NoFlips)
     }
 }
