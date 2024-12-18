@@ -129,11 +129,21 @@ pub trait Initializable {
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]);
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Serialize)]
 pub struct BitFlip {
     pub addr: usize,
     pub bitmask: u8,
     pub data: u8,
+}
+
+impl core::fmt::Debug for BitFlip {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BitFlip")
+            .field("addr", &format_args!("{:#x}", self.addr))
+            .field("bitmask", &format_args!("{:#x}", self.bitmask))
+            .field("data", &format_args!("{:#x}", self.data))
+            .finish()
+    }
 }
 
 impl BitFlip {
