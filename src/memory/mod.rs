@@ -233,7 +233,9 @@ where
         for offset in (0..len).step_by(PAGE_SIZE) {
             let expected: [u8; PAGE_SIZE] = f(offset);
             unsafe {
-                _mm_clflush(self.addr(offset));
+                for byte_offset in (0..PAGE_SIZE).step_by(CL_SIZE) {
+                    _mm_clflush(self.addr(offset + byte_offset));
+                }
                 _mm_mfence();
                 let cmp = memcmp(
                     self.addr(offset) as *const c_void,
