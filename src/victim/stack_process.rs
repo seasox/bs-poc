@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::bail;
+use libc::sched_getcpu;
 use pagemap::MapsEntry;
 
 use crate::{
@@ -38,6 +39,38 @@ pub struct InjectionConfig {
     pub bait_count_before: usize,
 }
 
+fn set_process_affinity(pid: libc::pid_t, core_id: usize) {
+    use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
+
+    unsafe {
+        let mut cpuset: cpu_set_t = std::mem::zeroed();
+        CPU_ZERO(&mut cpuset);
+        CPU_SET(core_id, &mut cpuset);
+
+        let result = sched_setaffinity(pid, std::mem::size_of::<cpu_set_t>(), &cpuset);
+        if result != 0 {
+            eprintln!(
+                "Failed to set process affinity: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+}
+
+fn get_current_core() -> usize {
+    unsafe {
+        let core_id = sched_getcpu();
+        if core_id < 0 {
+            panic!(
+                "Failed to get current core: {}",
+                std::io::Error::last_os_error()
+            );
+        } else {
+            core_id as usize
+        }
+    }
+}
+
 impl StackProcess {
     /// Create a new `StackProcess` victim.
     ///
@@ -55,8 +88,11 @@ impl StackProcess {
             } else {
                 null_mut()
             };
+        set_process_affinity(unsafe { libc::getpid() }, get_current_core());
         let target_pfn = injection_config.flippy_page.pfn().unwrap_or_default() >> 12;
-        let mut cmd = std::process::Command::new(target.first().expect("No target provided"));
+        let mut cmd = std::process::Command::new("taskset");
+        cmd.arg("-c").arg(get_current_core().to_string());
+        cmd.arg(target.first().expect("No target provided"));
         cmd.args(target[1..].to_vec());
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
@@ -107,6 +143,10 @@ impl StackProcess {
 
         // todo: maybe check injection (prime+probe?)
         std::thread::sleep(Duration::from_millis(100));
+        let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+        let target_core = (get_current_core() + 1) % num_cores as usize;
+        info!("Pinning child to core {}", target_core);
+        set_process_affinity(child.id() as libc::pid_t, target_core);
         let flippy_page = match find_flippy_page(target_pfn, child.id()) {
             Ok(Some(flippy_page)) => {
                 info!("Flippy page reused in region {:?}", flippy_page);
@@ -125,6 +165,12 @@ impl StackProcess {
         if let Some(flippy_page) = &flippy_page {
             if flippy_page.maps_entry.path() != Some("[stack]") {
                 bail!("Flippy page not in stack");
+            }
+            if flippy_page.region_offset != 31 {
+                bail!(
+                    "Wrong flippy page offset in region: expected 31, got {}",
+                    flippy_page.region_offset
+                );
             }
         }
         let pipe = piped_channel(&mut child)?;
