@@ -47,16 +47,15 @@ pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
 use rand::{rngs::StdRng, Rng};
 use serde::Serialize;
+use std::arch::x86_64::_mm_clflush;
 use std::fmt::Debug;
+use std::io::BufWriter;
 
-use crate::util::PAGE_SIZE;
+use crate::util::{CL_SIZE, PAGE_SIZE, ROW_SIZE};
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
-use std::{
-    arch::x86_64::{_mm_clflush, _mm_mfence},
-    fmt,
-};
+use std::{arch::x86_64::_mm_mfence, fmt};
 
 #[derive(Debug)]
 pub enum MemoryError {
@@ -82,6 +81,23 @@ pub trait BytePointer {
     fn addr(&self, offset: usize) -> *mut u8;
     fn ptr(&self) -> *mut u8;
     fn len(&self) -> usize;
+
+    fn dump(&self, file: &str) -> std::io::Result<()> {
+        use std::fs::File;
+        use std::io::Write;
+        let file = File::create(file)?;
+        let mut writer = BufWriter::new(file);
+        for offset in (0..self.len()).step_by(ROW_SIZE) {
+            for byte_offset in 0..ROW_SIZE {
+                write!(writer, "{:02x}", unsafe {
+                    *self.addr(offset + byte_offset)
+                })?;
+            }
+            writer.write_all(b"\n")?;
+        }
+        writer.flush()?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
