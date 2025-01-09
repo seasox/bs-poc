@@ -23,7 +23,7 @@ pub struct PipeIPC<R: Read, W: Write> {
     output: W,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum AttackState {
     AttackerReady = 1,
     VictimAllocReady = 2,
@@ -58,6 +58,7 @@ impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
     fn send(&mut self, msg: u8) -> anyhow::Result<()> {
         debug!("Sending message {:?}", msg);
         let success = self.output.write(&[msg]);
+        debug!("Sent message {:?}", msg);
         match success {
             Ok(nbytes) => {
                 if nbytes != 1 {
@@ -70,9 +71,11 @@ impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
         }
     }
     fn receive(&mut self) -> anyhow::Result<String> {
+        debug!("Receiving message");
         let mut reader = BufReader::new(&mut self.input);
         let mut line = String::new();
         let bytes_read = reader.read_line(&mut line)?;
+        debug!("Received message '{:?}'", line);
         if bytes_read == 0 {
             bail!("EOF reached");
         }
@@ -87,12 +90,14 @@ impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
 
 impl<R: Read, W: Write> IPC<AttackState, AttackState> for PipeIPC<R, W> {
     fn send(&mut self, msg: AttackState) -> anyhow::Result<()> {
+        debug!("Sending message {:?}", msg);
         let success = self.output.write(&[msg as u8]);
         match success {
             Ok(nbytes) => {
                 if nbytes != 1 {
                     bail!("write failed: wrote {} bytes", nbytes);
                 }
+                debug!("Sent message {:?}", msg);
                 self.output.flush()?;
                 Ok(())
             }
@@ -100,8 +105,10 @@ impl<R: Read, W: Write> IPC<AttackState, AttackState> for PipeIPC<R, W> {
         }
     }
     fn receive(&mut self) -> anyhow::Result<AttackState> {
+        debug!("Receiving message");
         let mut buf = [0u8; 1];
         let success = self.input.read(&mut buf);
+        debug!("Received message {:?}", buf);
         if success.is_err() {
             bail!("read failed: {:?}", success.err().unwrap());
         }
