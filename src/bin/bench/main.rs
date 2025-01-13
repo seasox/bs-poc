@@ -6,22 +6,15 @@ use std::{
 
 use anyhow::bail;
 use bs_poc::{
-    allocator::{
-        self, hugepage::HugepageAllocator, BuddyInfo, CoCo, ConsecAlloc, ConsecAllocator,
-        HugepageRandomized, Mmap, Pfn, Spoiler,
-    },
+    allocator::{self, ConsecAlloc, ConsecAllocator},
     hammerer::{
         blacksmith::{
             blacksmith_config::BlacksmithConfig,
             hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
-            jitter::AggressorPtr,
         },
-        make_hammer, HammerStrategy, Hammerer, Hammering,
+        make_hammer, HammerStrategy, Hammering,
     },
-    memory::{
-        mem_configuration::MemConfiguration, BitFlip, ConsecBlocks, ConsecCheck,
-        ConsecCheckBankTiming, DataPattern,
-    },
+    memory::{mem_configuration::MemConfiguration, BitFlip, DataPattern},
     retry, victim,
 };
 use clap::Parser;
@@ -56,53 +49,6 @@ struct CliArgs {
     /// The number of rounds for benchmarking
     #[arg(long, default_value = "1000")]
     repeat: usize,
-}
-
-/// The type of allocation strategy to use.
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum AllocStrategy {
-    /// Use `/proc/buddyinfo` to monitor availability of page orders, assume consecutive memory according to the delta in buddyinfo.
-    BuddyInfo,
-    // Allocate using the CoCo dec mem module: https://git.its.uni-luebeck.de/research-projects/tdx/kmod-coco-dec-mem
-    CoCo,
-    /// Allocate consecutive memory using huge pages.
-    Hugepage,
-    /// Allocate consecutive memory using huge pages with randomization. This will return random 4 MB chunks of a 1 GB hugepage.
-    HugepageRnd,
-    /// Allocate consecutive memory using `bank timing`. This will `mmap` a large buffer and find consecutive memory using bank timing check
-    BankTiming,
-    /// Allocate a large block of memory and use pagemap to find consecutive blocks
-    Pfn,
-    /// Allocate consecutive memory using the Spoiler attack. This strategy will measure read-after-write pipeline conflicts to determine consecutive memory.
-    Spoiler,
-}
-
-impl AllocStrategy {
-    fn create_allocator(
-        &self,
-        mem_config: MemConfiguration,
-        conflict_threshold: u64,
-        progress: Option<MultiProgress>,
-    ) -> allocator::ConsecAlloc {
-        match self {
-            AllocStrategy::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(
-                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
-            )),
-            AllocStrategy::CoCo => ConsecAlloc::CoCo(CoCo {}),
-            AllocStrategy::BankTiming => ConsecAlloc::Mmap(Mmap::new(
-                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
-                progress,
-            )),
-            AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
-            AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-            AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::default()),
-            AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(
-                mem_config,
-                conflict_threshold,
-                progress,
-            ))),
-        }
-    }
 }
 
 fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
@@ -206,7 +152,8 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     info!("Args: {:?}", args);
 
-    let mut alloc_strategy = ConsecAlloc::Pfn(Pfn::default());
+    let mut alloc_strategy =
+        ConsecAlloc::Hugepage(allocator::hugepage::HugepageAllocator::default());
     let block_size = alloc_strategy.block_size();
 
     let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
@@ -230,12 +177,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         &memory,
         50,
         true,
-    )?;
-    let aggressors = pattern.mapping.get_hammering_addresses_relocate(
-        &pattern.pattern.access_ids,
-        mem_config,
-        block_size.ilog2() as usize,
-        &memory,
     )?;
     let p = progress.add(ProgressBar::new(2000));
     let pattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
