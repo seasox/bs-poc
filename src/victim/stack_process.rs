@@ -13,7 +13,7 @@ use pagemap::MapsEntry;
 
 use crate::{
     allocator::util::{mmap, munmap},
-    memory::{PageMapInfo, PfnResolver},
+    memory::PageMapInfo,
     util::{find_pattern, PipeIPC, IPC, PAGE_SIZE},
     victim::process::piped_channel,
 };
@@ -89,7 +89,6 @@ impl StackProcess {
                 null_mut()
             };
         set_process_affinity(unsafe { libc::getpid() }, get_current_core());
-        let target_pfn = injection_config.flippy_page.pfn().unwrap_or_default() >> 12;
         let mut cmd = std::process::Command::new("taskset");
         cmd.arg("-c").arg(get_current_core().to_string());
         cmd.arg(target.first().expect("No target provided"));
@@ -138,6 +137,8 @@ impl StackProcess {
             Some(handle)
         } else {
             eprintln!("Failed to capture stderr");
+            child.kill().expect("kill");
+            child.wait().expect("wait");
             None
         };
 
@@ -147,38 +148,11 @@ impl StackProcess {
         let target_core = (get_current_core() + 1) % num_cores as usize;
         info!("Pinning child to core {}", target_core);
         set_process_affinity(child.id() as libc::pid_t, target_core);
-        let flippy_page = match find_flippy_page(target_pfn, child.id()) {
-            Ok(Some(flippy_page)) => {
-                info!("Flippy page reused in region {:?}", flippy_page);
-                Some(flippy_page)
-            }
-            Ok(None) => {
-                child.kill().expect("kill");
-                child.wait().expect("wait");
-                bail!("Flippy page not reused");
-            }
-            Err(e) => {
-                warn!("Error while checking flippy page reuse: {}", e);
-                None
-            }
-        };
-        if let Some(flippy_page) = &flippy_page {
-            if flippy_page.maps_entry.path() != Some("[stack]") {
-                bail!("Flippy page not in stack");
-            }
-            if flippy_page.region_offset != 31 {
-                bail!(
-                    "Wrong flippy page offset in region: expected 31, got {}",
-                    flippy_page.region_offset
-                );
-            }
-        }
         let pipe = piped_channel(&mut child)?;
         Ok(Self {
             child,
             pipe,
             stderr_logger,
-            _flippy_page: flippy_page,
         })
     }
 
@@ -276,17 +250,13 @@ impl HammerVictim<String> for StackProcess {
 
     fn check(&mut self) -> Result<String, HammerVictimError> {
         self.pipe
-            .wait_for("press enter to start check".to_string())
-            .map_err(HammerVictimError::Error)?;
-        self.pipe.send(b'\n').map_err(HammerVictimError::Error)?;
-        let resp: String = self.pipe.receive().map_err(HammerVictimError::Error)?;
+            .wait_for("press enter to start check".to_string())?;
+        self.pipe.send(b'\n')?;
+        let resp: String = self.pipe.receive().map_err(HammerVictimError::IoError)?;
         if resp.starts_with("FLIPPED") {
             Ok(resp)
         } else {
-            Err(HammerVictimError::Error(anyhow::format_err!(
-                "Expected FLIPPED, got {}",
-                resp
-            )))
+            Err(HammerVictimError::NoFlips)
         }
     }
 
@@ -303,11 +273,7 @@ impl HammerVictim<String> for StackProcess {
 mod tests {
     use std::ptr::null_mut;
 
-    use crate::{
-        allocator::util::mmap,
-        util::PAGE_SIZE,
-        victim::{HammerVictim, HammerVictimError},
-    };
+    use crate::{allocator::util::mmap, util::PAGE_SIZE, victim::HammerVictim};
 
     #[test]
     fn test_stack_process() -> anyhow::Result<()> {
@@ -323,12 +289,7 @@ mod tests {
         for _ in 0..10 {
             stack_process.init();
             let resp = stack_process.check();
-            assert!(resp.is_err());
-            if let Err(HammerVictimError::Error(e)) = resp {
-                assert_eq!(e.to_string(), "Expected FLIPPED, got no flips");
-            } else {
-                panic!("Expected HammerVictimError::Error");
-            }
+            assert!(matches!(resp, Err(super::HammerVictimError::NoFlips)));
         }
         Ok(())
     }

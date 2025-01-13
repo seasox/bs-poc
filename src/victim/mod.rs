@@ -5,14 +5,18 @@ pub mod mem_check;
 pub mod process;
 pub mod stack_process;
 
+use thiserror::Error;
+
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::process::VictimProcess as Process;
 pub use self::stack_process::StackProcess;
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum HammerVictimError {
+    #[error("No flips detected")]
     NoFlips,
-    Error(anyhow::Error),
+    #[error("Error: {0}")]
+    IoError(#[from] std::io::Error),
 }
 
 /// The HammerVictim trait. A victim must implement this trait to be used as a target for the hammer attack.

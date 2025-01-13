@@ -431,8 +431,8 @@ impl<'a> Hammering for Hammerer<'a> {
                         });
                     }
                     Err(HammerVictimError::NoFlips) => {}
-                    Err(HammerVictimError::Error(e)) => {
-                        error!("Victim check failed: {:?}", e);
+                    Err(HammerVictimError::IoError(e)) => {
+                        return Err(HammerVictimError::IoError(e))
                     }
                 }
             }

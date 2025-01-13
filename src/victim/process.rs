@@ -35,7 +35,7 @@ impl HammerVictim<String> for VictimProcess {
             .send(AttackState::AttackerHammerDone)
             .expect("send");
         info!("Reading pipe");
-        let state: AttackState = self.pipe.receive().map_err(HammerVictimError::Error)?;
+        let state: AttackState = self.pipe.receive().map_err(HammerVictimError::IoError)?;
         info!("Received state: {:?}", state);
         if state == AttackState::VictimHammerSuccess {
             Ok("Success".to_string())

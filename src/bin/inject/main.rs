@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
                 let output = match victim.check() {
                     Ok(output) => output,
                     Err(HammerVictimError::NoFlips) => "No flips".to_string(),
-                    Err(HammerVictimError::Error(e)) => e.to_string(),
+                    Err(HammerVictimError::IoError(e)) => e.to_string(),
                 };
                 if output.contains(&format!("{:x}", target_pfn)) {
                     bail!("YES MAN: {},{}", bait_before, bait_after);

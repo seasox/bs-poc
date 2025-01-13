@@ -1,17 +1,17 @@
 use std::io::{BufRead, BufReader, Read, Write};
 
-use anyhow::bail;
-
-use super::Anyhow;
-
 pub trait IPC<T: Eq + std::fmt::Debug, U: Eq + std::fmt::Debug> {
-    fn send(&mut self, msg: T) -> anyhow::Result<()>;
-    fn receive(&mut self) -> anyhow::Result<U>;
-    fn wait_for(&mut self, msg: U) -> anyhow::Result<U> {
+    fn send(&mut self, msg: T) -> Result<(), std::io::Error>;
+    fn receive(&mut self) -> Result<U, std::io::Error>;
+    fn wait_for(&mut self, msg: U) -> Result<U, std::io::Error> {
         debug!("Waiting for message {:?}", msg);
         let r = self.receive()?;
         if r != msg {
-            bail!("Expected message {:?}, got {:?}", msg, r);
+            error!("Expected message {:?}, got {:?}", msg, r);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Expected message {:?}, got {:?}", msg, r),
+            ));
         }
         debug!("Received message {:?}", r);
         Ok(r)
@@ -55,33 +55,38 @@ impl<R: Read, W: Write> PipeIPC<R, W> {
 }
 
 impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
-    fn send(&mut self, msg: u8) -> anyhow::Result<()> {
+    fn send(&mut self, msg: u8) -> Result<(), std::io::Error> {
         debug!("Sending message {:?}", msg);
-        let success = self.output.write(&[msg]);
-        debug!("Sent message {:?}", msg);
-        match success {
-            Ok(nbytes) => {
-                if nbytes != 1 {
-                    bail!("write failed: wrote {} bytes", nbytes);
-                }
-                self.output.flush()?;
-                Ok(())
-            }
-            Err(e) => bail!("write failed: {:?}", e),
+        let nbytes = self.output.write(&[msg])?;
+        if nbytes != 1 {
+            error!("Failed to write message {:?}. Wrote {} bytes", msg, nbytes);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!("Failed to write message {:?}. Wrote {} bytes", msg, nbytes),
+            ));
         }
+        debug!("Sent message {:?}", msg);
+        self.output.flush()?;
+        Ok(())
     }
-    fn receive(&mut self) -> anyhow::Result<String> {
+    fn receive(&mut self) -> Result<String, std::io::Error> {
         debug!("Receiving message");
         let mut reader = BufReader::new(&mut self.input);
         let mut line = String::new();
         let bytes_read = reader.read_line(&mut line)?;
         debug!("Received message '{:?}'", line);
         if bytes_read == 0 {
-            bail!("EOF reached");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Zero bytes read",
+            ));
         }
         // Remove the trailing newline character if it exists.
         if !line.ends_with('\n') {
-            bail!("line does not end with newline");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "No newline character found",
+            ));
         }
         line.pop();
         Ok(line)
@@ -89,30 +94,33 @@ impl<R: Read, W: Write> IPC<u8, String> for PipeIPC<R, W> {
 }
 
 impl<R: Read, W: Write> IPC<AttackState, AttackState> for PipeIPC<R, W> {
-    fn send(&mut self, msg: AttackState) -> anyhow::Result<()> {
+    fn send(&mut self, msg: AttackState) -> Result<(), std::io::Error> {
         debug!("Sending message {:?}", msg);
-        let success = self.output.write(&[msg as u8]);
-        match success {
-            Ok(nbytes) => {
-                if nbytes != 1 {
-                    bail!("write failed: wrote {} bytes", nbytes);
-                }
-                debug!("Sent message {:?}", msg);
-                self.output.flush()?;
-                Ok(())
-            }
-            Err(e) => bail!("write failed: {:?}", e),
+        let nbytes = self.output.write(&[msg as u8])?;
+        if nbytes != 1 {
+            error!("Failed to write message {:?}. Wrote {} bytes", msg, nbytes);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WriteZero,
+                format!("Failed to write message {:?}. Wrote {} bytes", msg, nbytes),
+            ));
         }
+        debug!("Sent message {:?}", msg);
+        self.output.flush()?;
+        Ok(())
     }
-    fn receive(&mut self) -> anyhow::Result<AttackState> {
+    fn receive(&mut self) -> Result<AttackState, std::io::Error> {
         debug!("Receiving message");
         let mut buf = [0u8; 1];
-        let success = self.input.read(&mut buf);
-        debug!("Received message {:?}", buf);
-        if success.is_err() {
-            bail!("read failed: {:?}", success.err().unwrap());
+        let nbytes = self.input.read(&mut buf)?;
+        if nbytes != 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "Failed to read message",
+            ));
         }
-        AttackState::try_from(buf[0]).anyhow()
+        debug!("Received message {:?}", buf);
+        AttackState::try_from(buf[0])
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
     }
 }
 

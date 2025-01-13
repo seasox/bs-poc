@@ -521,15 +521,19 @@ unsafe fn _main() -> anyhow::Result<()> {
         };
         match victim {
             Some(mut victim) => {
-                for _ in 0..100 {
+                loop {
                     let result = hammer.hammer(&mut victim);
                     match result {
                         Ok(result) => {
                             info!("Hammering successful: {:?}", result.victim_result);
                             return Ok(());
                         }
+                        Err(HammerVictimError::NoFlips) => {
+                            warn!("No flips detected");
+                        }
                         Err(e) => {
-                            warn!("Hammering not successful: {:?}", e);
+                            warn!("Hammering failed: {:?}", e);
+                            break;
                         }
                     }
                 }
