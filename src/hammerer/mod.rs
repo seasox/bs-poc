@@ -21,14 +21,63 @@
 pub mod blacksmith;
 pub mod dummy;
 
-use crate::victim::{HammerVictim, HammerVictimError};
+use crate::{
+    memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks},
+    victim::{HammerVictim, HammerVictimError},
+};
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
+use blacksmith::hammerer::{HammeringPattern, PatternAddressMapper};
 pub use dummy::Hammerer as Dummy;
+
+/// The hammering strategy to use.
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum HammerStrategy {
+    /// Use a dummy hammerer. This hammerer flips a bit at a fixed offset.
+    Dummy,
+    /// Use the blacksmith hammerer. This hammerer uses the pattern and mapping determined by `blacksmith` to hammer the target.
+    Blacksmith,
+}
 
 #[allow(clippy::large_enum_variant)]
 pub enum Hammerer<'a> {
     Blacksmith(Blacksmith<'a>),
     Dummy(Dummy),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn make_hammer<'a>(
+    hammerer: &HammerStrategy,
+    pattern: &HammeringPattern,
+    mapping: &PatternAddressMapper,
+    mem_config: MemConfiguration,
+    block_size: usize,
+    memory: &'a ConsecBlocks,
+    attempts: u8,
+    check_each_attempt: bool,
+) -> anyhow::Result<Hammerer<'a>> {
+    let block_shift = block_size.ilog2();
+    let hammerer: Hammerer<'a> = match hammerer {
+        HammerStrategy::Blacksmith => Hammerer::Blacksmith(Blacksmith::new(
+            mem_config,
+            pattern,
+            mapping,
+            block_shift as usize,
+            memory,
+            attempts,
+            check_each_attempt,
+        )?),
+        HammerStrategy::Dummy => {
+            let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);
+            let flip = flip.concat().pop().unwrap_or(memory.blocks[0].addr(0x42)) as *mut u8;
+            info!(
+                "Running dummy hammerer with flip at VA 0x{:02x}",
+                flip as usize
+            );
+            let hammerer = Dummy::new(flip);
+            Hammerer::Dummy(hammerer)
+        }
+    };
+    Ok(hammerer)
 }
 
 impl Hammering for Hammerer<'_> {

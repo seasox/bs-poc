@@ -278,3 +278,14 @@ where
         ret
     }
 }
+
+#[test]
+fn test_pattern_random_clone() -> anyhow::Result<()> {
+    let pattern = DataPattern::Random(Box::new(<StdRng as rand::SeedableRng>::from_seed(
+        rand::random(),
+    )));
+    let a = pattern.clone().get(std::ptr::null());
+    let b = pattern.clone().get(std::ptr::null());
+    assert_eq!(a, b);
+    Ok(())
+}

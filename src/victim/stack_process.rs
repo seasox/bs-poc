@@ -24,7 +24,6 @@ pub struct StackProcess {
     child: std::process::Child,
     pipe: PipeIPC<ChildStdout, ChildStdin>,
     stderr_logger: Option<thread::JoinHandle<()>>,
-    _flippy_page: Option<FlippyPage>,
 }
 
 /// The injection configuration.
@@ -177,14 +176,14 @@ fn read_memory_from_proc(pid: u32, va: u64, size: u64) -> std::io::Result<Vec<u8
 }
 
 #[derive(Debug)]
-struct FlippyPage {
+pub struct FlippyPage {
     #[allow(dead_code)]
-    maps_entry: MapsEntry,
+    pub maps_entry: MapsEntry,
     #[allow(dead_code)]
-    region_offset: usize, // page offset in the region
+    pub region_offset: usize, // page offset in the region
 }
 
-fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
+pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
     let pmap = PageMapInfo::load(pid as u64)?.0;
     let mut flippy_region = None;
     for (map, pagemap) in pmap {
