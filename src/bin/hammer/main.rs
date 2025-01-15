@@ -10,7 +10,7 @@ use std::{
 use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
-    hammerer::{blacksmith::jitter::AggressorPtr, make_hammer, HammerStrategy},
+    hammerer::{make_hammer, HammerStrategy},
     memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     util::PAGE_SHIFT,
     victim::{stack_process::find_flippy_page, HammerVictimError},
@@ -356,12 +356,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 .mapping
                 .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
         );
-        let aggressors = pattern.mapping.get_hammering_addresses_relocate(
-            &pattern.pattern.access_ids,
-            mem_config,
-            block_size.ilog2() as usize,
-            &memory,
-        )?;
         let profile_hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
