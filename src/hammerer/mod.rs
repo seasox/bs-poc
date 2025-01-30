@@ -54,6 +54,7 @@ pub fn make_hammer<'a>(
     memory: &'a ConsecBlocks,
     attempts: u8,
     check_each_attempt: bool,
+    read_all_pages_except: Option<Vec<*const u8>>, // read all rows (except victim) after hammering
 ) -> anyhow::Result<Hammerer<'a>> {
     let block_shift = block_size.ilog2();
     let hammerer: Hammerer<'a> = match hammerer {
@@ -65,6 +66,7 @@ pub fn make_hammer<'a>(
             memory,
             attempts,
             check_each_attempt,
+            read_all_pages_except,
         )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);

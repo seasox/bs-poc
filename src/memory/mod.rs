@@ -145,7 +145,7 @@ pub trait Initializable {
     fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]);
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Serialize, PartialEq, Eq, Hash)]
 pub struct BitFlip {
     pub addr: usize,
     pub bitmask: u8,

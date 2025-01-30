@@ -15,11 +15,13 @@ use bs_poc::{
         make_hammer, HammerStrategy, Hammering,
     },
     memory::{mem_configuration::MemConfiguration, BitFlip, DataPattern},
-    retry, victim,
+    retry,
+    victim::{self},
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
 use indicatif_log_bridge::LogWrapper;
+use itertools::Itertools;
 use log::{info, warn};
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -158,28 +160,61 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
 
-    let hammerer = make_hammer(
+    let profile_hammer = make_hammer(
         &args.hammerer,
         &pattern.pattern,
         &pattern.mapping,
+        mem_config,
+        block_size,
+        &memory,
+        255,
+        true,
+        None,
+    )?;
+    let p = progress.add(ProgressBar::new(args.repeat as u64 * 2));
+    let dpattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
+
+    // find affected locations (for targetted checks)
+    let results = (0..10)
+        .map(|_| {
+            let mut victim = victim::MemCheck::new(&memory, dpattern.clone());
+            profile_hammer.hammer(&mut victim)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    info!("Affected locations: {:?}", results);
+    let flips: Vec<BitFlip> = results
+        .into_iter()
+        .flat_map(|r| r.victim_result)
+        .unique_by(|f| f.addr)
+        .collect();
+
+    let hammerer = make_hammer(
+        &args.hammerer,
+        &pattern.pattern.clone(),
+        &pattern.mapping.clone(),
         mem_config,
         block_size,
         &memory,
         50,
         false,
+        Some(
+            flips
+                .iter()
+                .map(|f| (f.addr & !0x1fff) as *const u8)
+                .collect::<Vec<_>>(),
+        ),
     )?;
     let each_attempt_hammerer = make_hammer(
         &args.hammerer,
-        &pattern.pattern,
-        &pattern.mapping,
+        &pattern.pattern.clone(),
+        &pattern.mapping.clone(),
         mem_config,
         block_size,
         &memory,
         50,
         true,
+        None,
     )?;
-    let p = progress.add(ProgressBar::new(2000));
-    let pattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
     for (idx, hammerer) in [each_attempt_hammerer, hammerer].iter().enumerate() {
         println!(
             "{}",
@@ -192,7 +227,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         for _ in 0..args.repeat {
             p.inc(1);
             let start = std::time::Instant::now();
-            let mut victim = victim::MemCheck::new(&memory, pattern.clone());
+            let mut victim = victim::TargetCheck::new(&memory, dpattern.clone(), flips.clone());
             let result = hammerer.hammer(&mut victim);
             let duration = std::time::Instant::now() - start;
             let bit_flips = match result {
@@ -201,18 +236,18 @@ unsafe fn _main() -> anyhow::Result<()> {
                         "Profiling hammering round successful at attempt {}: {:?}",
                         result.attempt, result.victim_result
                     );
-                    result.victim_result
+                    Some(result.victim_result)
                 }
                 Err(e) => {
                     warn!("Profiling hammering round not successful: {:?}", e);
-                    vec![]
+                    None
                 }
             };
             println!(
                 "{:?}",
                 RoundProfile {
-                    bit_flips,
-                    pattern: pattern.clone(),
+                    bit_flips: bit_flips.unwrap_or_default(),
+                    pattern: dpattern.clone(),
                     duration
                 }
             );

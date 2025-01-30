@@ -8,6 +8,7 @@ pub mod stack_process;
 use thiserror::Error;
 
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
+pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
 pub use self::process::VictimProcess as Process;
 pub use self::stack_process::StackProcess;
 
