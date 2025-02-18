@@ -219,6 +219,7 @@ dependencies = [
  "anyhow",
  "bindgen",
  "cc",
+ "chrono",
  "clap",
  "csv",
  "ctrlc",
@@ -279,15 +280,17 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.26"
+version = "0.4.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec837a71355b28f6556dbd569b37b3f363091c0bd4b2e735674521b4c5fd9bc5"
+checksum = "7e36cc9d416881d2e24f9a963be5fb1cd90966419ac844274161d10488b3e825"
 dependencies = [
  "android-tzdata",
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
- "winapi",
+ "wasm-bindgen",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
