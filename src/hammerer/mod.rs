@@ -28,9 +28,10 @@ use crate::{
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 use blacksmith::hammerer::{HammeringPattern, PatternAddressMapper};
 pub use dummy::Hammerer as Dummy;
+use serde::Serialize;
 
 /// The hammering strategy to use.
-#[derive(clap::ValueEnum, Clone, Debug)]
+#[derive(clap::ValueEnum, Clone, Debug, Serialize)]
 pub enum HammerStrategy {
     /// Use a dummy hammerer. This hammerer flips a bit at a fixed offset.
     Dummy,
@@ -52,7 +53,7 @@ pub fn make_hammer<'a>(
     mem_config: MemConfiguration,
     block_size: usize,
     memory: &'a ConsecBlocks,
-    attempts: u8,
+    attempts: u32,
     check_each_attempt: bool,
     read_all_pages_except: Option<Vec<*const u8>>, // read all rows (except victim) after hammering
 ) -> anyhow::Result<Hammerer<'a>> {
@@ -104,6 +105,6 @@ pub trait Hammering {
 
 #[derive(Debug)]
 pub struct HammerResult<T> {
-    pub attempt: u8,
+    pub attempt: u32,
     pub victim_result: T,
 }

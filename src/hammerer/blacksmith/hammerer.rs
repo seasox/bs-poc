@@ -289,7 +289,7 @@ pub struct Hammerer<'a> {
     hammering_addrs: Vec<AggressorPtr>,
     mem_config: MemConfiguration,
     program: Program,
-    attempts: u8,
+    attempts: u32,
     check_each_attempt: bool,
     read_pages: Option<Vec<*const u8>>,
 }
@@ -301,7 +301,7 @@ impl<'a> Hammerer<'a> {
         mapping: &PatternAddressMapper,
         block_shift: usize,
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
-        attempts: u8,
+        attempts: u32,
         check_each_attempt: bool,
         read_all_pages_except: Option<Vec<*const u8>>,
     ) -> Result<Self> {
