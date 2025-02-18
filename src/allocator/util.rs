@@ -66,7 +66,14 @@ pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
 /// * `len` must be less than or equal the length as the memory region previously allocated by `mmap`
 pub unsafe fn munmap<P>(addr: *mut P, len: usize) {
     let r = libc::munmap(addr as *mut libc::c_void, len);
-    assert_eq!(r, 0, "munmap: {}", std::io::Error::last_os_error());
+    assert_eq!(
+        r,
+        0,
+        "munmap({:x}, {}): {}",
+        addr as usize,
+        len,
+        std::io::Error::last_os_error()
+    );
 }
 
 /// Spawn a thread that periodically writes 0s to the allocated memory blocks.
