@@ -4,3 +4,9 @@
 .venv
 /log
 .idea
+/results
+/faulted_sigs
+__pycache__
+/hammer.log
+/hammer.txt
+/sigs.txt
