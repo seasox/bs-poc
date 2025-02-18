@@ -22,6 +22,7 @@
 mod consec_blocks;
 mod consec_checker;
 mod dram_addr;
+mod flippy_page;
 mod hugepage;
 mod keyed_cache;
 mod memblock;
@@ -37,6 +38,7 @@ pub mod mem_configuration;
 pub use self::consec_blocks::ConsecBlocks;
 pub use self::consec_checker::*;
 pub use self::dram_addr::DRAMAddr;
+pub use self::flippy_page::{find_flippy_page, FlippyPage};
 pub use self::hugepage::Hugepage;
 pub use self::memblock::*;
 pub use self::pagemap_info::PageMapInfo;

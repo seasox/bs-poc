@@ -10,7 +10,6 @@ use thiserror::Error;
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
 pub use self::process::VictimProcess as Process;
-pub use self::stack_process::StackProcess;
 
 #[derive(Error, Debug)]
 pub enum HammerVictimError {
@@ -25,6 +24,8 @@ pub enum HammerVictimError {
 /// The trait provides methods to initialize the victim, check if the hammering was successful, and log the report.
 ///
 pub trait HammerVictim<T> {
+    /// start the victim. This methos is called once
+    fn start(&mut self) {}
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self) {}
     /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.

@@ -1,20 +1,18 @@
 use std::{
-    fs::OpenOptions,
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
+    fs::File,
+    io::{BufRead, BufReader},
     process::{ChildStdin, ChildStdout},
     ptr::null_mut,
     thread,
     time::Duration,
 };
 
-use anyhow::bail;
 use libc::sched_getcpu;
-use pagemap::MapsEntry;
+use serde::Serialize;
 
 use crate::{
     allocator::util::{mmap, munmap},
-    memory::PageMapInfo,
-    util::{find_pattern, PipeIPC, IPC, PAGE_SIZE},
+    util::{PipeIPC, IPC, PAGE_SIZE},
     victim::process::piped_channel,
 };
 
@@ -70,13 +68,27 @@ fn get_current_core() -> usize {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct StackProcessHammerResult {
+    pipe_response: String,
+    signatures: Vec<String>,
+}
+
+// TODO rename to `SphincsPlus`
 impl StackProcess {
     /// Create a new `StackProcess` victim.
     ///
     /// # Arguments
-    /// - `target`: The path to the target binary and args.
+    /// - `binary`: The path to the target binary.
+    /// - `keys_path`: The path to the keys.
+    /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(target: &[String], injection_config: InjectionConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        binary: String,
+        keys_path: String,
+        sigs_path: String,
+        injection_config: InjectionConfig,
+    ) -> anyhow::Result<Self> {
         let bait: *mut libc::c_void =
             if injection_config.bait_count_before + injection_config.bait_count_after != 0 {
                 mmap(
@@ -90,14 +102,15 @@ impl StackProcess {
         set_process_affinity(unsafe { libc::getpid() }, get_current_core());
         let mut cmd = std::process::Command::new("taskset");
         cmd.arg("-c").arg(get_current_core().to_string());
-        cmd.arg(target.first().expect("No target provided"));
-        cmd.args(target[1..].to_vec());
+        cmd.arg(binary);
+        cmd.arg(keys_path);
+        cmd.arg(sigs_path);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        // dealloc
-        info!("deallocating bait");
 
+        // TODO refactor InjectionStrategy
+        info!("deallocating bait");
         unsafe {
             if injection_config.bait_count_before != 0 {
                 munmap(bait, injection_config.bait_count_before * PAGE_SIZE);
@@ -143,10 +156,14 @@ impl StackProcess {
 
         // todo: maybe check injection (prime+probe?)
         std::thread::sleep(Duration::from_millis(100));
+
+        // Pin the child to the next core
         let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
         let target_core = (get_current_core() + 1) % num_cores as usize;
         info!("Pinning child to core {}", target_core);
         set_process_affinity(child.id() as libc::pid_t, target_core);
+
+        // Create a pipe for IPC
         let pipe = piped_channel(&mut child)?;
         Ok(Self {
             child,
@@ -160,100 +177,30 @@ impl StackProcess {
     }
 }
 
-fn read_memory_from_proc(pid: u32, va: u64, size: u64) -> std::io::Result<Vec<u8>> {
-    // Construct the path to the process's memory file
-    let path = format!("/proc/{}/mem", pid);
-    let mut file = OpenOptions::new().read(true).open(path)?;
-
-    // Seek to the virtual memory address
-    file.seek(SeekFrom::Start(va))?;
-
-    // Read the specified number of bytes into a buffer
-    let mut buffer = vec![0; size as usize];
-    file.read_exact(&mut buffer)?;
-
-    Ok(buffer)
-}
-
-#[derive(Debug)]
-pub struct FlippyPage {
-    #[allow(dead_code)]
-    pub maps_entry: MapsEntry,
-    #[allow(dead_code)]
-    pub region_offset: usize, // page offset in the region
-}
-
-pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
-    let pmap = PageMapInfo::load(pid as u64)?.0;
-    let mut flippy_region = None;
-    for (map, pagemap) in pmap {
-        for (idx, (va, pmap)) in pagemap.iter().enumerate() {
-            let pfn = pmap.pfn();
-            match pfn {
-                Ok(pfn) => {
-                    if target_page == pfn {
-                        flippy_region = Some(FlippyPage {
-                            maps_entry: map.0.clone(),
-                            region_offset: idx,
-                        });
-                        info!("Region: {:?}", map.0);
-                        debug!("Region size: {}", map.0.memory_region().size());
-                        info!("[{}]  {:#x}    {:#x} [REUSED TARGET PAGE]", idx, va, pfn);
-                        if let Some("[stack]") = map.0.path() {
-                            let mut stack_contents = String::new();
-                            let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
-                            match contents {
-                                Ok(contents) => {
-                                    match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
-                                        Some(offset) => {
-                                            info!("Found pattern at offset {}", offset);
-                                        }
-                                        None => {
-                                            info!("Pattern not found");
-                                        }
-                                    }
-                                    for (i, byte) in contents.iter().enumerate() {
-                                        stack_contents += &format!("{:02x}", byte);
-                                        if i % 8 == 7 {
-                                            stack_contents += " ";
-                                        }
-                                        if i % 64 == 63 {
-                                            stack_contents += "\n";
-                                        }
-                                    }
-                                    info!("Content:\n{}", stack_contents);
-                                }
-                                Err(e) => {
-                                    info!("Failed to read stack contents: {}", e);
-                                }
-                            }
-                        }
-                    } else {
-                        //info!("[{}]  {:#x}    {:#x}", idx, va, pfn);
-                    }
-                }
-                Err(e) => match e {
-                    pagemap::PageMapError::PageNotPresent => {
-                        //info!("[{}]  {:#x}    ???", idx, va);
-                    }
-                    _ => bail!(e),
-                },
-            }
+impl HammerVictim<StackProcessHammerResult> for StackProcess {
+    fn start(&mut self) {
+        if std::path::Path::new("sigs.txt").exists() {
+            std::fs::remove_file("sigs.txt").expect("Failed to delete sigs.txt");
         }
     }
-    Ok(flippy_region)
-}
-
-impl HammerVictim<String> for StackProcess {
     fn init(&mut self) {}
 
-    fn check(&mut self) -> Result<String, HammerVictimError> {
+    fn check(&mut self) -> Result<StackProcessHammerResult, HammerVictimError> {
         self.pipe
             .wait_for("press enter to start check".to_string())?;
         self.pipe.send(b'\n')?;
         let resp: String = self.pipe.receive().map_err(HammerVictimError::IoError)?;
         if resp.starts_with("FLIPPED") {
-            Ok(resp)
+            let file = File::open("sigs.txt").map_err(HammerVictimError::IoError)?;
+            let reader = BufReader::new(file);
+            let signatures: Vec<String> = reader
+                .lines()
+                .collect::<Result<_, _>>()
+                .map_err(HammerVictimError::IoError)?;
+            Ok(StackProcessHammerResult {
+                pipe_response: resp,
+                signatures,
+            })
         } else {
             Err(HammerVictimError::NoFlips)
         }
@@ -284,7 +231,14 @@ mod tests {
             bait_count_after: 0,
             bait_count_before: 0,
         };
-        let mut stack_process = super::StackProcess::new(&target, injection_config)?;
+        // TODO fix tests
+        unimplemented!("fix tests for new API");
+        let mut stack_process = super::StackProcess::new(
+            "/home/jb/sphincsplus/ref/test/server".to_string(),
+            "keys.txt".to_string(),
+            "sigs.txt".to_string(),
+            injection_config,
+        )?;
         for _ in 0..10 {
             stack_process.init();
             let resp = stack_process.check();
