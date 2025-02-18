@@ -41,6 +41,12 @@ Use `target/release/hammer --help` to see available options.
 ### External Crates
 
 - `log`: Used for logging throughout the crate.
+- `clap`: Used for command-line argument parsing.
+- `serde`: Used for serialization and deserialization of configuration files.
+- `serde_json`: Provides JSON support for `serde`.
+- `libc`: Provides FFI bindings to native C libraries.
+- `rand`: Used for random number generation.
+- `nix`: Provides idiomatic Rust bindings to Unix system APIs.
 
 ### Bindings
 
