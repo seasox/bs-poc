@@ -2,7 +2,6 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     process::{ChildStdin, ChildStdout},
-    ptr::null_mut,
     thread,
     time::Duration,
 };
@@ -11,29 +10,16 @@ use libc::sched_getcpu;
 use serde::Serialize;
 
 use crate::{
-    allocator::util::{mmap, munmap},
-    util::{PipeIPC, IPC, PAGE_SIZE},
+    util::{PipeIPC, IPC},
     victim::process::piped_channel,
 };
 
-use super::{HammerVictim, HammerVictimError, VictimResult};
+use super::{HammerVictim, HammerVictimError, PageInjector, VictimResult};
 
 pub struct SphincsPlus {
     child: std::process::Child,
     pipe: PipeIPC<ChildStdout, ChildStdin>,
     stderr_logger: Option<thread::JoinHandle<()>>,
-}
-
-/// The injection configuration.
-pub struct InjectionConfig {
-    /// The flippy page.
-    pub flippy_page: *mut libc::c_void,
-    /// The flippy page size.
-    pub flippy_page_size: usize,
-    /// The number of bait pages to release before the flippy page.
-    pub bait_count_after: usize,
-    /// The number of bait pages to release after the flippy page.
-    pub bait_count_before: usize,
 }
 
 fn set_process_affinity(pid: libc::pid_t, core_id: usize) {
@@ -85,17 +71,7 @@ impl SphincsPlus {
     /// - `keys_path`: The path to the keys.
     /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(binary: String, injection_config: InjectionConfig) -> anyhow::Result<Self> {
-        let bait: *mut libc::c_void =
-            if injection_config.bait_count_before + injection_config.bait_count_after != 0 {
-                mmap(
-                    null_mut(),
-                    (injection_config.bait_count_before + injection_config.bait_count_after)
-                        * PAGE_SIZE,
-                )
-            } else {
-                null_mut()
-            };
+    pub fn new(binary: String, page_injector: PageInjector) -> anyhow::Result<Self> {
         set_process_affinity(unsafe { libc::getpid() }, get_current_core());
         let mut cmd = std::process::Command::new("taskset");
         cmd.arg("-c").arg(get_current_core().to_string());
@@ -105,27 +81,7 @@ impl SphincsPlus {
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-
-        // TODO refactor InjectionStrategy
-        info!("deallocating bait");
-        unsafe {
-            if injection_config.bait_count_before != 0 {
-                munmap(bait, injection_config.bait_count_before * PAGE_SIZE);
-            }
-            munmap(
-                injection_config.flippy_page,
-                injection_config.flippy_page_size,
-            );
-            if injection_config.bait_count_after != 0 {
-                munmap(
-                    bait.byte_add(injection_config.bait_count_before * PAGE_SIZE),
-                    injection_config.bait_count_after * PAGE_SIZE,
-                );
-            }
-        }
-        // spawn
-        //info!("Launching victim");
-        let mut child = cmd.spawn()?;
+        let mut child = page_injector.inject(cmd)?;
         info!("Victim launched");
 
         // Log victim stderr
@@ -216,22 +172,21 @@ mod tests {
     use crate::{
         allocator::util::mmap,
         util::PAGE_SIZE,
-        victim::{sphincs_plus, HammerVictim},
+        victim::{sphincs_plus, HammerVictim, InjectionConfig, PageInjector},
     };
 
     #[test]
     fn test_sphincs_plus() -> anyhow::Result<()> {
         let ptr = mmap(null_mut(), PAGE_SIZE);
-        let injection_config = super::InjectionConfig {
+        let injection_config = InjectionConfig {
             flippy_page: ptr,
             flippy_page_size: PAGE_SIZE,
             bait_count_after: 0,
             bait_count_before: 0,
         };
-        let mut stack_process = super::SphincsPlus::new(
-            "/home/jb/sphincsplus/ref/test/server".to_string(),
-            injection_config,
-        )?;
+        let injector = PageInjector::new(injection_config);
+        let mut stack_process =
+            super::SphincsPlus::new("/home/jb/sphincsplus/ref/test/server".to_string(), injector)?;
         for _ in 0..10 {
             stack_process.init();
             let resp = stack_process.check();
