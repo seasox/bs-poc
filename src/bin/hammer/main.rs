@@ -79,10 +79,10 @@ struct CliArgs {
     /// 2. initialize the victim, potentially running a memory massaging technique to inject a target page
     /// 3. run the hammer attack using the requested `hammerer` for a number of `rounds`
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
-    #[arg(long, group = "repeat", conflicts_with = "timeout")]
+    #[arg(long, conflicts_with = "timeout")]
     repeat: Option<Option<usize>>,
     /// The timeout in seconds for the hammering process. The default is `None`, causing the hammering process to run indefinitely.
-    #[arg(long, group = "timeout", conflicts_with = "repeat")]
+    #[arg(long, conflicts_with = "repeat")]
     timeout: Option<u64>,
     /// The number of rounds to profile for vulnerable addresses.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
