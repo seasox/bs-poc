@@ -23,7 +23,7 @@ pub mod dummy;
 
 use crate::{
     memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks},
-    victim::{HammerVictim, HammerVictimError},
+    victim::{HammerVictim, HammerVictimError, VictimResult},
 };
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 use blacksmith::hammerer::{HammeringPattern, PatternAddressMapper};
@@ -84,10 +84,7 @@ pub fn make_hammer<'a>(
 }
 
 impl Hammering for Hammerer<'_> {
-    fn hammer<T>(
-        &self,
-        victim: &mut dyn HammerVictim<T>,
-    ) -> Result<HammerResult<T>, HammerVictimError> {
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError> {
         match self {
             Hammerer::Blacksmith(blacksmith) => blacksmith.hammer(victim),
             Hammerer::Dummy(dummy) => dummy.hammer(victim),
@@ -97,14 +94,11 @@ impl Hammering for Hammerer<'_> {
 
 /// The Hammering trait. A hammerer must implement this trait to perform hammering.
 pub trait Hammering {
-    fn hammer<T>(
-        &self,
-        victim: &mut dyn HammerVictim<T>,
-    ) -> Result<HammerResult<T>, HammerVictimError>;
+    fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError>;
 }
 
 #[derive(Debug)]
-pub struct HammerResult<T> {
+pub struct HammerResult {
     pub attempt: u32,
-    pub victim_result: T,
+    pub victim_result: VictimResult,
 }

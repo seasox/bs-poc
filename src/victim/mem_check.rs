@@ -3,7 +3,7 @@ use std::arch::x86_64::_mm_clflush;
 use crate::memory::{BitFlip, DataPattern, VictimMemory};
 use crate::victim::HammerVictim;
 
-use super::HammerVictimError;
+use super::{HammerVictimError, VictimResult};
 
 pub struct HammerVictimMemCheck<'a> {
     memory: &'a dyn VictimMemory,
@@ -16,17 +16,17 @@ impl<'a> HammerVictimMemCheck<'a> {
     }
 }
 
-impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimMemCheck<'a> {
+impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
     fn init(&mut self) {
         debug!("initialize victim");
         self.memory.initialize(self.pattern.clone());
     }
 
-    fn check(&mut self) -> Result<Vec<BitFlip>, HammerVictimError> {
+    fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         debug!("check victim");
         let flips = self.memory.check(self.pattern.clone());
         if !flips.is_empty() {
-            Ok(flips.clone())
+            Ok(VictimResult::BitFlips(flips.clone()))
         } else {
             Err(HammerVictimError::NoFlips)
         }
@@ -51,13 +51,13 @@ impl<'a> HammerVictimTargetCheck<'a> {
     }
 }
 
-impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimTargetCheck<'a> {
+impl<'a> HammerVictim for HammerVictimTargetCheck<'a> {
     fn init(&mut self) {
         debug!("initialize victim");
         self.memory.initialize(self.pattern.clone());
     }
 
-    fn check(&mut self) -> Result<Vec<BitFlip>, HammerVictimError> {
+    fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         debug!("check victim");
         let mut flips = vec![];
         for target in &self.targets {
@@ -71,7 +71,7 @@ impl<'a> HammerVictim<Vec<BitFlip>> for HammerVictimTargetCheck<'a> {
             }
         }
         if !flips.is_empty() {
-            Ok(flips)
+            Ok(VictimResult::BitFlips(flips))
         } else {
             Err(HammerVictimError::NoFlips)
         }

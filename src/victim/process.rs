@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::process::{Child, ChildStdin, ChildStdout, Command};
 use std::thread;
 
-use super::HammerVictimError;
+use super::{HammerVictimError, VictimResult};
 
 pub struct VictimProcess {
     victim: Child,
@@ -24,12 +24,12 @@ impl VictimProcess {
     }
 }
 
-impl HammerVictim<String> for VictimProcess {
+impl HammerVictim for VictimProcess {
     fn init(&mut self) {
         info!("Victim process initialized");
     }
 
-    fn check(&mut self) -> Result<String, HammerVictimError> {
+    fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         info!("Victim process check");
         self.pipe
             .send(AttackState::AttackerHammerDone)
@@ -38,7 +38,7 @@ impl HammerVictim<String> for VictimProcess {
         let state: AttackState = self.pipe.receive().map_err(HammerVictimError::IoError)?;
         info!("Received state: {:?}", state);
         if state == AttackState::VictimHammerSuccess {
-            Ok("Success".to_string())
+            Ok(VictimResult::String("Success".to_string()))
         } else {
             Err(HammerVictimError::NoFlips)
         }

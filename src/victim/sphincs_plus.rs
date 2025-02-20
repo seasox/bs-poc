@@ -16,9 +16,9 @@ use crate::{
     victim::process::piped_channel,
 };
 
-use super::{HammerVictim, HammerVictimError};
+use super::{HammerVictim, HammerVictimError, VictimResult};
 
-pub struct StackProcess {
+pub struct SphincsPlus {
     child: std::process::Child,
     pipe: PipeIPC<ChildStdout, ChildStdin>,
     stderr_logger: Option<thread::JoinHandle<()>>,
@@ -71,24 +71,21 @@ fn get_current_core() -> usize {
 #[derive(Debug, Serialize)]
 pub struct StackProcessHammerResult {
     pipe_response: String,
-    signatures: Vec<String>,
+    pub signatures: Vec<String>,
 }
 
-// TODO rename to `SphincsPlus`
-impl StackProcess {
-    /// Create a new `StackProcess` victim.
+const KEYS_FILE: &str = "keys.txt";
+const SIGS_FILE: &str = "sigs.txt";
+
+impl SphincsPlus {
+    /// Create a new `SphincsPlus` victim.
     ///
     /// # Arguments
     /// - `binary`: The path to the target binary.
     /// - `keys_path`: The path to the keys.
     /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(
-        binary: String,
-        keys_path: String,
-        sigs_path: String,
-        injection_config: InjectionConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn new(binary: String, injection_config: InjectionConfig) -> anyhow::Result<Self> {
         let bait: *mut libc::c_void =
             if injection_config.bait_count_before + injection_config.bait_count_after != 0 {
                 mmap(
@@ -103,8 +100,8 @@ impl StackProcess {
         let mut cmd = std::process::Command::new("taskset");
         cmd.arg("-c").arg(get_current_core().to_string());
         cmd.arg(binary);
-        cmd.arg(keys_path);
-        cmd.arg(sigs_path);
+        cmd.arg(KEYS_FILE);
+        cmd.arg(SIGS_FILE);
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -177,7 +174,7 @@ impl StackProcess {
     }
 }
 
-impl HammerVictim<StackProcessHammerResult> for StackProcess {
+impl HammerVictim for SphincsPlus {
     fn start(&mut self) {
         if std::path::Path::new("sigs.txt").exists() {
             std::fs::remove_file("sigs.txt").expect("Failed to delete sigs.txt");
@@ -185,7 +182,7 @@ impl HammerVictim<StackProcessHammerResult> for StackProcess {
     }
     fn init(&mut self) {}
 
-    fn check(&mut self) -> Result<StackProcessHammerResult, HammerVictimError> {
+    fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.pipe
             .wait_for("press enter to start check".to_string())?;
         self.pipe.send(b'\n')?;
@@ -197,10 +194,7 @@ impl HammerVictim<StackProcessHammerResult> for StackProcess {
                 .lines()
                 .collect::<Result<_, _>>()
                 .map_err(HammerVictimError::IoError)?;
-            Ok(StackProcessHammerResult {
-                pipe_response: resp,
-                signatures,
-            })
+            Ok(VictimResult::Strings(signatures))
         } else {
             Err(HammerVictimError::NoFlips)
         }
@@ -219,11 +213,14 @@ impl HammerVictim<StackProcessHammerResult> for StackProcess {
 mod tests {
     use std::ptr::null_mut;
 
-    use crate::{allocator::util::mmap, util::PAGE_SIZE, victim::HammerVictim};
+    use crate::{
+        allocator::util::mmap,
+        util::PAGE_SIZE,
+        victim::{sphincs_plus, HammerVictim},
+    };
 
     #[test]
-    fn test_stack_process() -> anyhow::Result<()> {
-        let target = vec!["../victim-stack/stack".to_string()];
+    fn test_sphincs_plus() -> anyhow::Result<()> {
         let ptr = mmap(null_mut(), PAGE_SIZE);
         let injection_config = super::InjectionConfig {
             flippy_page: ptr,
@@ -231,18 +228,18 @@ mod tests {
             bait_count_after: 0,
             bait_count_before: 0,
         };
-        // TODO fix tests
-        unimplemented!("fix tests for new API");
-        let mut stack_process = super::StackProcess::new(
+        let mut stack_process = super::SphincsPlus::new(
             "/home/jb/sphincsplus/ref/test/server".to_string(),
-            "keys.txt".to_string(),
-            "sigs.txt".to_string(),
             injection_config,
         )?;
         for _ in 0..10 {
             stack_process.init();
             let resp = stack_process.check();
-            assert!(matches!(resp, Err(super::HammerVictimError::NoFlips)));
+            assert!(
+                matches!(resp, Err(sphincs_plus::HammerVictimError::NoFlips),),
+                "{:?}",
+                resp
+            );
         }
         Ok(())
     }

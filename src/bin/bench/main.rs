@@ -192,7 +192,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         info!("Affected locations: {:?}", results);
         let flips: Vec<BitFlip> = results
             .into_iter()
-            .flat_map(|r| r.victim_result)
+            .flat_map(|r| r.victim_result.bit_flips())
             .unique_by(|f| f.addr)
             .collect();
 
@@ -243,7 +243,7 @@ unsafe fn _main() -> anyhow::Result<()> {
                         "Profiling hammering round successful at attempt {}: {:?}",
                         result.attempt, result.victim_result
                     );
-                    Some(result.victim_result)
+                    Some(result.victim_result.bit_flips())
                 }
                 Err(e) => {
                     warn!("Profiling hammering round not successful: {:?}", e);
