@@ -79,6 +79,7 @@ pub trait ConsecAllocator {
 /// A helper enum to create an allocator from CLI arguments.
 ///
 /// This allows us to circumvent heap allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum ConsecAlloc {
     BuddyInfo(BuddyInfo),
     CoCo(CoCo),
