@@ -3,26 +3,23 @@ use std::ptr::null_mut;
 use anyhow::bail;
 
 use crate::{
-    allocator::util::munmap,
-    memory::{ConsecBlocks, GetConsecPfns, MemBlock},
+    memory::{
+        mem_configuration::MemConfiguration, ConsecBlocks, DRAMAddr, GetConsecPfns, MemBlock,
+    },
     util::MB,
 };
 
 use super::{util::mmap, ConsecAllocator};
 
-pub struct Pfn {}
+pub struct Pfn {
+    mem_config: MemConfiguration,
+}
 
 /// Pfn allocator. This finds consecutive PFNs by allocating memory and checking the page map.
 /// Useful for testing purposes.
 impl Pfn {
-    pub fn new() -> Self {
-        Self {}
-    }
-}
-
-impl Default for Pfn {
-    fn default() -> Self {
-        Self::new()
+    pub fn new(mem_config: MemConfiguration) -> Self {
+        Self { mem_config }
     }
 }
 
@@ -42,33 +39,40 @@ impl ConsecAllocator for Pfn {
                 bail!("Failed to allocate memory");
             }
             let pfns = (x, BUFSIZE).consec_pfns()?;
-            let consec = pfns
+            let consecs = pfns
                 .iter()
                 .enumerate()
-                .find(|(_, range)| range.end - range.start == self.block_size() as u64);
-            match consec {
-                None => {
-                    unsafe {
-                        (x, BUFSIZE).log_pfns();
-                        munmap(x, BUFSIZE);
-                        info!("Failed to find consecutive PFNs, retrying...");
-                    }
+                .filter(|(_, range)| range.end - range.start == self.block_size() as u64);
+            let mut unmap_ranges = vec![];
+            let mut prev_end = x;
+            for (idx, _) in consecs {
+                if blocks.len() >= block_count {
+                    unmap_ranges.push((prev_end, unsafe { x.byte_add(BUFSIZE) }));
+                    break;
+                }
+                let offset: usize = pfns
+                    .iter()
+                    .take(idx)
+                    .map(|range| range.end - range.start)
+                    .sum::<u64>() as usize;
+                let bank = DRAMAddr::from_virt(pfns[idx].start as *const u8, &self.mem_config).bank;
+                assert_eq!(bank, 0, "Base bank is not zero. The PFN allocation strategy only supports allocation of up to 4 MB (22 bit address alignment), but apparently, some bank bits are above bit 22 (or you found a bug).");
+                if bank != 0 {
+                    debug!("Bank {} != 0, retrying...", bank);
+                    unmap_ranges.push((prev_end, unsafe { x.byte_add(offset) }));
                     continue;
                 }
-                Some((idx, _)) => {
-                    let offset: usize = pfns
-                        .iter()
-                        .take(idx)
-                        .map(|range| range.end - range.start)
-                        .sum::<u64>() as usize;
-                    blocks.push(MemBlock::new(
-                        unsafe { x.byte_add(offset as usize) },
-                        self.block_size(),
-                    ));
-                    unsafe {
-                        munmap(x, offset);
-                        munmap(x.byte_add(offset + 4 * MB), BUFSIZE - offset - 4 * MB);
-                    }
+                let start_ptr = unsafe { x.byte_add(offset as usize) };
+                blocks.push(MemBlock::new(start_ptr, self.block_size()));
+                unmap_ranges.push((prev_end, start_ptr));
+                prev_end = unsafe { start_ptr.byte_add(self.block_size()) };
+            }
+            for unmap_range in unmap_ranges {
+                unsafe {
+                    libc::munmap(
+                        unmap_range.0 as *mut libc::c_void,
+                        unmap_range.1 as usize - unmap_range.0 as usize,
+                    );
                 }
             }
         }
