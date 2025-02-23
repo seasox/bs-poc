@@ -8,6 +8,7 @@ use pagemap::MapsEntry;
 
 use crate::util::find_pattern;
 
+use crate::util::PAGE_SHIFT;
 use crate::util::PAGE_SIZE;
 
 use crate::memory::PageMapInfo;
@@ -28,7 +29,7 @@ pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<Fli
             let pfn = pmap.pfn();
             match pfn {
                 Ok(pfn) => {
-                    if target_page == pfn {
+                    if target_page >> PAGE_SHIFT == pfn {
                         flippy_region = Some(FlippyPage {
                             maps_entry: map.0.clone(),
                             region_offset: idx,

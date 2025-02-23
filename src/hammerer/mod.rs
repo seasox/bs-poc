@@ -97,7 +97,7 @@ pub trait Hammering {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct HammerResult {
     pub attempt: u32,
     pub victim_result: VictimResult,

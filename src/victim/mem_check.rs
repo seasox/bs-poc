@@ -17,6 +17,8 @@ impl<'a> HammerVictimMemCheck<'a> {
 }
 
 impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
+    fn start(&mut self) {}
+
     fn init(&mut self) {
         debug!("initialize victim");
         self.memory.initialize(self.pattern.clone());
@@ -32,7 +34,7 @@ impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
         }
     }
 
-    fn stop(self) {}
+    fn stop(&mut self) {}
 }
 
 pub struct HammerVictimTargetCheck<'a> {
@@ -52,6 +54,8 @@ impl<'a> HammerVictimTargetCheck<'a> {
 }
 
 impl<'a> HammerVictim for HammerVictimTargetCheck<'a> {
+    fn start(&mut self) {}
+
     fn init(&mut self) {
         debug!("initialize victim");
         self.memory.initialize(self.pattern.clone());
@@ -77,5 +81,5 @@ impl<'a> HammerVictim for HammerVictimTargetCheck<'a> {
         }
     }
 
-    fn stop(self) {}
+    fn stop(&mut self) {}
 }

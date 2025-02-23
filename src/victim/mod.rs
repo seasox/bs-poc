@@ -6,11 +6,16 @@ mod page_inject;
 pub mod sphincs_plus;
 
 use core::panic;
+use std::process::Child;
+use std::process::ChildStdin;
+use std::process::ChildStdout;
 
+use anyhow::Context;
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::memory::BitFlip;
+use crate::util::PipeIPC;
 
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
@@ -24,6 +29,8 @@ pub enum HammerVictimError {
     NoFlips,
     #[error("Error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Victim is not running")]
+    NotRunning,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,11 +66,17 @@ impl VictimResult {
 ///
 pub trait HammerVictim {
     /// start the victim. This methos is called once
-    fn start(&mut self) {}
+    fn start(&mut self);
     /// Initialize the victim. This method is called before the hammering starts.
-    fn init(&mut self) {}
+    fn init(&mut self);
     /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.
     fn check(&mut self) -> Result<VictimResult, HammerVictimError>;
-    /// Stop the victim. This method is called after the hammering is done. This consumes the victim.
-    fn stop(self);
+    /// Stop the victim. This method is called after the hammering is done.
+    fn stop(&mut self);
+}
+
+pub(crate) fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
+    let child_in = child.stdin.take().context("piped_channel stdin")?;
+    let child_out = child.stdout.take().context("piped_channel stdout")?;
+    Ok(PipeIPC::new(child_out, child_in))
 }
