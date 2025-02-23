@@ -3,7 +3,6 @@
 //! A victim is the target of the Rowhammer attack. It can be a memory region or a process. To probe memory regions, the `MemCheck` victim is used. To probe a victim process, the `Process` victim is used.
 pub mod mem_check;
 mod page_inject;
-pub mod process;
 pub mod sphincs_plus;
 
 use core::panic;
@@ -17,7 +16,6 @@ pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
 pub use self::page_inject::InjectionConfig;
 pub use self::page_inject::PageInjector;
-pub use self::process::VictimProcess as Process;
 pub use self::sphincs_plus::SphincsPlus;
 
 #[derive(Error, Debug)]
