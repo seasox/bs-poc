@@ -1,9 +1,7 @@
 use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{
-    BytePointer, ConsecBlocks, DRAMAddr, GetConsecPfns, LinuxPageMap, VirtToPhysResolver,
-};
+use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
 use crate::util::{GroupBy, PAGE_MASK, PAGE_SIZE, ROW_SIZE};
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
@@ -423,8 +421,6 @@ impl<'a> Hammering for Hammerer<'a> {
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
         victim.init();
-        // log PFNs of memory region
-        self.memory.log_pfns();
         for attempt in 0..self.attempts {
             let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
             let wait_until_start_hammering_us =
@@ -470,9 +466,7 @@ impl<'a> Hammering for Hammerer<'a> {
                         });
                     }
                     Err(HammerVictimError::NoFlips) => {}
-                    Err(HammerVictimError::IoError(e)) => {
-                        return Err(HammerVictimError::IoError(e))
-                    }
+                    Err(e) => return Err(e),
                 }
             }
         }
