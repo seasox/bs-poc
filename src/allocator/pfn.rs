@@ -39,6 +39,7 @@ impl ConsecAllocator for Pfn {
                 bail!("Failed to allocate memory");
             }
             let pfns = (x, BUFSIZE).consec_pfns()?;
+            (x, BUFSIZE).log_pfns();
             let consecs = pfns
                 .iter()
                 .enumerate()
@@ -56,7 +57,7 @@ impl ConsecAllocator for Pfn {
                     .map(|range| range.end - range.start)
                     .sum::<u64>() as usize;
                 let bank = DRAMAddr::from_virt(pfns[idx].start as *const u8, &self.mem_config).bank;
-                assert_eq!(bank, 0, "Base bank of {:x} is not zero. The PFN allocation strategy only supports allocation of up to 4 MB (22 bit address alignment), but apparently, some bank bits are above bit 22 (or you found a bug).", pfns[idx].start);
+                //assert_eq!(bank, 0, "Base bank of 0x{:x} is not zero. The PFN allocation strategy only supports allocation of up to 4 MB (22 bit address alignment), but apparently, some bank bits are above bit 22 (or you found a bug).", pfns[idx].start);
                 if bank != 0 {
                     debug!("Bank {} != 0, retrying...", bank);
                     unmap_ranges.push((prev_end, unsafe { x.byte_add(offset) }));
