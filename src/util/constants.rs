@@ -7,6 +7,7 @@ pub const PAGE_MASK: usize = PAGE_SIZE - 1;
 
 pub const ROW_SHIFT: usize = 13;
 pub const ROW_SIZE: usize = 1 << ROW_SHIFT;
+pub const ROW_MASK: usize = ROW_SIZE - 1;
 
 pub const CL_SIZE: usize = 64;
 

@@ -53,7 +53,7 @@ use std::arch::x86_64::_mm_clflush;
 use std::fmt::Debug;
 use std::io::BufWriter;
 
-use crate::util::{CL_SIZE, PAGE_SIZE, ROW_SIZE};
+use crate::util::{CL_SIZE, PAGE_SIZE, ROW_MASK, ROW_SIZE};
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
@@ -121,7 +121,7 @@ impl DataPattern {
             }
             DataPattern::StripeZero(zeroes) => {
                 for &row in zeroes.iter() {
-                    if (row as usize) == addr as usize & !(0x1FFF) {
+                    if (row as usize) == addr as usize & !ROW_MASK {
                         trace!("setting aggressor page to 0x00 at addr {:p}", addr);
                         return [0x00; PAGE_SIZE];
                     }
@@ -130,7 +130,7 @@ impl DataPattern {
             }
             DataPattern::StripeOne(ones) => {
                 for &row in ones.iter() {
-                    if (row as usize) == addr as usize & !(0x1FFF) {
+                    if (row as usize) == addr as usize & !ROW_MASK {
                         trace!("setting aggressor page to 0xFF at addr {:p}", addr);
                         return [0xFF; PAGE_SIZE];
                     }
