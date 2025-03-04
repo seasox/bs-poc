@@ -293,6 +293,7 @@ pub struct Hammerer<'a> {
 }
 
 impl<'a> Hammerer<'a> {
+    #![allow(clippy::too_many_arguments)]
     pub fn new(
         mem_config: MemConfiguration,
         pattern: &HammeringPattern,
