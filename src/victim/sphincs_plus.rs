@@ -99,7 +99,7 @@ const SIGS_FILE: &str = "sigs.txt";
 
 // find profile entry with bitflips in needed range
 #[derive(Clone, Debug, Serialize)]
-pub struct TargetOffset {
+struct TargetOffset {
     description: String,
     page_offset: usize,
     stack_offset: usize,
@@ -187,7 +187,7 @@ impl SphincsPlus {
     /// - `injection_config`: The injection configuration.
     pub fn new(binary: String, addrs: Vec<usize>) -> anyhow::Result<Self> {
         let injection_config = find_injectable_page(addrs)
-            .ok_or_else(|| anyhow::anyhow!("No injectable page found"))?;
+            .ok_or_else(|| anyhow::anyhow!("No page suitable for injection found"))?;
         Ok(Self {
             state: State::Init {
                 binary,
@@ -205,7 +205,7 @@ impl SphincsPlus {
 }
 
 impl HammerVictim for SphincsPlus {
-    fn start(&mut self) {
+    fn start(&mut self) -> Result<(), HammerVictimError> {
         match &self.state {
             State::Init {
                 binary,
@@ -259,10 +259,10 @@ impl HammerVictim for SphincsPlus {
                 std::thread::sleep(Duration::from_millis(100));
 
                 // Pin the child to the next core
-                //let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
-                //let target_core = (get_current_core() + 1) % num_cores as usize;
-                //info!("Pinning child to core {}", target_core);
-                //set_process_affinity(child.id() as libc::pid_t, target_core);
+                let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+                let target_core = (get_current_core() + 1) % num_cores as usize;
+                info!("Pinning child to core {}", target_core);
+                set_process_affinity(child.id() as libc::pid_t, target_core);
 
                 // Create a pipe for IPC
                 let pipe = piped_channel(&mut child).expect("Failed to pipe IPC");
@@ -275,10 +275,15 @@ impl HammerVictim for SphincsPlus {
                     target_pfn,
                     region_offset: injection_config.stack_offset,
                 };
-                self.check_flippy_page_exists()
-                    .expect("check_flippy_page_exists");
+                if let Err(e) = self.check_flippy_page_exists() {
+                    error!("Failed to find flippy page: {:?}", e);
+                    self.stop();
+                    Err(HammerVictimError::FlippyPageNotFound)
+                } else {
+                    Ok(())
+                }
             }
-            _ => panic!("Invalid state"),
+            _ => Err(HammerVictimError::NotRunning),
         }
     }
     fn init(&mut self) {}
@@ -292,11 +297,12 @@ impl HammerVictim for SphincsPlus {
                 if resp.starts_with("FLIPPED") {
                     let file = File::open(SIGS_FILE).map_err(HammerVictimError::IoError)?;
                     let reader = BufReader::new(file);
-                    let signatures: Vec<String> = reader
-                        .lines()
-                        .collect::<Result<_, _>>()
-                        .map_err(HammerVictimError::IoError)?;
-                    Ok(VictimResult::Strings(signatures))
+                    let signatures: Vec<String> =
+                        reader.lines().collect::<Result<_, _>>().unwrap_or_default();
+                    Ok(VictimResult::SphincsPlus {
+                        signatures,
+                        child_output: resp,
+                    })
                 } else {
                     Err(HammerVictimError::NoFlips)
                 }
@@ -354,7 +360,17 @@ impl SphincsPlus {
                 Err(e) => return Err(e),
             }
         }
-        bail!("Not running");
+        bail!("Invalid state: {}", self.state.description());
+    }
+}
+
+impl State {
+    fn description(&self) -> String {
+        match self {
+            State::Init { binary, .. } => format!("Initializing {}", binary),
+            State::Running { target, .. } => format!("Running {}", target),
+            State::Stopped => "Stopped".to_string(),
+        }
     }
 }
 #[cfg(test)]

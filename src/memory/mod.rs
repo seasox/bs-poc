@@ -102,7 +102,7 @@ pub trait BytePointer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DataPattern {
     Random(Box<StdRng>),
     StripeZero(/* zeroes: */ Vec<AggressorPtr>),

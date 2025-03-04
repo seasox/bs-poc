@@ -31,31 +31,23 @@ pub enum HammerVictimError {
     IoError(#[from] std::io::Error),
     #[error("Victim is not running")]
     NotRunning,
+    #[error("Flippy page not found")]
+    FlippyPageNotFound,
 }
 
 #[derive(Debug, Serialize)]
 pub enum VictimResult {
     BitFlips(Vec<BitFlip>),
-    String(String),
-    Strings(Vec<String>),
+    SphincsPlus {
+        signatures: Vec<String>,
+        child_output: String,
+    },
 }
 impl VictimResult {
     pub fn bit_flips(self) -> Vec<BitFlip> {
         match self {
             VictimResult::BitFlips(flips) => flips,
-            _ => panic!("Expected bit flips"),
-        }
-    }
-    pub fn string(self) -> String {
-        match self {
-            VictimResult::String(s) => s,
-            _ => panic!("Expected string"),
-        }
-    }
-    pub fn strings(self) -> Vec<String> {
-        match self {
-            VictimResult::Strings(s) => s,
-            _ => panic!("Expected strings"),
+            _ => panic!("Invalid variant. Expected BitFlips, got {:?}", self),
         }
     }
 }
@@ -66,7 +58,7 @@ impl VictimResult {
 ///
 pub trait HammerVictim {
     /// start the victim. This methos is called once
-    fn start(&mut self);
+    fn start(&mut self) -> Result<(), HammerVictimError>;
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self);
     /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.

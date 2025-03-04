@@ -96,13 +96,14 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
-                victim.start();
+                victim.start()?;
                 victim.init();
                 let output = match victim.check() {
                     Ok(output) => output,
                     Err(HammerVictimError::NoFlips) => todo!("No flips detected"),
                     Err(HammerVictimError::IoError(e)) => todo!("IO error: {:?}", e),
                     Err(HammerVictimError::NotRunning) => todo!("Victim not running"),
+                    Err(HammerVictimError::FlippyPageNotFound) => todo!("Flippy page not found"),
                 };
                 //if output.contains(&format!("{:x}", target_pfn)) {
                 //    bail!("YES MAN: {},{}", bait_before, bait_after);
