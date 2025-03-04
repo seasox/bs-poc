@@ -71,7 +71,7 @@ impl MemConfiguration {
         let mut matrix = SMatrix::<u8, 30, 30>::zeros();
         for row in 0..MTX_SIZE {
             for col in 0..MTX_SIZE {
-                matrix[(row, col)] = (dram_mtx[row] >> (MTX_SIZE - col - 1) & 1) as u8;
+                matrix[(row, col)] = ((dram_mtx[row] >> (MTX_SIZE - col - 1)) & 1) as u8;
             }
         }
         // invert dram matrix, assign addr matrix

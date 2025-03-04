@@ -19,6 +19,8 @@ pub struct MemBlock {
     pfn_offset: PfnOffset,
 }
 
+unsafe impl Send for MemBlock {}
+
 pub enum HugepageSize {
     //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
     OneGb,
@@ -235,7 +237,7 @@ mod tests {
             callback: &'a dyn Fn((*const u8, *const u8)) -> u64,
         }
 
-        impl<'a> MemoryTupleTimer for TestTimer<'a> {
+        impl MemoryTupleTimer for TestTimer<'_> {
             unsafe fn time_subsequent_access_from_ram(
                 &self,
                 a: *const u8,

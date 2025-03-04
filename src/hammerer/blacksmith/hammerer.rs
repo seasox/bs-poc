@@ -416,7 +416,7 @@ impl<'a> Hammerer<'a> {
     }
 }
 
-impl<'a> Hammering for Hammerer<'a> {
+impl Hammering for Hammerer<'_> {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError> {
         info!("Hammering with {} attempts", self.attempts);
         let mut rng = rand::thread_rng();

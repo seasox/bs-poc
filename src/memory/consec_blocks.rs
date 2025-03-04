@@ -40,7 +40,7 @@ impl BytePointer for ConsecBlocks {
     }
 
     fn len(&self) -> usize {
-        return self.blocks.iter().map(|block| block.len).sum();
+        self.blocks.iter().map(|block| block.len).sum()
     }
 }
 
@@ -51,7 +51,7 @@ impl GetConsecPfns for ConsecBlocks {
             let mut block_pfns = VecDeque::from(block.consec_pfns()?);
             let is_cons = pfns
                 .last()
-                .map_or(false, |last: &Range<u64>| last.start == block_pfns[0].end);
+                .is_some_and(|last: &Range<u64>| last.start == block_pfns[0].end);
             if is_cons {
                 let prev = pfns.pop();
                 let next = block_pfns.pop_front();

@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::bail;
+use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
 use bs_poc::hammerer::Hammering;
 use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
@@ -24,10 +25,6 @@ use bs_poc::{
     hammerer::Hammerer,
 };
 use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
-use bs_poc::{
-    hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
-    util::PAGE_MASK,
-};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
@@ -484,7 +481,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             .expect("no round with flips in addr");
 
         memory.initialize(dpattern);
-        let target_page = victim.target_addr() as usize & !PAGE_MASK;
         match victim.start() {
             Ok(_) => {}
             Err(e) => {

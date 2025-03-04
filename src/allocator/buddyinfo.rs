@@ -112,7 +112,7 @@ fn get_normal_page_nums() -> anyhow::Result<[u64; 11]> {
         .iter()
         .find(|z| z.zone().eq("Normal"))
         .context("Zone 'Normal' not found")?;
-    return Ok(*zone.free_areas());
+    Ok(*zone.free_areas())
 }
 
 fn diff_arrs<const S: usize>(l: &[u64; S], r: &[u64; S]) -> [i64; S] {

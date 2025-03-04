@@ -211,9 +211,8 @@ impl Spoiler {
             if blocks.len() >= max_candidates {
                 break;
             }
-            match &progress {
-                Some(p) => p.inc(1),
-                None => {}
+            if let Some(p) = &progress {
+                p.inc(1)
             }
             if intervals.contains(candidate.start) || intervals.contains(candidate.end) {
                 debug!("Skipping candidate {:?}: overlaps with previous", candidate);

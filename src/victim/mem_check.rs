@@ -16,7 +16,7 @@ impl<'a> HammerVictimMemCheck<'a> {
     }
 }
 
-impl<'a> HammerVictim for HammerVictimMemCheck<'a> {
+impl HammerVictim for HammerVictimMemCheck<'_> {
     fn start(&mut self) -> Result<(), HammerVictimError> {
         Ok(())
     }
@@ -55,7 +55,7 @@ impl<'a> HammerVictimTargetCheck<'a> {
     }
 }
 
-impl<'a> HammerVictim for HammerVictimTargetCheck<'a> {
+impl HammerVictim for HammerVictimTargetCheck<'_> {
     fn start(&mut self) -> Result<(), HammerVictimError> {
         Ok(())
     }

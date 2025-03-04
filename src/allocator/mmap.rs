@@ -93,7 +93,6 @@ impl ConsecAllocator for Mmap {
 
     fn alloc_consec_blocks(&mut self, size: usize) -> anyhow::Result<ConsecBlocks> {
         assert_eq!(size % self.block_size(), 0);
-        unsafe impl Send for MemBlock {}
         let block_size = self.block_size();
         let num_blocks = size / block_size;
 
