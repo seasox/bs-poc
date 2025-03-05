@@ -4,14 +4,14 @@ use std::{
 };
 
 use itertools::Itertools;
-use pagemap::{MapsEntry, PageMapEntry};
+use pagemap::{MapsEntry, PageMapEntry, PageMapError};
 
 use crate::util::PAGE_SIZE;
 
 pub struct PageMapInfo(pub HashMap<ByMemoryRegion, Vec<(u64, PageMapEntry)>>);
 
 impl PageMapInfo {
-    pub fn load(pid: u64) -> anyhow::Result<Self> {
+    pub fn load(pid: u64) -> Result<Self, PageMapError> {
         let mut pagemap = pagemap::PageMap::new(pid)?;
 
         let mut ret = HashMap::new();

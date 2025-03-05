@@ -6,16 +6,12 @@ mod page_inject;
 pub mod sphincs_plus;
 
 use core::panic;
-use std::process::Child;
-use std::process::ChildStdin;
-use std::process::ChildStdout;
 
-use anyhow::Context;
 use serde::Serialize;
 use thiserror::Error;
 
 use crate::memory::BitFlip;
-use crate::util::PipeIPC;
+use crate::memory::FlippyPage;
 
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
@@ -27,21 +23,22 @@ pub use self::sphincs_plus::SphincsPlus;
 pub enum HammerVictimError {
     #[error("No flips detected")]
     NoFlips,
-    #[error("Error: {0}")]
+    #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("PageMapError: {0}")]
+    PageMapError(#[from] pagemap::PageMapError),
     #[error("Victim is not running")]
     NotRunning,
     #[error("Flippy page not found")]
     FlippyPageNotFound,
+    #[error("Flippy page offset mismatch: expected {expected}, actual {actual:?}")]
+    FlippyPageOffsetMismatch { expected: usize, actual: FlippyPage },
 }
 
 #[derive(Debug, Serialize)]
 pub enum VictimResult {
     BitFlips(Vec<BitFlip>),
-    SphincsPlus {
-        signatures: Vec<String>,
-        child_output: String,
-    },
+    SphincsPlus { signatures: Vec<String> },
 }
 impl VictimResult {
     pub fn bit_flips(self) -> Vec<BitFlip> {
@@ -65,10 +62,4 @@ pub trait HammerVictim {
     fn check(&mut self) -> Result<VictimResult, HammerVictimError>;
     /// Stop the victim. This method is called after the hammering is done.
     fn stop(&mut self);
-}
-
-pub(crate) fn piped_channel(child: &mut Child) -> anyhow::Result<PipeIPC<ChildStdout, ChildStdin>> {
-    let child_in = child.stdin.take().context("piped_channel stdin")?;
-    let child_out = child.stdout.take().context("piped_channel stdout")?;
-    Ok(PipeIPC::new(child_out, child_in))
 }

@@ -3,10 +3,8 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 
-use anyhow::bail;
 use pagemap::MapsEntry;
-
-use crate::util::find_pattern;
+use pagemap::PageMapError;
 
 use crate::util::PAGE_SHIFT;
 use crate::util::PAGE_SIZE;
@@ -21,7 +19,7 @@ pub struct FlippyPage {
     pub region_offset: usize, // page offset in the region
 }
 
-pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<FlippyPage>> {
+pub fn find_flippy_page(target_page: u64, pid: u32) -> Result<Option<FlippyPage>, PageMapError> {
     let pmap = PageMapInfo::load(pid as u64)?.0;
     let mut flippy_region = None;
     for (map, pagemap) in pmap {
@@ -42,14 +40,6 @@ pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<Fli
                             let contents = read_memory_from_proc(pid, *va, PAGE_SIZE as u64);
                             match contents {
                                 Ok(contents) => {
-                                    match find_pattern(&contents, 0b10101010, PAGE_SIZE) {
-                                        Some(offset) => {
-                                            info!("Found pattern at offset {}", offset);
-                                        }
-                                        None => {
-                                            info!("Pattern not found");
-                                        }
-                                    }
                                     for (i, byte) in contents.iter().enumerate() {
                                         stack_contents += &format!("{:02x}", byte);
                                         if i % 8 == 7 {
@@ -74,7 +64,7 @@ pub fn find_flippy_page(target_page: u64, pid: u32) -> anyhow::Result<Option<Fli
                     pagemap::PageMapError::PageNotPresent => {
                         //info!("[{}]  {:#x}    ???", idx, va);
                     }
-                    _ => bail!(e),
+                    _ => return Err(e),
                 },
             }
         }

