@@ -30,7 +30,7 @@ enum State {
         #[serde(skip_serializing)]
         child: std::process::Child,
         #[serde(skip_serializing)]
-        pipe: PipeIPC<ChildStdout, ChildStdin>,
+        stdout_thread: thread::JoinHandle<(Vec<String>, ChildStdout)>,
         #[serde(skip_serializing)]
         stderr_logger: Option<thread::JoinHandle<()>>,
         target_pfn: u64,
@@ -340,20 +340,59 @@ impl HammerVictim for SphincsPlus {
     fn init(&mut self) {}
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
+        self.check_flippy_page_exists()?;
         match &mut self.state {
-            State::Running { pipe, .. } => {
-                pipe.wait_for("press enter to start check".to_string())?;
-                pipe.send(b'\n')?;
-                let resp: String = pipe.receive().map_err(HammerVictimError::IoError)?;
-                if resp.starts_with("FLIPPED") {
-                    let file = File::open(SIGS_FILE).map_err(HammerVictimError::IoError)?;
-                    let reader = BufReader::new(file);
-                    let signatures: Vec<String> =
-                        reader.lines().collect::<Result<_, _>>().unwrap_or_default();
-                    Ok(VictimResult::SphincsPlus {
-                        signatures,
-                        child_output: resp,
-                    })
+            State::Running {
+                child,
+                stdout_thread,
+                ..
+            } => {
+                let old_thread = mem::replace(
+                    stdout_thread,
+                    thread::spawn(|| {
+                        (
+                            vec![],
+                            ChildStdout::from(unsafe { OwnedFd::from_raw_fd(0) }),
+                        )
+                    }),
+                );
+                let (signatures, pipe) = old_thread.join().expect("join");
+                let new_thread = spawn_reader_thread(pipe); // immediately replace the thread after joining the old one
+                let dummy_thread = mem::replace(stdout_thread, new_thread);
+                dummy_thread.join().expect("join");
+
+                info!("Collected {} signatures", signatures.len());
+                debug!("Collected child lines: {:?}", signatures);
+
+                let mut flipped = false;
+                for sig in &signatures {
+                    let expected_sha256 =
+                        "91c1db9396122a119a443563c20110dfe674357eb4adb734677cec5bd8558975";
+                    let mut hasher = Sha256::new();
+                    hasher.update(sig.as_bytes());
+                    let result = hasher.finalize();
+                    let sig_sha256 = hex::encode(result);
+                    if sig_sha256 != expected_sha256 {
+                        warn!(
+                            "Signature does not match expected SHA256: {} (expected {})",
+                            sig_sha256, expected_sha256
+                        );
+                        flipped = true;
+                    }
+                }
+
+                let nwrite = child
+                    .stdin
+                    .as_mut()
+                    .expect("stdin")
+                    .write(b"\n")
+                    .expect("write");
+                if nwrite != 1 {
+                    panic!("Failed to write");
+                }
+
+                if flipped {
+                    Ok(VictimResult::SphincsPlus { signatures })
                 } else {
                     Err(HammerVictimError::NoFlips)
                 }

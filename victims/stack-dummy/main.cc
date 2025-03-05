@@ -8,6 +8,8 @@
 #include <errno.h>
 #include <pthread.h>
 
+#define NROUNDS 14
+
 #define BUFSIZE 8192
 
 #define PAGE_SIZE 4096 // Define the page size (typically 4 KB)
@@ -79,6 +81,7 @@ int main(int argc, char **argv) {
 	unsigned char buf[BUFSIZE] = {};
 
 	setbuf(stdout, NULL);
+	setbuf(stderr, NULL);
 
 	// launch thread reading and flushing buf
 	//pthread_t thread_id;
@@ -98,23 +101,25 @@ int main(int argc, char **argv) {
 			_mm_clflush(buf + j);
 		}
 		sleep(1);
-		printf("press enter to start check\n");
-		char c = getchar();
-		if (c == '\n') {
-			int flipped = 0;
+		for (int r = 0; r < NROUNDS; ++r) {
+			fprintf(stderr, "Round %d\n", r);
 			for (int j = 0; j < BUFSIZE; ++j) {
-				if (buf[j] != pattern[i]) {
-					printf("FLIPPED: %d; %x -> %x\n", j, pattern[i], buf[j]);
-					flipped = 1;
-				}
+				printf("%02x", buf[j]);
 			}
-			if (!flipped) {
-				printf("ok\n");
+			printf("\n");
+			for (int j = 0; j < BUFSIZE; ++j) {
+				_mm_clflush(buf + j);
 			}
-		} else {
+			sleep(1);
+		}
+		printf("\n\n");
+		fprintf(stderr, "waiting for newline character\n");
+		char c = getchar();
+		if (c != '\n') {
 			printf("Expected '\n', got %c\n", c);
 			return 0;
 		}
+		fprintf(stderr, "received newline\n");
 	}
 	//pthread_cancel(thread_id);
 	return 0;
