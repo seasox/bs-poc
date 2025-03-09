@@ -322,7 +322,7 @@ impl<'a> Hammerer<'a> {
             match paddr {
                 Ok(paddr) => {
                     let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
-                    debug!(
+                    trace!(
                         "{:>06} {:02},{:04},0x{:02x},{}",
                         action,
                         dram.bank,
@@ -433,7 +433,7 @@ impl Hammering for Hammerer<'_> {
                 &self.mem_config,
                 target_bank,
             );
-            debug!(
+            trace!(
                 "do random memory accesses for {} us before running jitted code",
                 wait_until_start_hammering_us as u128
             );
@@ -448,8 +448,8 @@ impl Hammering for Hammerer<'_> {
                 _mm_mfence();
                 let time = __rdtscp(&mut aux) - time;
                 _mm_mfence();
-                debug!("Run {}: JIT call took {} cycles", attempt, time);
-                debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
+                trace!("Run {}: JIT call took {} cycles", attempt, time);
+                trace!("jit call done: 0x{:02X} (attempt {})", result, attempt);
             }
             if let Some(pages) = &self.read_pages {
                 for page in pages {
