@@ -262,15 +262,11 @@ impl HammerVictim for SphincsPlus {
                 binary,
                 injection_config,
             } => {
-                if std::path::Path::new(SIGS_FILE).exists() {
-                    std::fs::remove_file(SIGS_FILE).expect("Failed to delete sigs.txt");
-                }
                 set_process_affinity(unsafe { libc::getpid() }, get_current_core());
                 let mut cmd = std::process::Command::new("taskset");
                 cmd.arg("-c").arg(get_current_core().to_string());
                 cmd.arg(binary);
                 cmd.arg(KEYS_FILE);
-                cmd.arg(SIGS_FILE);
                 cmd.stdin(std::process::Stdio::piped());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
