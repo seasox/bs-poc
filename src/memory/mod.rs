@@ -102,11 +102,15 @@ pub trait BytePointer {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum DataPattern {
-    Random(Box<StdRng>),
-    StripeZero(/* zeroes: */ Vec<AggressorPtr>),
-    StripeOne(/*  ones:   */ Vec<AggressorPtr>),
+    Random(#[serde(skip_serializing)] Box<StdRng>),
+    StripeZero(
+        /* zeroes: */ #[serde(skip_serializing)] Vec<AggressorPtr>,
+    ),
+    StripeOne(
+        /*  ones:   */ #[serde(skip_serializing)] Vec<AggressorPtr>,
+    ),
 }
 
 impl DataPattern {
