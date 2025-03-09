@@ -9,6 +9,7 @@
 #include <pthread.h>
 
 #define NROUNDS 14
+#define ROUND_TIMEOUT_SECS 2
 
 #define BUFSIZE 8192
 
@@ -100,8 +101,8 @@ int main(int argc, char **argv) {
 		for (int j = 0; j < BUFSIZE; ++j) {
 			_mm_clflush(buf + j);
 		}
-		sleep(1);
 		for (int r = 0; r < NROUNDS; ++r) {
+			sleep(ROUND_TIMEOUT_SECS);
 			fprintf(stderr, "Round %d\n", r);
 			for (int j = 0; j < BUFSIZE; ++j) {
 				printf("%02x", buf[j]);
@@ -110,7 +111,6 @@ int main(int argc, char **argv) {
 			for (int j = 0; j < BUFSIZE; ++j) {
 				_mm_clflush(buf + j);
 			}
-			sleep(1);
 		}
 		printf("\n\n");
 		fprintf(stderr, "waiting for newline character\n");
