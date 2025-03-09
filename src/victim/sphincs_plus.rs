@@ -1,12 +1,9 @@
 use itertools::Itertools;
 use libc::sched_getcpu;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Write},
-    mem,
-    os::fd::{FromRawFd, OwnedFd},
     process::ChildStdout,
     thread,
     time::Duration,
@@ -30,11 +27,11 @@ enum State {
         #[serde(skip_serializing)]
         child: std::process::Child,
         #[serde(skip_serializing)]
-        stdout_thread: thread::JoinHandle<(Vec<String>, ChildStdout)>,
+        stdout_thread: Option<thread::JoinHandle<(Vec<String>, ChildStdout)>>,
         #[serde(skip_serializing)]
         stderr_logger: Option<thread::JoinHandle<()>>,
         target_pfn: u64,
-        region_offset: usize,
+        injection_config: InjectionConfig,
     },
     Stopped,
 }
@@ -94,7 +91,6 @@ pub struct StackProcessHammerResult {
 }
 
 const KEYS_FILE: &str = "keys.txt";
-const SIGS_FILE: &str = "sigs.txt";
 
 // find profile entry with bitflips in needed range
 #[derive(Clone, Debug, Serialize)]
@@ -220,12 +216,17 @@ pub fn spawn_reader_thread(
                 Ok(line) => {
                     let next_empty = line.is_empty();
                     if prev_empty && next_empty {
+                        debug!("Received two empty lines, stopping");
                         break;
                     }
                     if !next_empty {
+                        trace!("Received line: {}", line);
                         lines.push(line);
                     }
                     prev_empty = next_empty;
+                    if prev_empty {
+                        debug!("Received empty line");
+                    }
                 }
                 Err(e) => {
                     error!("Error reading line from child process: {}", e);
@@ -293,21 +294,20 @@ impl HammerVictim for SphincsPlus {
                 set_process_affinity(cid as libc::pid_t, target_core);
 
                 // Create a pipe for IPC
-                let stdout_thread = spawn_reader_thread(child.stdout.take().expect("stdout"));
+                let stdout_thread = Some(spawn_reader_thread(child.stdout.take().expect("stdout")));
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
                     stdout_thread,
                     stderr_logger,
                     target_pfn,
-                    region_offset: injection_config.stack_offset,
+                    injection_config: *injection_config,
                 };
 
                 // find flippy page
                 thread::sleep(Duration::from_millis(100)); // wait before checking for flippy page, as victim might need some time to allocate the stack
                 if let Err(e) = self.check_flippy_page_exists() {
                     error!("Failed to find flippy page: {:?}", e);
-                    self.stop();
                     Err(e)
                 } else {
                     Ok(())
@@ -326,39 +326,15 @@ impl HammerVictim for SphincsPlus {
                 stdout_thread,
                 ..
             } => {
-                let old_thread = mem::replace(
-                    stdout_thread,
-                    thread::spawn(|| {
-                        (
-                            vec![],
-                            ChildStdout::from(unsafe { OwnedFd::from_raw_fd(0) }),
-                        )
-                    }),
-                );
+                let old_thread = stdout_thread.take().expect("stdout thread");
+                info!("Waiting for victim to finish");
                 let (signatures, pipe) = old_thread.join().expect("join");
                 let new_thread = spawn_reader_thread(pipe); // immediately replace the thread after joining the old one
-                let dummy_thread = mem::replace(stdout_thread, new_thread);
-                dummy_thread.join().expect("join");
+                stdout_thread.replace(new_thread);
 
                 info!("Collected {} signatures", signatures.len());
-                debug!("Collected child lines: {:?}", signatures);
 
-                let mut flipped = false;
-                for sig in &signatures {
-                    let expected_sha256 =
-                        "91c1db9396122a119a443563c20110dfe674357eb4adb734677cec5bd8558975";
-                    let mut hasher = Sha256::new();
-                    hasher.update(sig.as_bytes());
-                    let result = hasher.finalize();
-                    let sig_sha256 = hex::encode(result);
-                    if sig_sha256 != expected_sha256 {
-                        warn!(
-                            "Signature does not match expected SHA256: {} (expected {})",
-                            sig_sha256, expected_sha256
-                        );
-                        flipped = true;
-                    }
-                }
+                let flipped = signatures.iter().unique().collect_vec().len() > 1;
 
                 let nwrite = child
                     .stdin
@@ -373,6 +349,7 @@ impl HammerVictim for SphincsPlus {
                 if flipped {
                     Ok(VictimResult::SphincsPlus { signatures })
                 } else {
+                    info!("No flips detected");
                     Err(HammerVictimError::NoFlips)
                 }
             }
@@ -383,6 +360,7 @@ impl HammerVictim for SphincsPlus {
     fn stop(&mut self) {
         if let State::Running {
             child,
+            stdout_thread,
             stderr_logger,
             ..
         } = &mut self.state
@@ -392,6 +370,12 @@ impl HammerVictim for SphincsPlus {
             if let Some(stderr_logger) = stderr_logger.take() {
                 stderr_logger.join().expect("join");
             }
+            stdout_thread
+                .take()
+                .expect("stdout_thread")
+                .join()
+                .expect("join");
+
             self.state = State::Stopped;
         }
     }
@@ -402,7 +386,7 @@ impl SphincsPlus {
         if let State::Running {
             child,
             target_pfn,
-            region_offset,
+            injection_config,
             ..
         } = &self.state
         {
@@ -410,13 +394,13 @@ impl SphincsPlus {
             match flippy_page {
                 Ok(Some(flippy_page)) => {
                     info!("Flippy page found: {:?}", flippy_page);
-                    if flippy_page.region_offset != *region_offset {
+                    if flippy_page.region_offset != injection_config.stack_offset {
                         warn!(
                             "Flippy page offset mismatch: {} != {}",
-                            flippy_page.region_offset, region_offset
+                            flippy_page.region_offset, injection_config.stack_offset
                         );
                         return Err(HammerVictimError::FlippyPageOffsetMismatch {
-                            expected: *region_offset,
+                            expected: injection_config.stack_offset,
                             actual: flippy_page,
                         });
                     }
@@ -432,15 +416,6 @@ impl SphincsPlus {
     }
 }
 
-impl State {
-    fn description(&self) -> String {
-        match self {
-            State::Init { binary, .. } => format!("Initializing {}", binary),
-            State::Running { target, .. } => format!("Running {}", target),
-            State::Stopped => "Stopped".to_string(),
-        }
-    }
-}
 #[cfg(test)]
 mod tests {
     use std::ptr::null_mut;
