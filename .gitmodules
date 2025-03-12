@@ -1,3 +1,6 @@
 [submodule "lib/lpfs"]
 	path = lib/lpfs
 	url = https://github.com/seasox/lpfs
+[submodule "victims/sphincsplus"]
+	path = victims/sphincsplus
+	url = https://git.uni-luebeck.de/its/research-projects/rowhammer/sphincsplus
