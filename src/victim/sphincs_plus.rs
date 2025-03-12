@@ -151,7 +151,7 @@ fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
 
-    filter_addrs(addrs, &_TARGET_OFFSETS_ANY)
+    filter_addrs(addrs, &TARGET_OFFSETS_SHAKE_256S)
         .first()
         .map(|f| InjectionConfig {
             target_addr: f.0,
