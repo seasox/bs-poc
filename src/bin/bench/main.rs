@@ -14,7 +14,7 @@ use bs_poc::{
         },
         make_hammer, HammerStrategy, Hammering,
     },
-    memory::{mem_configuration::MemConfiguration, BitFlip, DataPattern},
+    memory::{mem_configuration::MemConfiguration, BitFlip, BytePointer, DataPattern, PfnResolver},
     retry,
     victim::{self},
 };
@@ -160,6 +160,8 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
 
+    let target_pfn = memory.addr(0xa22).pfn()?;
+
     let profile_hammer = make_hammer(
         &args.hammerer,
         &pattern.pattern,
@@ -170,6 +172,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         50,
         true,
         None,
+        target_pfn,
     )?;
     let p = progress.add(ProgressBar::new(args.repeat as u64 * 2));
     let dpattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
@@ -205,6 +208,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         50,
         false,
         None,
+        target_pfn,
     )?;
     let each_attempt_hammerer = make_hammer(
         &args.hammerer,
@@ -216,6 +220,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         50,
         true,
         None,
+        target_pfn,
     )?;
     for (idx, hammerer) in [each_attempt_hammerer, hammerer].iter().enumerate() {
         println!(

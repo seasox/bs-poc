@@ -19,6 +19,7 @@
 //! - `HammerResult`: The result returned by hammering operations.
 //! - `HammerVictim`: A trait that represents the target being hammered. This can be a memory region or interface with a victim process, e.g., using pipe IPC or unix sockets.
 pub mod blacksmith;
+mod dev_mem;
 pub mod dummy;
 
 use crate::{
@@ -27,6 +28,7 @@ use crate::{
 };
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
 use blacksmith::hammerer::{HammeringPattern, PatternAddressMapper};
+pub use dev_mem::DevMemHammerer;
 pub use dummy::Hammerer as Dummy;
 use serde::Serialize;
 
@@ -37,12 +39,15 @@ pub enum HammerStrategy {
     Dummy,
     /// Use the blacksmith hammerer. This hammerer uses the pattern and mapping determined by `blacksmith` to hammer the target.
     Blacksmith,
+    /// Use the devmem hammerer. This hammerer flips a bit in physical memory using `/dev/mem`.
+    DevMem,
 }
 
 #[allow(clippy::large_enum_variant)]
 pub enum Hammerer<'a> {
     Blacksmith(Blacksmith<'a>),
     Dummy(Dummy),
+    DevMem(DevMemHammerer),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -56,6 +61,7 @@ pub fn make_hammer<'a>(
     attempts: u32,
     check_each_attempt: bool,
     read_all_pages_except: Option<Vec<*const u8>>, // read all rows (except victim) after hammering
+    target_pfn: u64, // target page (physical address) for DevMem hammerer
 ) -> anyhow::Result<Hammerer<'a>> {
     let block_shift = block_size.ilog2();
     let hammerer: Hammerer<'a> = match hammerer {
@@ -79,6 +85,10 @@ pub fn make_hammer<'a>(
             let hammerer = Dummy::new(flip);
             Hammerer::Dummy(hammerer)
         }
+        HammerStrategy::DevMem => {
+            let hammerer = DevMemHammerer::new(target_pfn, 2);
+            Hammerer::DevMem(hammerer)
+        }
     };
     Ok(hammerer)
 }
@@ -88,6 +98,7 @@ impl Hammering for Hammerer<'_> {
         match self {
             Hammerer::Blacksmith(blacksmith) => blacksmith.hammer(victim),
             Hammerer::Dummy(dummy) => dummy.hammer(victim),
+            Hammerer::DevMem(dev_mem) => dev_mem.hammer(victim),
         }
     }
 }

