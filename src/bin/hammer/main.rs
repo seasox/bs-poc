@@ -502,7 +502,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         memory.dealloc();
     }
     let now = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let results_file = format!("results_{}.json", now);
+    let results_file = format!("results/results_{}.json", now);
     info!(
         "Timeout reached. Writing experiment results to file {}.",
         results_file
