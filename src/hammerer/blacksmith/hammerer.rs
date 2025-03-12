@@ -449,7 +449,7 @@ impl Hammering for Hammerer<'_> {
                 let time = __rdtscp(&mut aux) - time;
                 _mm_mfence();
                 trace!("Run {}: JIT call took {} cycles", attempt, time);
-                trace!("jit call done: 0x{:02X} (attempt {})", result, attempt);
+                debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
             }
             if let Some(pages) = &self.read_pages {
                 for page in pages {
