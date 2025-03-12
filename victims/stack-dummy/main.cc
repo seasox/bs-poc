@@ -8,8 +8,9 @@
 #include <errno.h>
 #include <pthread.h>
 
-#define NROUNDS 14
-#define ROUND_TIMEOUT_SECS 2
+#include <signal.h>
+
+#define NROUNDS 10
 
 #define BUFSIZE 8192
 
@@ -84,6 +85,9 @@ int main(int argc, char **argv) {
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
 
+	uint64_t phy = get_pfn_from_vaddr((uint64_t)buf);
+	fprintf(stderr, "%lx\n", phy);
+
 	// launch thread reading and flushing buf
 	//pthread_t thread_id;
 	//struct ReadBufArgs args = {
@@ -98,28 +102,33 @@ int main(int argc, char **argv) {
 	for (unsigned int i = 0;; i = (i+1)&1) {
 		fprintf(stderr, "i=%d, pattern: 0x%02x\n", i, pattern[i]);
 		memset(buf, pattern[i], BUFSIZE);
-		for (int j = 0; j < BUFSIZE; ++j) {
+		_mm_mfence();
+		for (int j = 0; j < BUFSIZE; j += 64) {
 			_mm_clflush(buf + j);
 		}
+		_mm_mfence();
 		for (int r = 0; r < NROUNDS; ++r) {
-			sleep(ROUND_TIMEOUT_SECS);
+			for (int j = 0; j < BUFSIZE; j += 64) {
+				_mm_clflush(buf + j);
+			}
+			_mm_mfence();
+			fprintf(stderr, "Going to SIGSTOP\n");
+			//alternative to SIGSTOP/SIGCONT: shared memory page
+			raise(SIGSTOP);
+			// waiting for SIGCONT
+			fprintf(stderr, "Continuing\n");
 			fprintf(stderr, "Round %d\n", r);
+			_mm_mfence();
+			for (int j = 0; j < BUFSIZE; j += 64) {
+				_mm_clflush(buf + j);
+			}
+			_mm_mfence();
 			for (int j = 0; j < BUFSIZE; ++j) {
 				printf("%02x", buf[j]);
 			}
 			printf("\n");
-			for (int j = 0; j < BUFSIZE; ++j) {
-				_mm_clflush(buf + j);
-			}
+			// todo inspect asm
 		}
-		printf("\n\n");
-		fprintf(stderr, "waiting for newline character\n");
-		char c = getchar();
-		if (c != '\n') {
-			printf("Expected '\n', got %c\n", c);
-			return 0;
-		}
-		fprintf(stderr, "received newline\n");
 	}
 	//pthread_cancel(thread_id);
 	return 0;
