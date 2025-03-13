@@ -355,12 +355,12 @@ impl HammerVictim for SphincsPlus {
                     let mut signature = String::new();
                     reader.read_line(&mut signature)?;
                     child.stdout = Some(stdout);
-                    signature
+                    signature.trim().to_string()
                 };
                 let expected_sha256 = [
-                    "91c1db9396122a119a443563c20110dfe674357eb4adb734677cec5bd8558975", // sphincs+ sig
-                    "9f5d309b490710c8348e3b620373646cd2b9a148d3bbf0edb2262004d9d03f9c", // dummy "aaaaaa..."
-                    "3b87d083b1c541c6833c8d213f4af85094d8ca662c910aeebdd12ec702349c81", // dummy "555555..."
+                    "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
+                    "f3336bea752b5a28743033dd2c844a4a63fba08871aaee2586a2bf2d69be83a2", // dummy "aaaaaa..."
+                    "5af53f7370947ba6975447488f7da0420887fdce811d5ce5e1bfe5125d24c977", // dummy "555555..."
                 ];
                 let mut hasher = Sha256::new();
                 hasher.update(signature.as_bytes());
