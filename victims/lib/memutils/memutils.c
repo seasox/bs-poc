@@ -1,0 +1,137 @@
+// memutils.c
+#define _GNU_SOURCE
+#include "memutils.h"
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <sched.h>
+
+#define MTRR_DEF_TYPE 0x2FF
+#define MTRR_BASE_MSR 0x200
+#define MTRR_MASK_MSR 0x201
+
+#define PAGE_SIZE 4096
+#define PAGE_SHIFT 12
+
+#define MEASURE_ROUNDS 1000
+
+// Read the physical address from pagemap
+uint64_t get_physical_address(void *virtual_address) {
+    // Open the pagemap file for the current process
+    int pagemap_fd = open("/proc/self/pagemap", O_RDONLY);
+    if (pagemap_fd == -1) {
+        perror("Failed to open /proc/self/pagemap");
+        return (uint64_t)-1;
+    }
+
+    // Calculate the pagemap index for the given virtual address
+    uint64_t virtual_page_index = (uint64_t)virtual_address >> PAGE_SHIFT;
+    off_t offset = (off_t)(virtual_page_index * sizeof(uint64_t));
+
+    // Seek to the pagemap entry
+    if (lseek(pagemap_fd, offset, SEEK_SET) == (off_t)-1) {
+        perror("Failed to seek in /proc/self/pagemap");
+        close(pagemap_fd);
+        return (uint64_t)-1;
+    }
+
+    // Read the pagemap entry
+    uint64_t pagemap_entry;
+    if (read(pagemap_fd, &pagemap_entry, sizeof(pagemap_entry)) != sizeof(pagemap_entry)) {
+        perror("Failed to read /proc/self/pagemap");
+        close(pagemap_fd);
+        return (uint64_t)-1;
+    }
+
+    close(pagemap_fd);
+
+    // Check if the page is present in memory
+    if (!(pagemap_entry & (1ULL << 63))) {
+        fprintf(stderr, "Page not present in memory\n");
+        return (uint64_t)-1;
+    }
+
+    // Extract the physical page number from the pagemap entry
+    uint64_t physical_page_number = pagemap_entry & ((1ULL << 55) - 1);
+    return (physical_page_number << PAGE_SHIFT) | ((uint64_t)virtual_address & (PAGE_SIZE - 1));
+}
+
+// Calculate the offset in pages for the given virtual address
+ssize_t get_stack_offset(void *virtual_address) {
+    // Get the start of the stack region from /proc/self/maps
+    FILE *maps_file = fopen("/proc/self/maps", "r");
+    if (!maps_file) {
+        perror("Failed to open /proc/self/maps");
+        return -1;
+    }
+
+    uintptr_t stack_start = 0;
+    uintptr_t stack_end = 0;
+
+    char line[256];
+    while (fgets(line, sizeof(line), maps_file)) {
+        if (strstr(line, "[stack]")) {
+            sscanf(line, "%lx-%lx", &stack_start, &stack_end);
+            break;
+        }
+    }
+
+    fclose(maps_file);
+
+    if (stack_start == 0) {
+        fprintf(stderr, "Failed to find stack region\n");
+        return -1;
+    }
+
+    if ((uintptr_t)virtual_address < stack_start || (uintptr_t)virtual_address >= stack_end) {
+        fprintf(stderr, "Address is not within the stack region\n");
+        return -1;
+    }
+
+    // Calculate the offset in pages
+    return (ssize_t)(((uintptr_t)virtual_address - stack_start) / PAGE_SIZE);
+}
+
+void set_uncachable(uint64_t phys) {
+    char command[256];
+    phys = phys & ~(PAGE_SIZE-1);  // mask out page offset
+    // very dirty hack, but my kernel module crashes the system *shrugs*
+    snprintf(command, sizeof(command), "echo \"base=0x%lx size=0x1000 type=uncachable\" > /proc/mtrr", phys);
+    int rc = system(command);
+    if (rc != 0) {
+        fprintf(stderr, "command failed: %s\n", command);
+        perror("Failed to set MTRR");
+    }
+}
+
+void set_cachable(__attribute__((unused)) uint64_t phys) {
+    // very VERY hacky lol
+    int rc = system("echo \"disable=5\" > /proc/mtrr");
+    if (rc != 0) {
+        perror("Failed to reset MTRRs");
+    }
+}
+
+__attribute__((noinline))
+unsigned long long measure_access(void *ptr) {
+    unsigned long long start, end;
+    unsigned int aux;
+    volatile uint8_t y;
+
+    __asm__ volatile ("mfence" ::: "memory");
+    __asm__ volatile ("cpuid" ::: "rax", "rbx", "rcx", "rdx", "memory"); // Serialize
+    __asm__ volatile ("rdtscp" : "=a" (start), "=d" (aux) :: "rcx", "memory"); // Read timestamp
+    __asm__ volatile ("lfence"); // Ensure load doesn't execute before timestamp
+    for (int i = 0; i < MEASURE_ROUNDS; ++i) {
+        __asm__ volatile ("movb (%1), %0" : "=r" (y) : "r" (ptr) : "memory");
+    }
+    __asm__ volatile ("lfence" ::: "memory");
+    __asm__ volatile ("rdtscp" : "=a" (end), "=d" (aux) :: "rcx", "memory");
+    __asm__ volatile ("mfence" ::: "memory");
+    
+    return (end - start) / MEASURE_ROUNDS;
+}
