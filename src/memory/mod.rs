@@ -46,6 +46,7 @@ pub use self::pfn_offset::PfnOffset;
 pub use self::pfn_offset_resolver::PfnOffsetResolver;
 pub use self::pfn_resolver::PfnResolver;
 pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
+pub use self::virt_to_phys::PhysAddr;
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
 use rand::{rngs::StdRng, Rng};
 use serde::Serialize;
@@ -158,6 +159,15 @@ pub struct BitFlip {
     pub data: u8,
 }
 
+#[derive(Clone, Debug, Serialize, Eq, PartialEq)]
+pub enum FlipDirection {
+    ZeroToOne,
+    OneToZero,
+    Multiple(Vec<FlipDirection>),
+    None,
+    Any,
+}
+
 impl core::fmt::Debug for BitFlip {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BitFlip")
@@ -174,6 +184,36 @@ impl BitFlip {
             addr: addr as usize,
             bitmask,
             data,
+        }
+    }
+}
+
+impl BitFlip {
+    pub fn flip_direction(&self) -> FlipDirection {
+        match self.bitmask.count_ones() {
+            0 => FlipDirection::None,
+            1 => {
+                let flipped = self.bitmask & self.data;
+                match flipped {
+                    0 => FlipDirection::ZeroToOne,
+                    _ => FlipDirection::OneToZero,
+                }
+            }
+            2.. => FlipDirection::Multiple(
+                (0..8)
+                    .filter_map(|i| {
+                        if self.bitmask & (1 << i) != 0 {
+                            Some(if self.data & (1 << i) != 0 {
+                                FlipDirection::OneToZero
+                            } else {
+                                FlipDirection::ZeroToOne
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            ),
         }
     }
 }
@@ -227,7 +267,7 @@ where
 
 /// Blanket implementation for PfnResolver trait for BytePointer
 impl<T: BytePointer> PfnResolver for T {
-    fn pfn(&self) -> anyhow::Result<u64> {
+    fn pfn(&self) -> anyhow::Result<PhysAddr> {
         let mut resolver = LinuxPageMap::new()?;
         resolver.get_phys(self.ptr() as u64)
     }
@@ -294,4 +334,33 @@ fn test_pattern_random_clone() -> anyhow::Result<()> {
     let b = pattern.clone().get(std::ptr::null());
     assert_eq!(a, b);
     Ok(())
+}
+
+#[test]
+fn test_bitflip_direction() {
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0000, 0xFF);
+    assert_eq!(flip.flip_direction(), FlipDirection::None);
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0001, 0b0000_0001);
+    assert_eq!(flip.flip_direction(), FlipDirection::OneToZero);
+
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0001, 0b1111_1110);
+    assert_eq!(flip.flip_direction(), FlipDirection::ZeroToOne);
+
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0011, 0b0000_0010);
+    assert_eq!(
+        flip.flip_direction(),
+        FlipDirection::Multiple(vec![FlipDirection::ZeroToOne, FlipDirection::OneToZero])
+    );
+
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0011, 0b0000_0000);
+    assert_eq!(
+        flip.flip_direction(),
+        FlipDirection::Multiple(vec![FlipDirection::ZeroToOne, FlipDirection::ZeroToOne])
+    );
+
+    let flip = BitFlip::new(std::ptr::null(), 0b0000_0011, 0b0000_0011);
+    assert_eq!(
+        flip.flip_direction(),
+        FlipDirection::Multiple(vec![FlipDirection::OneToZero, FlipDirection::OneToZero])
+    );
 }

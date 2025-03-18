@@ -23,7 +23,9 @@ mod dev_mem;
 pub mod dummy;
 
 use crate::{
-    memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks},
+    memory::{
+        mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, FlipDirection, PhysAddr,
+    },
     victim::{HammerVictim, HammerVictimError, VictimResult},
 };
 pub use blacksmith::hammerer::Hammerer as Blacksmith;
@@ -61,7 +63,8 @@ pub fn make_hammer<'a>(
     attempts: u32,
     check_each_attempt: bool,
     read_all_pages_except: Option<Vec<*const u8>>, // read all rows (except victim) after hammering
-    target_pfn: u64, // target page (physical address) for DevMem hammerer
+    target_pfn: PhysAddr, // target page (physical address) for DevMem hammerer
+    flip_direction: FlipDirection, // direction of bit flip for DevMem hammerer
 ) -> anyhow::Result<Hammerer<'a>> {
     let block_shift = block_size.ilog2();
     let hammerer: Hammerer<'a> = match hammerer {
@@ -86,7 +89,7 @@ pub fn make_hammer<'a>(
             Hammerer::Dummy(hammerer)
         }
         HammerStrategy::DevMem => {
-            let hammerer = DevMemHammerer::new(target_pfn, 2);
+            let hammerer = DevMemHammerer::new(target_pfn, 2, flip_direction);
             Hammerer::DevMem(hammerer)
         }
     };

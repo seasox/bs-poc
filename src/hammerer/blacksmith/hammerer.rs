@@ -161,7 +161,7 @@ impl PatternAddressMapper {
             let p = pagemap.get_phys(relocated as u64);
             match p {
                 Ok(p) => {
-                    let phys = DRAMAddr::from_virt(p as *const u8, &mem_config);
+                    let phys = DRAMAddr::from_virt(p.into(), &mem_config);
                     debug!(
                         "Relocate {:?} to {:?} (0x{:x}), phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
                         addr,
@@ -321,7 +321,7 @@ impl<'a> Hammerer<'a> {
                 .get_phys(addr as u64);
             match paddr {
                 Ok(paddr) => {
-                    let dram = DRAMAddr::from_virt(paddr as *const u8, &mem_config);
+                    let dram = DRAMAddr::from_virt(paddr.into(), &mem_config);
                     trace!(
                         "{:>06} {:02},{:04},0x{:02x},{}",
                         action,

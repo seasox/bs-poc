@@ -11,6 +11,8 @@ use crate::util::PAGE_SIZE;
 
 use crate::memory::PageMapInfo;
 
+use super::PhysAddr;
+
 #[derive(Debug)]
 pub struct FlippyPage {
     #[allow(dead_code)]
@@ -19,7 +21,10 @@ pub struct FlippyPage {
     pub region_offset: usize, // page offset in the region
 }
 
-pub fn find_flippy_page(target_page: u64, pid: u32) -> Result<Option<FlippyPage>, PageMapError> {
+pub fn find_flippy_page(
+    target_page: PhysAddr,
+    pid: u32,
+) -> Result<Option<FlippyPage>, PageMapError> {
     let pmap = PageMapInfo::load(pid as u64)?.0;
     let mut flippy_region = None;
     for (map, pagemap) in pmap {
@@ -27,7 +32,7 @@ pub fn find_flippy_page(target_page: u64, pid: u32) -> Result<Option<FlippyPage>
             let pfn = pmap.pfn();
             match pfn {
                 Ok(pfn) => {
-                    if target_page >> PAGE_SHIFT == pfn {
+                    if target_page.as_usize() >> PAGE_SHIFT == pfn as usize {
                         flippy_region = Some(FlippyPage {
                             maps_entry: map.0.clone(),
                             region_offset: idx,

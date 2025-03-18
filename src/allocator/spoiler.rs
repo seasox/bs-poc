@@ -73,7 +73,7 @@ impl ConsecAllocator for Spoiler {
                 blocks
                     .iter()
                     .map(|b| DRAMAddr::from_virt(
-                        b.pfn().unwrap_or_default() as *const u8,
+                        b.pfn().unwrap_or_default().into(),
                         &self.mem_config
                     ))
                     .collect_vec()
@@ -102,21 +102,20 @@ impl ConsecAllocator for Spoiler {
                 let pfn = block.pfn();
                 let last_pfn = blocks.last().map(|b| b.pfn()).transpose();
                 if let (Ok(pfn), Ok(Some(last_pfn))) = (&pfn, &last_pfn) {
-                    let bank = DRAMAddr::from_virt(*pfn as *const u8, &self.mem_config).bank;
+                    let bank = DRAMAddr::from_virt((*pfn).into(), &self.mem_config).bank;
                     if bank != 0 {
                         debug!("Not bank 0: {}", bank);
                         //block.dealloc();
                         //continue;
                     }
-                    let last_bank =
-                        DRAMAddr::from_virt(*last_pfn as *const u8, &self.mem_config).bank;
+                    let last_bank = DRAMAddr::from_virt((*last_pfn).into(), &self.mem_config).bank;
                     assert_eq!(bank, last_bank);
                 } else {
                     warn!("Skipped PFN check: {:?} {:?}", pfn, last_pfn);
                 }
                 info!(
                     "Adding block (phys) {:?}:\n{}",
-                    DRAMAddr::from_virt(block.pfn()? as *const u8, &self.mem_config),
+                    DRAMAddr::from_virt(block.pfn()?.into(), &self.mem_config),
                     block.consec_pfns()?.format_pfns()
                 );
                 if let Some(p) = &p {
@@ -176,7 +175,10 @@ impl Spoiler {
         unsafe { libc::mlock(aligned, PAGE_SIZE) };
         debug!("Aligned PFNs: {:?}", (aligned, 2 * MB).consec_pfns()?);
         assert_eq!(aligned as usize & (ALIGNMENT - 1), 0);
-        assert_eq!(aligned.pfn().unwrap_or(0) as usize & (ALIGNMENT - 1), 0);
+        assert_eq!(
+            aligned.pfn().unwrap_or_default().as_usize() & (ALIGNMENT - 1),
+            0
+        );
         Ok(MemBlock::new(aligned as *mut u8, 2 * MB))
     }
 
@@ -185,11 +187,11 @@ impl Spoiler {
         let search_buffer_size = 2048 * MB;
         let cont_size = 5 * MB;
         let aligned = Self::allocate_2m_aligned()?;
-        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or(0));
+        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or_default());
         let search_buffer = mmap(null_mut(), search_buffer_size);
         let spoiler_candidates =
             spoiler_candidates(search_buffer, search_buffer_size, aligned.ptr(), cont_size);
-        debug!("Base PFN: {:x}", aligned.pfn()?);
+        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or_default());
         aligned.dealloc();
         if spoiler_candidates.is_empty() {
             unsafe { munmap(search_buffer, search_buffer_size) };
@@ -223,7 +225,7 @@ impl Spoiler {
             let block = MemBlock::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
             debug!("Found candidate: {}", consecs.format_pfns());
-            if consecs[0].end - consecs[0].start != 4 * MB as u64 {
+            if (consecs[0].end - consecs[0].start).as_usize() != 4 * MB {
                 warn!("Not a 4 MB block!");
                 //continue;
             }

@@ -8,7 +8,7 @@ use anyhow::bail;
 use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
 use pagemap::MemoryRegion;
 
-use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset};
+use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset, PhysAddr};
 
 #[derive(Clone, Debug)]
 pub struct MemBlock {
@@ -147,13 +147,13 @@ impl<T> GetConsecPfns for (*mut T, usize) {
         let mut phys_prev = pfns[0];
         let mut range_start = phys_prev;
         for phys in pfns.into_iter().skip(1) {
-            if phys != phys_prev + PAGE_SIZE as u64 {
-                consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
+            if phys != phys_prev + PAGE_SIZE {
+                consecs.push(range_start..phys_prev + PAGE_SIZE);
                 range_start = phys;
             }
             phys_prev = phys;
         }
-        consecs.push(range_start..phys_prev + PAGE_SIZE as u64);
+        consecs.push(range_start..phys_prev + PAGE_SIZE);
         trace!("PFN check done");
         Ok(consecs)
     }
@@ -163,7 +163,7 @@ pub trait FormatPfns {
     fn format_pfns(&self) -> String;
 }
 
-type ConsecPfns = Vec<Range<u64>>;
+type ConsecPfns = Vec<Range<PhysAddr>>;
 
 impl FormatPfns for ConsecPfns {
     fn format_pfns(&self) -> String {
@@ -172,7 +172,7 @@ impl FormatPfns for ConsecPfns {
             pfns += &format!(
                 "{:09x}..[{:04} KB]..{:09x}\n",
                 range.start,
-                (range.end - range.start) / 1024,
+                (range.end - range.start).as_usize() / 1024,
                 range.end
             );
         }

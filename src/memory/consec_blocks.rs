@@ -2,7 +2,7 @@ use std::{collections::VecDeque, ops::Range};
 
 use crate::memory::BytePointer;
 
-use super::{GetConsecPfns, MemBlock, VictimMemory};
+use super::{GetConsecPfns, MemBlock, PhysAddr, VictimMemory};
 
 #[derive(Debug)]
 pub struct ConsecBlocks {
@@ -45,13 +45,13 @@ impl BytePointer for ConsecBlocks {
 }
 
 impl GetConsecPfns for ConsecBlocks {
-    fn consec_pfns(&self) -> anyhow::Result<Vec<Range<u64>>> {
+    fn consec_pfns(&self) -> anyhow::Result<Vec<Range<PhysAddr>>> {
         let mut pfns = vec![];
         for block in &self.blocks {
             let mut block_pfns = VecDeque::from(block.consec_pfns()?);
             let is_cons = pfns
                 .last()
-                .is_some_and(|last: &Range<u64>| last.start == block_pfns[0].end);
+                .is_some_and(|last: &Range<PhysAddr>| last.start == block_pfns[0].end);
             if is_cons {
                 let prev = pfns.pop();
                 let next = block_pfns.pop_front();

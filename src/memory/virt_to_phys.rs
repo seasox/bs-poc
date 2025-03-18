@@ -1,11 +1,29 @@
-use anyhow::{bail, Context, Result};
-use pagemap::{MemoryRegion, PageMapError};
+use std::ops::{Add, Sub};
 
-use crate::util::{Anyhow, PAGE_SHIFT};
+use anyhow::{bail, Context, Result};
+use itertools::Itertools;
+use pagemap::{MemoryRegion, PageMapError};
+use serde::Serialize;
+
+use crate::util::PAGE_SHIFT;
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
+pub struct PhysAddr(usize);
+
+impl PhysAddr {
+    pub fn new(addr: usize) -> Self {
+        PhysAddr(addr)
+    }
+
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
 
 pub trait VirtToPhysResolver {
-    fn get_phys(&mut self, virt: u64) -> Result<u64>;
-    fn get_phys_range(&mut self, region: MemoryRegion) -> Result<Vec<u64>>;
+    fn get_phys(&mut self, virt: u64) -> Result<PhysAddr>;
+    fn get_phys_range(&mut self, region: MemoryRegion) -> Result<Vec<PhysAddr>>;
 }
 
 /// LinuxPageMap uses /proc/self/pagemap to translate virtual to physical addresses.
@@ -26,7 +44,7 @@ impl LinuxPageMap {
 }
 
 impl VirtToPhysResolver for LinuxPageMap {
-    fn get_phys_range(&mut self, memory_region: MemoryRegion) -> Result<Vec<u64>> {
+    fn get_phys_range(&mut self, memory_region: MemoryRegion) -> Result<Vec<PhysAddr>> {
         let entry = self
             .pagemap_wrapper
             .pagemap_region(&memory_region)
@@ -36,13 +54,15 @@ impl VirtToPhysResolver for LinuxPageMap {
                     memory_region
                 )
             })?;
-        entry
+        Ok(entry
             .into_iter()
             .map(|e| e.pfn().map(|p| (p << PAGE_SHIFT)))
-            .collect::<Result<_, PageMapError>>()
-            .anyhow()
+            .collect::<Result<Vec<u64>, PageMapError>>()?
+            .iter()
+            .map(|p| PhysAddr(*p as usize))
+            .collect_vec())
     }
-    fn get_phys(&mut self, virt: u64) -> Result<u64> {
+    fn get_phys(&mut self, virt: u64) -> Result<PhysAddr> {
         //calc virtual address of page containing ptr_to_start
         let vaddr_start_page = virt & !0xFFF;
         let vaddr_end_page = vaddr_start_page + 4095;
@@ -74,8 +94,66 @@ impl VirtToPhysResolver for LinuxPageMap {
         let pfn = entry[0]
             .pfn()
             .with_context(|| format!("failed to get PFN for pagemap entry {:?}", entry[0]))?;
-        let phys_addr = (pfn << PAGE_SHIFT) | (virt & 0xFFF);
+        let phys_addr = ((pfn << PAGE_SHIFT) | (virt & 0xFFF)) as usize;
 
-        Ok(phys_addr)
+        Ok(PhysAddr(phys_addr))
+    }
+}
+
+impl From<PhysAddr> for usize {
+    fn from(addr: PhysAddr) -> usize {
+        addr.0
+    }
+}
+
+impl From<PhysAddr> for *const u8 {
+    fn from(addr: PhysAddr) -> *const u8 {
+        addr.0 as *const u8
+    }
+}
+
+impl std::fmt::LowerHex for PhysAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#x}", self.0)
+    }
+}
+
+impl std::fmt::UpperHex for PhysAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#X}", self.0)
+    }
+}
+
+impl Add<PhysAddr> for PhysAddr {
+    type Output = PhysAddr;
+
+    fn add(self, rhs: PhysAddr) -> Self::Output {
+        PhysAddr(self.0 + rhs.0)
+    }
+}
+
+impl Sub<PhysAddr> for PhysAddr {
+    type Output = PhysAddr;
+
+    fn sub(self, rhs: PhysAddr) -> Self::Output {
+        assert!(self.0 >= rhs.0);
+        PhysAddr(self.0 - rhs.0)
+    }
+}
+
+impl Add<usize> for PhysAddr {
+    type Output = PhysAddr;
+
+    fn add(self, rhs: usize) -> Self::Output {
+        PhysAddr(self.0 + rhs)
+    }
+}
+
+impl Sub<usize> for PhysAddr {
+    type Output = PhysAddr;
+
+    fn sub(self, rhs: usize) -> Self::Output {
+        assert!(self.0 >= rhs);
+        PhysAddr(self.0 - rhs)
     }
 }

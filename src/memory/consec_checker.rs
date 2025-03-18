@@ -121,7 +121,8 @@ impl AllocChecker for ConsecCheckPfn {
         let consecs = block.consec_pfns()?;
         let pfns = consecs.format_pfns();
         info!("PFNs: {}", pfns);
-        let first_block_bytes = (consecs[0].end - consecs[0].start) as usize;
+        let first_block_bytes = consecs[0].end - consecs[0].start;
+        let first_block_bytes = first_block_bytes.as_usize();
         let is_consec = first_block_bytes >= block.len;
         if is_consec {
             info!(
@@ -154,9 +155,9 @@ impl AllocChecker for ConsecCheckPfnBank {
     fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
         let pfns = block.consec_pfns()?.format_pfns();
         info!("PFNs: {}", pfns);
-        let first_pfn = block.pfn()? as *mut u8;
+        let first_pfn: *const u8 = block.pfn()?.into();
         for row in (0..block.len).step_by(ROW_SIZE) {
-            let pfn = block.addr(row).pfn()? as *mut u8;
+            let pfn = block.addr(row).pfn()?.into();
             // compare the actual PFN bank with the expected bank if the observed block were consecutive
             let dram = DRAMAddr::from_virt(pfn, &self.mem_config);
             let expected_dram =

