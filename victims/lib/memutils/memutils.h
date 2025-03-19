@@ -24,7 +24,8 @@ ssize_t get_stack_offset(void *virtual_address);
 __attribute__((noinline))
 unsigned long long measure_access(void *ptr);
 
-void set_uncachable(uint64_t phys_addr);
+int mtrr_open(void);
+int mtrr_page_uncachable(int fd, uint64_t phys);
+void mtrr_close(int fd);
 
-void set_cachable(uint64_t phys_addr);
 #endif // MEMUTILS_H

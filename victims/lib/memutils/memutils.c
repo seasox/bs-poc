@@ -9,10 +9,8 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <sched.h>
-
-#define MTRR_DEF_TYPE 0x2FF
-#define MTRR_BASE_MSR 0x200
-#define MTRR_MASK_MSR 0x201
+#include <asm/mtrr.h>
+#include <sys/ioctl.h>
 
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
@@ -96,24 +94,33 @@ ssize_t get_stack_offset(void *virtual_address) {
     return (ssize_t)(((uintptr_t)virtual_address - stack_start) / PAGE_SIZE);
 }
 
-void set_uncachable(uint64_t phys) {
-    char command[256];
-    phys = phys & ~(PAGE_SIZE-1);  // mask out page offset
-    // very dirty hack, but my kernel module crashes the system *shrugs*
-    snprintf(command, sizeof(command), "echo \"base=0x%lx size=0x1000 type=uncachable\" > /proc/mtrr", phys);
-    int rc = system(command);
-    if (rc != 0) {
-        fprintf(stderr, "command failed: %s\n", command);
-        perror("Failed to set MTRR");
+int mtrr_open(void) {
+    int fd = open("/proc/mtrr", O_WRONLY);
+    if (fd < 0) {
+        perror("open");
     }
+    return fd;
 }
 
-void set_cachable(__attribute__((unused)) uint64_t phys) {
-    // very VERY hacky lol
-    int rc = system("echo \"disable=5\" > /proc/mtrr");
-    if (rc != 0) {
-        perror("Failed to reset MTRRs");
+int mtrr_page_uncachable(int fd, uint64_t phys) {
+    struct mtrr_sentry mtrr;
+    
+    // Set up the MTRR entry structure
+    mtrr.base = phys & ~(PAGE_SIZE-1);
+    mtrr.size = PAGE_SIZE;
+    mtrr.type = MTRR_TYPE_UNCACHABLE;
+
+    // Use ioctl to add the MTRR entry
+    int regnum = ioctl(fd, MTRRIOC_ADD_ENTRY, &mtrr);
+    if (regnum < 0) {
+        perror("ioctl");
+        return -1;
     }
+    return 0;
+}
+
+void mtrr_close(int fd) {
+    close(fd);
 }
 
 __attribute__((noinline))
