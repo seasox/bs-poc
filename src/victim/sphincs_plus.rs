@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
-    process::ChildStdout,
     thread,
     time::Duration,
 };
@@ -27,8 +26,6 @@ enum State {
         target: String,
         #[serde(skip_serializing)]
         child: std::process::Child,
-        #[serde(skip_serializing)]
-        stdout_thread: Option<thread::JoinHandle<(Vec<String>, ChildStdout)>>,
         #[serde(skip_serializing)]
         stderr_logger: Option<thread::JoinHandle<()>>,
         target_pfn: PhysAddr,
@@ -209,42 +206,6 @@ impl SphincsPlus {
     }
 }
 
-pub fn spawn_reader_thread(
-    mut pipe: ChildStdout,
-) -> thread::JoinHandle<(Vec<String>, ChildStdout)> {
-    thread::spawn(move || {
-        let reader = BufReader::new(&mut pipe);
-        let mut lines = Vec::new();
-        let mut prev_empty = false;
-
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    let next_empty = line.is_empty();
-                    if prev_empty && next_empty {
-                        debug!("Received two empty lines, stopping");
-                        break;
-                    }
-                    if !next_empty {
-                        trace!("Received line: {}", line);
-                        lines.push(line);
-                    }
-                    prev_empty = next_empty;
-                    if prev_empty {
-                        debug!("Received empty line");
-                    }
-                }
-                Err(e) => {
-                    error!("Error reading line from child process: {}", e);
-                    break;
-                }
-            }
-        }
-
-        (lines, pipe) // Return both the collected lines and the pipe
-    })
-}
-
 impl HammerVictim for SphincsPlus {
     fn start(&mut self) -> Result<(), HammerVictimError> {
         match &self.state {
@@ -299,11 +260,9 @@ impl HammerVictim for SphincsPlus {
                 set_process_affinity(cid as libc::pid_t, target_core);
 
                 // Create a pipe for IPC
-                let stdout_thread = None; //Some(spawn_reader_thread(child.stdout.take().expect("stdout")));
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
-                    stdout_thread,
                     stderr_logger,
                     target_pfn,
                     injection_config: *injection_config,
