@@ -207,13 +207,6 @@ impl SphincsPlus {
             },
         })
     }
-
-    pub fn pid(&self) -> Option<u32> {
-        match self.state {
-            State::Running { ref child, .. } => Some(child.id()),
-            _ => None,
-        }
-    }
 }
 
 pub fn spawn_reader_thread(
