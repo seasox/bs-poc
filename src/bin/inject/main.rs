@@ -36,7 +36,7 @@ struct CliArgs {
     #[arg(long, default_value = "mmap")]
     alloc_strategy: AllocStrategy,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
-    target: Vec<String>,
+    target: String,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -86,7 +86,7 @@ fn main() -> anyhow::Result<()> {
 
                 info!("Launching victim");
                 let mut victim = match SphincsPlus::new_with_config(
-                    "victims/sphincsplus/ref/test/server".to_string(),
+                    args.target.clone(),
                     InjectionConfig {
                         target_addr: flippy_page as usize,
                         flippy_page_size: PAGE_SIZE,
