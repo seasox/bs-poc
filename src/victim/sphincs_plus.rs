@@ -118,7 +118,7 @@ fn filter_addrs(flips: Vec<BitFlip>, targets: &[TargetOffset]) -> Vec<(usize, Ta
                 direction_match && addr <= pg_offset && pg_offset < addr + target.target_size
             });
             if matched.is_some() {
-                info!("Matched addr {:?} to target {:?}", addr, matched);
+                info!("Matched addr 0x{:x} to target {:?}", addr, matched);
             }
             matched.map(|offset| (addr, offset.clone()))
         })
