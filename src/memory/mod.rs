@@ -156,6 +156,7 @@ pub trait Initializable {
 pub struct BitFlip {
     pub addr: usize,
     pub bitmask: u8,
+    /// the *expected* data
     pub data: u8,
 }
 
