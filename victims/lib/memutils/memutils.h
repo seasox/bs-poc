@@ -15,6 +15,8 @@
 #define MEMUTILS_PRINT_OFFSET(ptr, size) \
     fprintf(stderr, #ptr "=%p,offset=%ld,time=%llu,size=%d\n", (void*)(ptr), get_stack_offset((ptr)), measure_access((ptr)), (size))
 
+extern uint32_t fault_id;
+
 // Function to get the physical address of a virtual address
 uint64_t get_physical_address(void *virtual_address);
 

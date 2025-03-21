@@ -17,6 +17,8 @@
 
 #define MEASURE_ROUNDS 1000
 
+uint32_t fault_id = UINT32_MAX;
+
 // Read the physical address from pagemap
 uint64_t get_physical_address(void *virtual_address) {
     // Open the pagemap file for the current process
