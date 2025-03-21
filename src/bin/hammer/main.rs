@@ -107,7 +107,10 @@ struct CliArgs {
 
 #[derive(Clone, Debug, Subcommand, Serialize)]
 enum Target {
-    SphincsPlus { binary: String },
+    SphincsPlus {
+        #[clap(default_value = "victims/sphincsplus/ref/test/server")]
+        binary: String,
+    },
     None,
 }
 
