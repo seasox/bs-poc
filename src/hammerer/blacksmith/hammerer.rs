@@ -28,20 +28,10 @@ struct AggressorAccessPattern {
 
 #[derive(Deserialize, Debug, Clone)]
 #[allow(dead_code)]
-pub struct BitFlip {
+struct BitFlip {
     pub dram_addr: DRAMAddr,
     bitmask: u8,
     data: u8,
-}
-
-impl BitFlip {
-    pub fn new(dram_addr: DRAMAddr, bitmask: u8, data: u8) -> Self {
-        BitFlip {
-            dram_addr,
-            bitmask,
-            data,
-        }
-    }
 }
 
 #[serde_as]
@@ -53,7 +43,7 @@ pub struct PatternAddressMapper {
     pub bank_no: usize,
     #[serde_as(as = "Vec<(_, _)>")]
     pub aggressor_to_addr: HashMap<Aggressor, DRAMAddr>,
-    pub bit_flips: Vec<Vec<BitFlip>>,
+    bit_flips: Vec<Vec<BitFlip>>,
     code_jitter: CodeJitter,
 }
 

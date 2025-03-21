@@ -121,7 +121,6 @@ fn load_pattern(args: &CliArgs) -> anyhow::Result<LoadedPattern> {
     if max_flips == 0 {
         bail!("No flips in mapping");
     }
-    info!("Flips in mapping: {:?}", &mapping.bit_flips);
     Ok(LoadedPattern { pattern, mapping })
 }
 
