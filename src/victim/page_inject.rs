@@ -13,6 +13,8 @@ use crate::{
 #[derive(Copy, Clone, Debug, Serialize)]
 /// The injection configuration.
 pub struct InjectionConfig {
+    /// An identifier for this InjectionConfig.
+    pub id: usize,
     /// The target address.
     pub target_addr: usize,
     /// The flippy page size.

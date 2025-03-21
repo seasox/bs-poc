@@ -88,6 +88,7 @@ fn main() -> anyhow::Result<()> {
                 let mut victim = match SphincsPlus::new_with_config(
                     args.target.clone(),
                     InjectionConfig {
+                        id: usize::MAX,
                         target_addr: flippy_page as usize,
                         flippy_page_size: PAGE_SIZE,
                         bait_count_after: bait_after,
