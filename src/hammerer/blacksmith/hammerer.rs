@@ -279,7 +279,6 @@ pub struct Hammerer<'a> {
     program: Program,
     attempts: u32,
     check_each_attempt: bool,
-    read_pages: Option<Vec<*const u8>>,
 }
 
 impl<'a> Hammerer<'a> {
@@ -292,7 +291,6 @@ impl<'a> Hammerer<'a> {
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         attempts: u32,
         check_each_attempt: bool,
-        read_all_pages_except: Option<Vec<*const u8>>,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -351,40 +349,6 @@ impl<'a> Hammerer<'a> {
                 .with_context(|| "failed to write function to disk")?;
         }
 
-        if let Some(exceptions) = read_all_pages_except.as_ref() {
-            for page in exceptions {
-                assert_eq!(
-                    (*page as usize & PAGE_MASK),
-                    0,
-                    "only page-aligned addresses supported"
-                );
-            }
-        }
-
-        let read_pages = match read_all_pages_except {
-            None => None,
-            Some(exceptions) => {
-                let mut rows = vec![];
-                assert_eq!(
-                    memory.len() % ROW_SIZE,
-                    0,
-                    "memory size must be multiple of row size"
-                );
-                assert_eq!(
-                    memory.len() % PAGE_SIZE,
-                    0,
-                    "memory size must be multiple of page size"
-                );
-                for offset in (0..memory.len()).step_by(PAGE_SIZE) {
-                    let page = memory.addr(offset) as *const u8;
-                    if !exceptions.contains(&page) {
-                        rows.push(page);
-                    }
-                }
-                Some(rows)
-            }
-        };
-
         Ok(Hammerer {
             memory,
             hammering_addrs: hammering_addrs.to_vec(),
@@ -392,7 +356,6 @@ impl<'a> Hammerer<'a> {
             mem_config,
             attempts,
             check_each_attempt,
-            read_pages,
         })
     }
 
@@ -440,11 +403,6 @@ impl Hammering for Hammerer<'_> {
                 _mm_mfence();
                 trace!("Run {}: JIT call took {} cycles", attempt, time);
                 debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
-            }
-            if let Some(pages) = &self.read_pages {
-                for page in pages {
-                    let _ = unsafe { std::ptr::read_volatile(*page as *const [u8; PAGE_SIZE / 8]) };
-                }
             }
             if self.check_each_attempt || attempt == self.attempts - 1 {
                 let result = victim.check();

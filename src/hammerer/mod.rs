@@ -62,7 +62,6 @@ pub fn make_hammer<'a>(
     memory: &'a ConsecBlocks,
     attempts: u32,
     check_each_attempt: bool,
-    read_all_pages_except: Option<Vec<*const u8>>, // read all rows (except victim) after hammering
     target_pfn: PhysAddr, // target page (physical address) for DevMem hammerer
     flip_direction: FlipDirection, // direction of bit flip for DevMem hammerer
 ) -> anyhow::Result<Hammerer<'a>> {
@@ -76,7 +75,6 @@ pub fn make_hammer<'a>(
             memory,
             attempts,
             check_each_attempt,
-            read_all_pages_except,
         )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);

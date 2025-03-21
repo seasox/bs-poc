@@ -391,7 +391,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             &memory,
             args.attempts,
             true,
-            None,
             target_pfn,
             TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
         )?;
@@ -485,7 +484,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             &memory,
             args.attempts,
             false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
-            None,
             target_pfn,
             TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
         )?;

@@ -173,7 +173,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         &memory,
         50,
         true,
-        None,
         target_pfn,
         FlipDirection::OneToZero,
     )?;
@@ -210,7 +209,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         &memory,
         50,
         false,
-        None,
         target_pfn,
         FlipDirection::OneToZero,
     )?;
@@ -223,7 +221,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         &memory,
         50,
         true,
-        None,
         target_pfn,
         FlipDirection::OneToZero,
     )?;
