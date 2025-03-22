@@ -7,4 +7,7 @@
         "editor.formatOnSave": true // Optional
     },
     "rust-analyzer.showUnlinkedFileNotification": false,
+    "files.associations": {
+        "memutils.h": "c"
+    },
 }
