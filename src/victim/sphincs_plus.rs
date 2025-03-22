@@ -229,7 +229,7 @@ fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(32, 1), (30, 22)]);
 
-    filter_addrs(flips, &_TARGET_OFFSETS_ANY)
+    filter_addrs(flips, &TARGET_OFFSETS_SHAKE_256S)
         .first()
         .map(|f| InjectionConfig {
             id: f.1.id,
