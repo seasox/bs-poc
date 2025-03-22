@@ -75,7 +75,7 @@ impl HammerVictim for HammerVictimTargetCheck<'_> {
             };
             if value != target.data {
                 let bitmask = target.data ^ value;
-                flips.push(BitFlip::new(target.addr as *const u8, bitmask, value))
+                flips.push(BitFlip::new(target.addr as *const u8, bitmask, target.data))
             }
         }
         if !flips.is_empty() {
