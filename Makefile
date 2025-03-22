@@ -9,16 +9,17 @@ FUZZ_CONF=config/fuzz-summary.json
 PATTERN=39ad622b-3bfe-4161-b860-dad5f3e6dd68
 #MAPPING=4d16a3db-c991-419a-b6fe-3a7f41113a8e
 
-#ALLOC_STRATEGY=hugepage-rnd
-#ALLOC_STRATEGY=co-co
-#ALLOC_STRATEGY=buddy-info
-ALLOC_STRATEGY=mmap
+ALLOC_STRATEGY?=pfn
 
 CONSEC_CHECK=bank-timing
 
 LOG_LEVEL=info
 
 PROFILE=release
+
+ALLOCATOR?=pfn
+HAMMERER?=blacksmith
+TIMEOUT?=1
 
 #########################
 #    END config block   #
@@ -37,33 +38,27 @@ ifneq ($(MAPPING),)
 BS_FLAGS+=--mapping=${MAPPING}
 endif
 
-ifeq ($(PROFILE),release)
-	CARGO_FLAGS=--release
-endif
+CARGO_FLAGS=--profile=${PROFILE}
 
 LOGGER=RUST_LOG=${LOG_LEVEL}
 
 SUDO=sudo -E taskset -c 1 
 
 all:
+	make -C victims
 	cargo build ${CARGO_FLAGS}
 
 hammer: all run_hammer
 
-run_hammer:
-	${LOGGER} ${SUDO} target/${PROFILE}/bait_alloc ${BS_FLAGS}
+run_dummy: all
+	RUST_BACKTRACE=1 RUST_LOG=info sudo -E taskset -c 1 target/${PROFILE}/hammer --alloc-strategy ${ALLOCATOR} --timeout 1 --attempts 50 --profiling-rounds 10 --reproducibility-threshold 0.8 --hammerer ${HAMMERER} sphincs-plus victims/stack-dummy/stack
 
-bs_poc: all
-	${LOGGER} ${SUDO} target/${PROFILE}/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority
-
-bs_poc-dummy: all
-	${LOGGER} ${SUDO} target/${PROFILE}/bs_poc ${BS_FLAGS} --hammer-mode=mem-check --elevated-priority --dummy-hammerer
-
-testing: all
-	${LOGGER} target/${PROFILE}/testing ${BS_FLAGS}
+run_bench: all
+	RUST_BACKTRACE=1 RUST_LOG=info sudo -E taskset -c 1 target/${PROFILE}/bench --alloc-strategy ${ALLOCATOR} --timeout 1 --attempts 50 --profiling-rounds 10 --reproducibility-threshold 0.8 --hammerer ${HAMMERER} sphincs-plus victims/stack-dummy/stack
 
 
 clean:
+	make -C victims clean
 	cargo clean ${CARGO_FLAGS}
 
 hammer_jit.o.objdump: hammer_jit.o
