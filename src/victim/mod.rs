@@ -1,6 +1,7 @@
 //! This module contains the victim implementations for the hammer attack.
 //!
 //! A victim is the target of the Rowhammer attack. It can be a memory region or a process. To probe memory regions, the `MemCheck` victim is used. To probe a victim process, the `Process` victim is used.
+mod dev_mem_check;
 pub mod mem_check;
 mod page_inject;
 pub mod sphincs_plus;
@@ -13,6 +14,7 @@ use thiserror::Error;
 use crate::memory::BitFlip;
 use crate::memory::FlippyPage;
 
+pub use self::dev_mem_check::HammerVictimDevMemCheck as DevMemCheck;
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
 pub use self::page_inject::InjectionConfig;
@@ -41,6 +43,7 @@ pub enum VictimResult {
     String(String),
     Strings(Vec<String>),
 }
+
 impl VictimResult {
     pub fn bit_flips(self) -> Vec<BitFlip> {
         match self {
