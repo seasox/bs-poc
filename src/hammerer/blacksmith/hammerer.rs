@@ -2,7 +2,7 @@ use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Prog
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::{GroupBy, PAGE_MASK, PAGE_SIZE, ROW_SIZE};
+use crate::util::GroupBy;
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
 use itertools::Itertools;
