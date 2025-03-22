@@ -1,5 +1,5 @@
 #include <emmintrin.h> // For _mm_clflush
-#include <cstring>
+#include <string.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -10,11 +10,14 @@
 
 #include <signal.h>
 
+#include "memutils.h"
+
 #define NROUNDS 10
 
-#define BUFSIZE 8192
+#define BUFSIZE 4096
 
 #define PAGE_SIZE 4096 // Define the page size (typically 4 KB)
+#define CL_SIZE 64     // Define the cache line size (typically 64 bytes)
 #define PAGEMAP_ENTRY_SIZE 8 // Each pagemap entry is 8 bytes
 
 // Function to get PFN from a virtual address
@@ -69,7 +72,7 @@ struct ReadBufArgs {
 void* read_buffer(void *pargs) {
 	unsigned char *buf = ((struct ReadBufArgs*)pargs)->buf;
 	size_t bufsize = ((struct ReadBufArgs*)pargs)->bufsize;
-	while (true) {
+	while (1) {
 		for (size_t i = 0; i < bufsize; ++i) {
 			volatile int x;
 			asm("mov %1, %0" : "=r"(x) : "m"(buf[i]));
@@ -80,7 +83,7 @@ void* read_buffer(void *pargs) {
 }
 
 int main(int argc, char **argv) {
-	unsigned char buf[BUFSIZE] = {};
+	__attribute__ ((aligned(4096))) unsigned char buf[BUFSIZE] = {};
 
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
@@ -100,35 +103,30 @@ int main(int argc, char **argv) {
 	//unsigned char pattern = getchar();
 	unsigned char pattern[2] = {0b10101010, 0b01010101};
 	for (unsigned int i = 0;; i = (i+1)&1) {
-		fprintf(stderr, "i=%d, pattern: 0x%02x\n", i, pattern[i]);
 		memset(buf, pattern[i], BUFSIZE);
-		_mm_mfence();
-		for (int j = 0; j < BUFSIZE; j += 64) {
-			_mm_clflush(buf + j);
+		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
+		int fd = mtrr_open();
+		if (fd < 0) {
+			fprintf(stderr, "Failed to open /dev/mem\n");
 		}
-		_mm_mfence();
-		for (int r = 0; r < NROUNDS; ++r) {
-			for (int j = 0; j < BUFSIZE; j += 64) {
-				_mm_clflush(buf + j);
+		if (fd >= 0) {
+			uint64_t phys = get_physical_address(buf);
+			if (mtrr_page_uncachable(fd, phys) < 0) {
+				fprintf(stderr, "Failed to set page uncachable\n");
 			}
-			_mm_mfence();
-			fprintf(stderr, "Going to SIGSTOP\n");
-			//alternative to SIGSTOP/SIGCONT: shared memory page
-			raise(SIGSTOP);
-			// waiting for SIGCONT
-			fprintf(stderr, "Continuing\n");
-			fprintf(stderr, "Round %d\n", r);
-			_mm_mfence();
-			for (int j = 0; j < BUFSIZE; j += 64) {
-				_mm_clflush(buf + j);
-			}
-			_mm_mfence();
-			for (int j = 0; j < BUFSIZE; ++j) {
-				printf("%02x", buf[j]);
-			}
-			printf("\n");
-			// todo inspect asm
 		}
+		fprintf(stderr, "Going to SIGSTOP\n");
+		//alternative to SIGSTOP/SIGCONT: shared memory page
+		raise(SIGSTOP);
+		// waiting for SIGCONT
+		fprintf(stderr, "Continuing\n");
+		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
+		mtrr_close(fd);
+		for (int j = 0; j < BUFSIZE; ++j) {
+			printf("%02x", buf[j]);
+		}
+		printf("\n");
+		// todo inspect asm
 	}
 	//pthread_cancel(thread_id);
 	return 0;
