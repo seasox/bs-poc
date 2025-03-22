@@ -19,7 +19,7 @@ use bs_poc::{
         PfnResolver,
     },
     retry,
-    victim::{self},
+    victim::{self, HammerVictim},
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
@@ -181,24 +181,21 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     // find affected locations (for targetted checks)
     let results = (0..10)
-        .map(|_| {
+        .filter_map(|_| {
             let mut victim = victim::MemCheck::new(&memory, dpattern.clone());
-            profile_hammer.hammer(&mut victim)
+            profile_hammer.hammer(&mut victim).ok()
         })
-        .collect::<Result<Vec<_>, _>>();
-    let results = match results {
-        Ok(results) => results,
-        Err(e) => {
-            warn!("Profiling hammering round not successful: {:?}", e);
-            panic!("No flips");
-        }
-    };
+        .collect::<Vec<_>>();
     info!("Affected locations: {:?}", results);
     let flips: Vec<BitFlip> = results
         .into_iter()
         .flat_map(|r| r.victim_result.bit_flips())
         .unique_by(|f| f.addr)
         .collect();
+
+    if flips.is_empty() {
+        bail!("No affected locations found");
+    }
 
     let hammerer = make_hammer(
         &args.hammerer,
@@ -207,37 +204,32 @@ unsafe fn _main() -> anyhow::Result<()> {
         mem_config,
         block_size,
         &memory,
-        50,
+        1,
         false,
         target_pfn,
         FlipDirection::OneToZero,
     )?;
-    let each_attempt_hammerer = make_hammer(
-        &args.hammerer,
-        &pattern.pattern.clone(),
-        &pattern.mapping.clone(),
-        mem_config,
-        block_size,
+    let targetcheck = Box::new(victim::TargetCheck::new(
         &memory,
-        50,
-        true,
-        target_pfn,
-        FlipDirection::OneToZero,
-    )?;
-    for (idx, hammerer) in [each_attempt_hammerer, hammerer].iter().enumerate() {
-        println!(
-            "{}",
-            if idx == 0 {
-                "Each attempt hammerer"
-            } else {
-                "Hammerer"
-            }
-        );
+        dpattern.clone(),
+        flips.clone(),
+    )) as Box<dyn HammerVictim>;
+    let devmemcheck = Box::new(victim::DevMemCheck::new(flips.clone())?) as Box<dyn HammerVictim>;
+    let memcheck =
+        Box::new(victim::MemCheck::new(&memory, dpattern.clone())) as Box<dyn HammerVictim>;
+
+    for (idx, victim) in [targetcheck, devmemcheck, memcheck].iter_mut().enumerate() {
+        if idx == 0 {
+            println!("targetcheck");
+        } else if idx == 1 {
+            println!("devmemcheck");
+        } else {
+            println!("memcheck");
+        }
         for _ in 0..args.repeat {
             p.inc(1);
             let start = std::time::Instant::now();
-            let mut victim = victim::TargetCheck::new(&memory, dpattern.clone(), flips.clone());
-            let result = hammerer.hammer(&mut victim);
+            let result = hammerer.hammer(victim.as_mut());
             let duration = std::time::Instant::now() - start;
             let bit_flips = match result {
                 Ok(result) => {
