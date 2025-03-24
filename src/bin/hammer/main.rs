@@ -10,7 +10,7 @@ use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
-    memory::{BitFlip, DataPattern, Initializable},
+    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
@@ -440,15 +440,16 @@ unsafe fn _main() -> anyhow::Result<()> {
             .flat_map(|p| p.bit_flips.clone())
             .collect_vec();
 
-        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), flips) {
-            Ok(victim) => victim,
-            Err(e) => {
-                memory.dealloc();
-                warn!("Failed to start victim: {:?}", e);
-                experiments.push(ExperimentData::new(vec![Err(e)], profiling.clone(), None));
-                continue 'repeat;
-            }
-        };
+        let mut victim =
+            match make_victim(args.target.clone().unwrap_or(Target::None), flips, &memory) {
+                Ok(victim) => victim,
+                Err(e) => {
+                    memory.dealloc();
+                    warn!("Failed to start victim: {:?}", e);
+                    experiments.push(ExperimentData::new(vec![Err(e)], profiling.clone(), None));
+                    continue 'repeat;
+                }
+            };
 
         let target_profile = profiling
             .iter()
@@ -539,10 +540,14 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(target: Target, flips: Vec<BitFlip>) -> Result<Victim, ExperimentError> {
+fn make_victim(
+    target: Target,
+    flips: Vec<BitFlip>,
+    memory: &dyn VictimMemory,
+) -> Result<Victim, ExperimentError> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
-            victim::SphincsPlus::new(binary, flips).map_err(|e| {
+            victim::SphincsPlus::new(binary, flips, memory).map_err(|e| {
                 warn!("Failed to create victim: {}", e);
                 format!("Failed to create victim: {}", e)
             })?,

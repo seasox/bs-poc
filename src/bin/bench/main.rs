@@ -138,6 +138,7 @@ struct RoundProfile {
     bit_flips: Vec<BitFlip>,
     pattern: DataPattern,
     duration: Duration,
+    attempt: u32,
 }
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -176,7 +177,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         target_pfn,
         FlipDirection::OneToZero,
     )?;
-    let p = progress.add(ProgressBar::new(args.repeat as u64 * 2));
     let dpattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
 
     // find affected locations (for targetted checks)
@@ -204,40 +204,39 @@ unsafe fn _main() -> anyhow::Result<()> {
         mem_config,
         block_size,
         &memory,
-        1,
-        false,
+        20,
+        true,
         target_pfn,
         FlipDirection::OneToZero,
     )?;
-    let targetcheck = Box::new(victim::TargetCheck::new(
-        &memory,
-        dpattern.clone(),
-        flips.clone(),
-    )) as Box<dyn HammerVictim>;
-    let devmemcheck = Box::new(victim::DevMemCheck::new(flips.clone())?) as Box<dyn HammerVictim>;
-    let memcheck =
-        Box::new(victim::MemCheck::new(&memory, dpattern.clone())) as Box<dyn HammerVictim>;
 
-    for (idx, victim) in [targetcheck, devmemcheck, memcheck].iter_mut().enumerate() {
+    let devmemcheck =
+        Box::new(victim::DevMemCheck::new(flips.clone(), &memory, false)?) as Box<dyn HammerVictim>;
+    let devmemcheckflush =
+        Box::new(victim::DevMemCheck::new(flips.clone(), &memory, true)?) as Box<dyn HammerVictim>;
+
+    let mut victims = [devmemcheck, devmemcheckflush];
+    let p = progress.add(ProgressBar::new(args.repeat as u64 * victims.len() as u64));
+
+    for (idx, victim) in victims.iter_mut().enumerate() {
         if idx == 0 {
-            println!("targetcheck");
-        } else if idx == 1 {
             println!("devmemcheck");
-        } else {
-            println!("memcheck");
+        } else if idx == 1 {
+            println!("devmemcheckflush");
         }
         for _ in 0..args.repeat {
             p.inc(1);
             let start = std::time::Instant::now();
             let result = hammerer.hammer(victim.as_mut());
             let duration = std::time::Instant::now() - start;
+            let attempt = result.as_ref().map(|r| r.attempt).unwrap_or(0);
             let bit_flips = match result {
                 Ok(result) => {
                     info!(
                         "Profiling hammering round successful at attempt {}: {:?}",
                         result.attempt, result.victim_result
                     );
-                    Some(result.victim_result.bit_flips())
+                    Some(result.victim_result.bit_flips().clone())
                 }
                 Err(e) => {
                     warn!("Profiling hammering round not successful: {:?}", e);
@@ -249,7 +248,8 @@ unsafe fn _main() -> anyhow::Result<()> {
                 RoundProfile {
                     bit_flips: bit_flips.unwrap_or_default(),
                     pattern: dpattern.clone(),
-                    duration
+                    duration,
+                    attempt
                 }
             );
         }

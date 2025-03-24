@@ -95,6 +95,7 @@ fn main() -> anyhow::Result<()> {
                         bait_count_before: bait_before,
                         stack_offset: usize::MAX,
                     },
+                    &x,
                 ) {
                     Ok(v) => v,
                     Err(e) => {

