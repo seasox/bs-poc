@@ -12,19 +12,15 @@ use bs_poc::{
             blacksmith_config::BlacksmithConfig,
             hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
         },
-        make_hammer, HammerStrategy, Hammering,
+        Blacksmith, Hammering,
     },
-    memory::{
-        mem_configuration::MemConfiguration, BitFlip, BytePointer, DataPattern, FlipDirection,
-        PfnResolver,
-    },
+    memory::{mem_configuration::MemConfiguration, BitFlip, DataPattern},
     retry,
     victim::{self, HammerVictim},
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
 use indicatif_log_bridge::LogWrapper;
-use itertools::Itertools;
 use log::{info, warn};
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -48,9 +44,6 @@ struct CliArgs {
     /// The mapping ID to load from the `blacksmith` JSON file. Optional argument, will determine most optimal pattern if omitted.
     #[clap(long = "mapping")]
     mapping: Option<String>,
-    /// The hammering strategy to use.
-    #[clap(long = "hammerer", default_value = "blacksmith")]
-    hammerer: HammerStrategy,
     /// The number of rounds for benchmarking
     #[arg(long, default_value = "1000")]
     repeat: usize,
@@ -163,66 +156,46 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
 
-    let target_pfn = memory.addr(0xa22).pfn()?;
+    let dpattern = DataPattern::Random(Box::new(StdRng::from_seed([0; 32])));
+    let flips = vec![
+        BitFlip {
+            addr: 0x2013a14f75,
+            bitmask: 0x1,
+            data: 0xd6,
+        },
+        BitFlip {
+            addr: 0x2013a15f6a,
+            bitmask: 0x20,
+            data: 0x1,
+        },
+    ];
 
-    let profile_hammer = make_hammer(
-        &args.hammerer,
-        &pattern.pattern,
-        &pattern.mapping,
+    let hammerer = Blacksmith::new(
         mem_config,
-        block_size,
-        &memory,
-        50,
-        true,
-        target_pfn,
-        FlipDirection::OneToZero,
-    )?;
-    let dpattern = DataPattern::Random(Box::new(StdRng::from_seed(rand::random())));
-
-    // find affected locations (for targetted checks)
-    let results = (0..10)
-        .filter_map(|_| {
-            let mut victim = victim::MemCheck::new(&memory, dpattern.clone());
-            profile_hammer.hammer(&mut victim).ok()
-        })
-        .collect::<Vec<_>>();
-    info!("Affected locations: {:?}", results);
-    let flips: Vec<BitFlip> = results
-        .into_iter()
-        .flat_map(|r| r.victim_result.bit_flips())
-        .unique_by(|f| f.addr)
-        .collect();
-
-    if flips.is_empty() {
-        bail!("No affected locations found");
-    }
-
-    let hammerer = make_hammer(
-        &args.hammerer,
         &pattern.pattern.clone(),
         &pattern.mapping.clone(),
-        mem_config,
-        block_size,
+        block_size.ilog2() as usize,
         &memory,
         20,
         true,
-        target_pfn,
-        FlipDirection::OneToZero,
+        true,
     )?;
 
-    let devmemcheck =
-        Box::new(victim::DevMemCheck::new(flips.clone(), &memory, false)?) as Box<dyn HammerVictim>;
-    let devmemcheckflush =
-        Box::new(victim::DevMemCheck::new(flips.clone(), &memory, true)?) as Box<dyn HammerVictim>;
+    let targetcheck = Box::new(victim::TargetCheck::new(
+        &memory,
+        dpattern.clone(),
+        flips.clone(),
+    )) as Box<dyn HammerVictim>;
 
-    let mut victims = [devmemcheck, devmemcheckflush];
+    //devmemcheck.start()?;
+    let mut victims = [targetcheck];
     let p = progress.add(ProgressBar::new(args.repeat as u64 * victims.len() as u64));
 
     for (idx, victim) in victims.iter_mut().enumerate() {
         if idx == 0 {
-            println!("devmemcheck");
-        } else if idx == 1 {
-            println!("devmemcheckflush");
+            println!("targetcheck");
+        } else {
+            panic!("Unknown victim");
         }
         for _ in 0..args.repeat {
             p.inc(1);
