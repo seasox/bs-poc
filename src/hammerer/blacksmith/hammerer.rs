@@ -375,9 +375,10 @@ impl<'a> Hammerer<'a> {
 
     fn do_random_accesses(&self, rows: &[AggressorPtr], wait_until_start_hammering_us: u128) {
         let start = Instant::now();
+        let mut _x = 0;
         while start.elapsed().as_micros() < wait_until_start_hammering_us {
-            for row in rows {
-                let _ = unsafe { std::ptr::read_volatile(row) };
+            for &row in rows {
+                _x = std::hint::black_box(unsafe { std::ptr::read_volatile(row) });
             }
         }
     }
