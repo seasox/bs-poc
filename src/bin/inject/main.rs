@@ -96,6 +96,7 @@ fn main() -> anyhow::Result<()> {
                         stack_offset: usize::MAX,
                     },
                     &x,
+                    vec![],
                 ) {
                     Ok(v) => v,
                     Err(e) => {

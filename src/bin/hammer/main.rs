@@ -435,13 +435,16 @@ unsafe fn _main() -> anyhow::Result<()> {
             info!("Profiling done. Found {:?}", profiling);
         }
 
-        let flips = profiling
+        let target_profile = profiling.first().expect("no profiling rounds");
+        let flip = *target_profile
+            .bit_flips
             .iter()
-            .flat_map(|p| p.bit_flips.clone())
-            .collect_vec();
+            .sorted_by_key(|f| f.addr)
+            .next()
+            .expect("no flips in profiling round");
 
         let mut victim =
-            match make_victim(args.target.clone().unwrap_or(Target::None), flips, &memory) {
+            match make_victim(args.target.clone().unwrap_or(Target::None), flip, &memory) {
                 Ok(victim) => victim,
                 Err(e) => {
                     memory.dealloc();
@@ -451,14 +454,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 }
             };
 
-        let target_profile = profiling
-            .iter()
-            .find(|prof| {
-                prof.bit_flips
-                    .iter()
-                    .any(|b| b.addr == victim.target_addr() as usize)
-            })
-            .expect("no round with flips in addr");
         let dpattern = target_profile.pattern.clone();
 
         memory.initialize(dpattern.clone());
@@ -542,12 +537,12 @@ unsafe fn _main() -> anyhow::Result<()> {
 #[allow(clippy::result_large_err)]
 fn make_victim(
     target: Target,
-    flips: Vec<BitFlip>,
+    flip: BitFlip,
     memory: &dyn VictimMemory,
 ) -> Result<Victim, ExperimentError> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
-            victim::SphincsPlus::new(binary, flips, memory).map_err(|e| {
+            victim::SphincsPlus::new(binary, flip, memory).map_err(|e| {
                 warn!("Failed to create victim: {}", e);
                 format!("Failed to create victim: {}", e)
             })?,
@@ -559,14 +554,6 @@ fn make_victim(
 #[derive(Serialize)]
 enum Victim {
     SphincsPlus(victim::SphincsPlus),
-}
-impl Victim {
-    // TODO refactor to trait
-    fn target_addr(&self) -> *const libc::c_void {
-        match self {
-            Victim::SphincsPlus(v) => v.target_addr(),
-        }
-    }
 }
 
 impl HammerVictim for Victim {
