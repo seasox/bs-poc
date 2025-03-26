@@ -10,7 +10,7 @@ use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
-    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
+    memory::{BitFlip, DataPattern, Initializable},
     victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
@@ -443,16 +443,15 @@ unsafe fn _main() -> anyhow::Result<()> {
             .next()
             .expect("no flips in profiling round");
 
-        let mut victim =
-            match make_victim(args.target.clone().unwrap_or(Target::None), flip, &memory) {
-                Ok(victim) => victim,
-                Err(e) => {
-                    memory.dealloc();
-                    warn!("Failed to start victim: {:?}", e);
-                    experiments.push(ExperimentData::new(vec![Err(e)], profiling.clone(), None));
-                    continue 'repeat;
-                }
-            };
+        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), flip) {
+            Ok(victim) => victim,
+            Err(e) => {
+                memory.dealloc();
+                warn!("Failed to start victim: {:?}", e);
+                experiments.push(ExperimentData::new(vec![Err(e)], profiling.clone(), None));
+                continue 'repeat;
+            }
+        };
 
         let dpattern = target_profile.pattern.clone();
 
@@ -535,14 +534,10 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(
-    target: Target,
-    flip: BitFlip,
-    memory: &dyn VictimMemory,
-) -> Result<Victim, ExperimentError> {
+fn make_victim(target: Target, flip: BitFlip) -> Result<Victim, ExperimentError> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
-            victim::SphincsPlus::new(binary, flip, memory).map_err(|e| {
+            victim::SphincsPlus::new(binary, flip).map_err(|e| {
                 warn!("Failed to create victim: {}", e);
                 format!("Failed to create victim: {}", e)
             })?,
