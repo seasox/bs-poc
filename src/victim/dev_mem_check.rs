@@ -1,5 +1,5 @@
-use crate::memory::{BitFlip, PfnResolver, PhysAddr, VictimMemory};
-use crate::util::{CL_SIZE, PAGE_MASK, PAGE_SIZE};
+use crate::memory::{BitFlip, PfnResolver, PhysAddr};
+use crate::util::PAGE_SIZE;
 
 use super::{HammerVictim, HammerVictimError, VictimResult};
 use libc::{
