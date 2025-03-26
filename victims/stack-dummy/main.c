@@ -107,7 +107,7 @@ int main(int argc, char **argv) {
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		int fd = mtrr_open();
 		if (fd < 0) {
-			fprintf(stderr, "Failed to open /dev/mem\n");
+			fprintf(stderr, "Failed to open /dev/mtrr\n");
 		}
 		if (fd >= 0) {
 			uint64_t phys = get_physical_address(buf);
