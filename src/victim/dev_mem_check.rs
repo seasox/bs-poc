@@ -5,45 +5,21 @@ use super::{HammerVictim, HammerVictimError, VictimResult};
 use libc::{
     mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE,
 };
-use std::arch::x86_64::_mm_clflush;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ptr;
 
 pub struct HammerVictimDevMemCheck {
     targets: Vec<(BitFlip, PhysAddr)>,
-    flush_lines: Vec<usize>,
 }
 
 impl HammerVictimDevMemCheck {
-    pub fn new(
-        targets: Vec<BitFlip>,
-        memory: &dyn VictimMemory,
-        flush_before_check: bool,
-    ) -> anyhow::Result<Self> {
-        let flush_lines = if flush_before_check {
-            let mut flush_lines = vec![];
-            let flip_pages = targets
-                .iter()
-                .map(|f| f.addr & !(PAGE_MASK))
-                .collect::<Vec<_>>();
-            for offset in (0..memory.len()).step_by(CL_SIZE) {
-                let line = memory.addr(offset) as usize;
-                let page = line & !(PAGE_MASK);
-                if !flip_pages.contains(&page) {
-                    flush_lines.push(line);
-                }
-            }
-            flush_lines
-        } else {
-            vec![]
-        };
+    pub fn new(targets: Vec<BitFlip>) -> anyhow::Result<Self> {
         Ok(HammerVictimDevMemCheck {
             targets: targets
                 .into_iter()
                 .map(|target| (target.addr as *const u8).pfn().map(|pfn| (target, pfn)))
                 .collect::<anyhow::Result<Vec<_>>>()?,
-            flush_lines,
         })
     }
 }
@@ -105,10 +81,6 @@ impl HammerVictim for HammerVictimDevMemCheck {
     }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
-        // flush all pages
-        for page in self.flush_lines.iter() {
-            unsafe { _mm_clflush(*page as *const u8) };
-        }
         let flips = self
             .targets
             .iter()

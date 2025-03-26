@@ -279,6 +279,7 @@ pub struct Hammerer<'a> {
     program: Program,
     attempts: u32,
     check_each_attempt: bool,
+    flush_lines: Vec<usize>,
 }
 
 impl<'a> Hammerer<'a> {
@@ -291,6 +292,7 @@ impl<'a> Hammerer<'a> {
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         attempts: u32,
         check_each_attempt: bool,
+        flush_lines: bool,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -339,6 +341,17 @@ impl<'a> Hammerer<'a> {
 
         info!("Pattern contains {} accessed addresses", num_accessed_addrs);
 
+        let flush_lines = if flush_lines {
+            let mut lines = vec![];
+            for offset in (0..memory.len()).step_by(CL_SIZE) {
+                let line = memory.addr(offset) as usize;
+                lines.push(line);
+            }
+            lines
+        } else {
+            vec![]
+        };
+
         let program =
             mapping
                 .code_jitter
@@ -356,6 +369,7 @@ impl<'a> Hammerer<'a> {
             mem_config,
             attempts,
             check_each_attempt,
+            flush_lines,
         })
     }
 
@@ -390,6 +404,16 @@ impl Hammering for Hammerer<'_> {
                 "do random memory accesses for {} us before running jitted code",
                 wait_until_start_hammering_us as u128
             );
+            // before hammering: clear cache
+            debug!("Flush {} lines", self.flush_lines.len());
+            let mut _x = std::hint::black_box(0_i64);
+            for &line in self.flush_lines.iter() {
+                unsafe {
+                    //asm!("mov {}, [{}]", out(reg) _x, in(reg) line as *const u8);
+                    asm!("clflushopt [{}]", in(reg) line as *const u8);
+                }
+            }
+            unsafe { _mm_mfence() };
             self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128);
             trace!("call into jitted program");
             unsafe {

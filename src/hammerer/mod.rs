@@ -75,6 +75,7 @@ pub fn make_hammer<'a>(
             memory,
             attempts,
             check_each_attempt,
+            true,
         )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);
