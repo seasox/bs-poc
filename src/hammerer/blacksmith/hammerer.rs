@@ -2,19 +2,21 @@ use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Prog
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::GroupBy;
+use crate::util::{GroupBy, CL_SIZE};
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
 use itertools::Itertools;
+use perfcnt::linux::PerfCounterBuilderLinux as Builder;
+use perfcnt::{AbstractPerfCounter, PerfCounter};
 use rand::Rng;
 use serde::Deserialize;
 use serde_with::serde_as;
+use std::arch::asm;
 use std::arch::x86_64::{__rdtscp, _mm_mfence};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::time::Instant;
 use std::{collections::HashMap, fs::File, io::BufReader};
-
 #[derive(Deserialize, Debug, Hash, PartialEq, Eq, Clone, Copy)]
 pub struct Aggressor(u64);
 
@@ -389,8 +391,23 @@ impl Hammering for Hammerer<'_> {
         info!("Hammering with {} attempts", self.attempts);
         let mut rng = rand::thread_rng();
         const REF_INTERVAL_LEN_US: f32 = 7.8; // check if can be derived from pattern?
+        let mut pc_miss: PerfCounter =
+            Builder::from_hardware_event(perfcnt::linux::HardwareEventType::CacheMisses)
+                .on_cpu(1)
+                .for_pid(std::process::id() as i32)
+                .finish()
+                .expect("Could not create counter");
+        let mut pc_ref: PerfCounter =
+            Builder::from_hardware_event(perfcnt::linux::HardwareEventType::CacheReferences)
+                .on_cpu(1)
+                .for_pid(std::process::id() as i32)
+                .finish()
+                .expect("Could not create counter");
+        pc_miss.reset().expect("Could not reset counter");
+        pc_ref.reset().expect("Could not reset counter");
         victim.init();
         for attempt in 0..self.attempts {
+            pc_miss.reset().expect("Could not reset counter");
             let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
             let wait_until_start_hammering_us =
                 wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
@@ -416,19 +433,32 @@ impl Hammering for Hammerer<'_> {
             }
             unsafe { _mm_mfence() };
             self.do_random_accesses(&random_rows, wait_until_start_hammering_us as u128);
-            trace!("call into jitted program");
             unsafe {
                 let mut aux = 0;
                 _mm_mfence();
                 let time = __rdtscp(&mut aux);
                 _mm_mfence();
+                pc_miss.start().expect("Could not start counter");
+                pc_ref.start().expect("Could not start counter");
                 let result = self.program.call();
                 _mm_mfence();
+                pc_miss.stop().expect("Could not stop counter");
+                pc_ref.stop().expect("Could not stop counter");
                 let time = __rdtscp(&mut aux) - time;
                 _mm_mfence();
-                trace!("Run {}: JIT call took {} cycles", attempt, time);
-                debug!("jit call done: 0x{:02X} (attempt {})", result, attempt);
+                debug!(
+                    "jit call done: 0x{:02X} (attempt {}, time {})",
+                    result, attempt, time
+                );
             }
+            let misses = pc_miss.read().expect("Could not read counter");
+            let refs = pc_ref.read().expect("Could not read counter");
+            debug!(
+                "LL misses: {}/{} = {:.03}",
+                misses,
+                refs,
+                misses as f64 / refs as f64
+            );
             if self.check_each_attempt || attempt == self.attempts - 1 {
                 let result = victim.check();
                 match result {
