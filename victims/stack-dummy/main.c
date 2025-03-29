@@ -102,32 +102,31 @@ int main(int argc, char **argv) {
 	//fflush(stdout);
 	//unsigned char pattern = getchar();
 	unsigned char pattern[2] = {0b10101010, 0b01010101};
+	int fd = mtrr_open();
+	if (fd < 0) {
+		fprintf(stderr, "Failed to open /dev/mtrr\n");
+		return 1;
+	}
+	uint64_t phys = get_physical_address(buf);
+	if (mtrr_page_uncachable(fd, phys) < 0) {
+		fprintf(stderr, "Failed to set page uncachable\n");
+	}
 	for (unsigned int i = 0;; i = (i+1)&1) {
 		memset(buf, pattern[i], BUFSIZE);
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
-		int fd = mtrr_open();
-		if (fd < 0) {
-			fprintf(stderr, "Failed to open /dev/mtrr\n");
-		}
-		if (fd >= 0) {
-			uint64_t phys = get_physical_address(buf);
-			if (mtrr_page_uncachable(fd, phys) < 0) {
-				fprintf(stderr, "Failed to set page uncachable\n");
-			}
-		}
 		fprintf(stderr, "Going to SIGSTOP\n");
 		//alternative to SIGSTOP/SIGCONT: shared memory page
 		raise(SIGSTOP);
 		// waiting for SIGCONT
 		fprintf(stderr, "Continuing\n");
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
-		mtrr_close(fd);
 		for (int j = 0; j < BUFSIZE; ++j) {
 			printf("%02x", buf[j]);
 		}
 		printf("\n");
 		// todo inspect asm
 	}
+	mtrr_close(fd);
 	//pthread_cancel(thread_id);
 	return 0;
 }
