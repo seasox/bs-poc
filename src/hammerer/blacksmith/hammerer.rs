@@ -294,7 +294,7 @@ impl<'a> Hammerer<'a> {
         memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         attempts: u32,
         check_each_attempt: bool,
-        flush_lines: bool,
+        flush_lines: Vec<usize>,
     ) -> Result<Self> {
         info!("Using pattern {}", pattern.id);
         info!("Using mapping {}", mapping.id);
@@ -342,17 +342,6 @@ impl<'a> Hammerer<'a> {
             .count();
 
         info!("Pattern contains {} accessed addresses", num_accessed_addrs);
-
-        let flush_lines = if flush_lines {
-            let mut lines = vec![];
-            for offset in (0..memory.len()).step_by(CL_SIZE) {
-                let line = memory.addr(offset) as usize;
-                lines.push(line);
-            }
-            lines
-        } else {
-            vec![]
-        };
 
         let program =
             mapping
