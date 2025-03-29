@@ -13,7 +13,7 @@
 
 
 #define MEMUTILS_PRINT_OFFSET(ptr, size) \
-    fprintf(stderr, #ptr "=%p,offset=%ld,time=%llu,size=%d\n", (void*)(ptr), get_stack_offset((ptr)), measure_access((ptr)), (size))
+    fprintf(stderr, #ptr "=%p,offset=%ld,phys=0x%lx,time=%llu,size=%d\n", (void*)(ptr), get_stack_offset((ptr)), get_physical_address((ptr)), measure_access((ptr)), (size))
 
 extern uint32_t fault_id;
 
