@@ -41,6 +41,11 @@ impl PageInjector {
 impl PageInjector {
     pub fn inject(&self, mut cmd: Command) -> Result<Child, std::io::Error> {
         let target_page = (self.injection_config.target_addr & !PAGE_MASK) as *mut libc::c_void;
+        debug!(
+            "Injection target page {:p}, phys 0x{:x}, into victim process",
+            target_page,
+            target_page.pfn().unwrap_or_default()
+        );
         let bait: *mut libc::c_void = if self.injection_config.bait_count_before
             + self.injection_config.bait_count_after
             != 0
