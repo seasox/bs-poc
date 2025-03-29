@@ -10,8 +10,9 @@ use anyhow::bail;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
-    memory::{BitFlip, DataPattern, Initializable},
-    victim::{HammerVictimError, VictimResult},
+    memory::{BitFlip, DataPattern, Initializable, VictimMemory},
+    util::{CL_SIZE, MB, PAGE_MASK},
+    victim::{sphincs_plus::TARGET_OFFSET_DUMMY, HammerVictimError, VictimResult},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
@@ -444,12 +445,26 @@ unsafe fn _main() -> anyhow::Result<()> {
         }
 
         let target_profile = profiling.first().expect("no profiling rounds");
-        let flip = *target_profile
+        let flip = target_profile
             .bit_flips
             .iter()
-            .sorted_by_key(|f| f.addr)
-            .next()
-            .expect("no flips in profiling round");
+            .sorted_by_key(|f| f.addr & PAGE_MASK)
+            .next();
+        let flip = match flip {
+            Some(flip) => *flip,
+            None => {
+                memory.dealloc();
+                allocator::util::munmap(flush_buf, 1024 * MB);
+                warn!("No flips found");
+                experiments.push(ExperimentData::new(
+                    vec![Err("No flips found".to_string())],
+                    profiling.clone(),
+                    None,
+                ));
+                continue 'repeat;
+            }
+        };
+        let dpattern = target_profile.pattern.clone();
 
         let mut victim = match make_victim(
             args.target.clone().unwrap_or(Target::None),
@@ -466,8 +481,6 @@ unsafe fn _main() -> anyhow::Result<()> {
                 continue 'repeat;
             }
         };
-
-        let dpattern = target_profile.pattern.clone();
 
         memory.initialize(dpattern.clone());
         match victim.start() {
