@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::{
     allocator::util::{mmap, munmap},
+    memory::PfnResolver,
     util::{PAGE_MASK, PAGE_SIZE},
 };
 
@@ -28,12 +29,12 @@ pub struct InjectionConfig {
 }
 
 #[derive(Debug, Serialize)]
-pub struct PageInjector {
+pub(crate) struct PageInjector {
     injection_config: InjectionConfig,
 }
 
 impl PageInjector {
-    pub fn new(injection_config: InjectionConfig) -> Self {
+    pub(crate) fn new(injection_config: InjectionConfig) -> Self {
         Self { injection_config }
     }
 }
