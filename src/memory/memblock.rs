@@ -113,7 +113,7 @@ impl CachedPfnOffset for MemBlock {
 pub trait GetConsecPfns {
     fn consec_pfns(&self) -> anyhow::Result<ConsecPfns>;
 
-    fn log_pfns(&self) {
+    fn log_pfns(&self, level: log::Level) {
         let pfns = match self.consec_pfns() {
             Ok(pfns) => pfns,
             Err(e) => {
@@ -122,7 +122,7 @@ pub trait GetConsecPfns {
             }
         };
         let pfns = pfns.format_pfns();
-        debug!("PFNs:\n{}", pfns);
+        log!(level, "PFNs:\n{}", pfns);
     }
 }
 

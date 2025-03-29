@@ -67,7 +67,7 @@ pub unsafe fn alloc_memory(
         Err(e) => warn!("Memory compaction failed: {:?}", e),
     }
     let memory = alloc_strategy.alloc_consec_blocks(num_sets * block_size)?;
-    memory.log_pfns();
+    memory.log_pfns(log::Level::Info);
     Ok(memory)
 }
 

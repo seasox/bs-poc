@@ -39,7 +39,7 @@ impl ConsecAllocator for Pfn {
                 bail!("Failed to allocate memory");
             }
             let pfns = (x, BUFSIZE).consec_pfns()?;
-            (x, BUFSIZE).log_pfns();
+            (x, BUFSIZE).log_pfns(log::Level::Trace);
             let consecs = pfns
                 .iter()
                 .enumerate()
