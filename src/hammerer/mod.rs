@@ -62,6 +62,7 @@ pub fn make_hammer<'a>(
     memory: &'a ConsecBlocks,
     attempts: u32,
     check_each_attempt: bool,
+    flush_lines: Vec<usize>,
     target_pfn: PhysAddr, // target page (physical address) for DevMem hammerer
     flip_direction: FlipDirection, // direction of bit flip for DevMem hammerer
 ) -> anyhow::Result<Hammerer<'a>> {
@@ -75,7 +76,7 @@ pub fn make_hammer<'a>(
             memory,
             attempts,
             check_each_attempt,
-            true,
+            flush_lines,
         )?),
         HammerStrategy::Dummy => {
             let flip = mapping.get_bitflips_relocate(mem_config, block_shift as usize, memory);

