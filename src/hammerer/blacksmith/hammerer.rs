@@ -2,7 +2,7 @@ use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Prog
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
-use crate::util::{GroupBy, CL_SIZE};
+use crate::util::GroupBy;
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
 use itertools::Itertools;
@@ -412,10 +412,8 @@ impl Hammering for Hammerer<'_> {
             );
             // before hammering: clear cache
             debug!("Flush {} lines", self.flush_lines.len());
-            let mut _x = std::hint::black_box(0_i64);
             for &line in self.flush_lines.iter() {
                 unsafe {
-                    //asm!("mov {}, [{}]", out(reg) _x, in(reg) line as *const u8);
                     asm!("clflushopt [{}]", in(reg) line as *const u8);
                 }
             }
