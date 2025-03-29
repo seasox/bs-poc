@@ -1,5 +1,5 @@
 use crate::memory::{BitFlip, PfnResolver, PhysAddr};
-use crate::util::PAGE_SIZE;
+use crate::util::{PAGE_MASK, PAGE_SIZE};
 
 use super::{HammerVictim, HammerVictimError, VictimResult};
 use libc::{
@@ -41,7 +41,7 @@ fn read_dev_mem(addr: PhysAddr) -> Result<u8, std::io::Error> {
 
 impl HammerVictim for HammerVictimDevMemCheck {
     fn start(&mut self) -> Result<(), HammerVictimError> {
-        let num_pages = 50;
+        let num_pages = 20;
         let length = PAGE_SIZE * num_pages;
 
         unsafe {
@@ -58,15 +58,12 @@ impl HammerVictim for HammerVictimDevMemCheck {
                 return Err(HammerVictimError::IoError(std::io::Error::last_os_error()));
             }
 
+            for (target, _) in &self.targets {
+                debug!("munmap target: {:?}", target);
+                munmap((target.addr & !(PAGE_MASK)) as *mut libc::c_void, PAGE_SIZE);
+            }
             if munmap(addr, length) != 0 {
                 return Err(HammerVictimError::IoError(std::io::Error::last_os_error()));
-            }
-
-            for (target, _) in &self.targets {
-                munmap(
-                    (target.addr & !(PAGE_SIZE - 1)) as *mut libc::c_void,
-                    PAGE_SIZE,
-                );
             }
         }
         Ok(())
