@@ -391,11 +391,17 @@ impl HammerVictim for SphincsPlus {
 
                 let signature = {
                     let mut stdout = child.stdout.take().expect("stdout");
-                    let mut reader = BufReader::new(&mut stdout);
-                    let mut signature = String::new();
-                    reader.read_line(&mut signature)?;
+                    let mut signature = Vec::new();
+                    let mut buf = [0; 1];
+                    while stdout.read(&mut buf)? == 1 {
+                        if buf[0] == b'\n' {
+                            break;
+                        }
+                        signature.push(buf[0]);
+                    }
+                    let signature = String::from_utf8(signature).expect("utf8");
                     child.stdout = Some(stdout);
-                    signature.trim().to_string()
+                    signature
                 };
                 let expected_sha256 = [
                     "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
