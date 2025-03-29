@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::bail;
+use bs_poc::hammerer::Hammering;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
@@ -28,7 +29,6 @@ use bs_poc::{
     hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
     memory::PfnResolver,
 };
-use bs_poc::{hammerer::Hammering, victim::sphincs_plus::TARGET_OFFSETS_SHAKE_256S};
 use bs_poc::{
     memory::{mem_configuration::MemConfiguration, GetConsecPfns, PhysAddr},
     util::PAGE_SIZE,
