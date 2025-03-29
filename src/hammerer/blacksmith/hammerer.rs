@@ -392,11 +392,10 @@ impl Hammering for Hammerer<'_> {
                 .for_pid(std::process::id() as i32)
                 .finish()
                 .expect("Could not create counter");
-        pc_miss.reset().expect("Could not reset counter");
-        pc_ref.reset().expect("Could not reset counter");
         victim.init();
         for attempt in 0..self.attempts {
             pc_miss.reset().expect("Could not reset counter");
+            pc_ref.reset().expect("Could not reset counter");
             let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
             let wait_until_start_hammering_us =
                 wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
