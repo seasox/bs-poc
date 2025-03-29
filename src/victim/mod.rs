@@ -17,9 +17,10 @@ use crate::memory::FlippyPage;
 pub use self::dev_mem_check::HammerVictimDevMemCheck as DevMemCheck;
 pub use self::mem_check::HammerVictimMemCheck as MemCheck;
 pub use self::mem_check::HammerVictimTargetCheck as TargetCheck;
-pub use self::page_inject::InjectionConfig;
-pub use self::page_inject::PageInjector;
 pub use self::sphincs_plus::SphincsPlus;
+
+pub use self::page_inject::InjectionConfig;
+pub(crate) use self::page_inject::PageInjector;
 
 #[derive(Error, Debug)]
 pub enum HammerVictimError {
