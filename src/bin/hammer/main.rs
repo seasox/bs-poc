@@ -364,8 +364,8 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let target_layer = 0;
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
-    'repeat: for _ in 0..repetitions {
-        if check_timeout(timeout, start) {
+    'repeat: for rep in 0..repetitions {
+        if rep > 0 && check_timeout(timeout, start) {
             info!("Timeout reached. Stopping.");
             break;
         }
