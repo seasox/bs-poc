@@ -111,6 +111,9 @@ enum Target {
         #[clap(default_value = "victims/sphincsplus/ref/test/server")]
         binary: String,
     },
+    DevMemCheck,
+    #[allow(clippy::enum_variant_names)]
+    TargetCheck,
     None,
 }
 
