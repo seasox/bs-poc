@@ -19,8 +19,7 @@ pub use hugepage_rnd::HugepageRandomized;
 pub use mmap::Mmap;
 pub use pfn::Pfn;
 pub use spoiler::Spoiler;
-
-pub use util::compact_mem;
+use util::compact_mem;
 
 use crate::hammerer::blacksmith::hammerer::PatternAddressMapper;
 use crate::memory::mem_configuration::MemConfiguration;

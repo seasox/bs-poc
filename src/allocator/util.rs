@@ -16,7 +16,7 @@ use crate::{
     util::ROW_SIZE,
 };
 
-pub fn compact_mem() -> anyhow::Result<()> {
+pub(crate) fn compact_mem() -> anyhow::Result<()> {
     let output = Command::new("sh")
         .arg("-c")
         .arg("echo 1 | tee /proc/sys/vm/compact_memory")
