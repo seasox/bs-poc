@@ -363,7 +363,7 @@ unsafe fn _main() -> anyhow::Result<()> {
     }
     let mut stats = vec![];
 
-    let target_layer = 0;
+    let target = TARGET_OFFSET_DUMMY;
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for rep in 0..repetitions {
         if rep > 0 && check_timeout(timeout, start) {
@@ -372,9 +372,7 @@ unsafe fn _main() -> anyhow::Result<()> {
         }
         info!("Starting bait allocation");
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
-        let target_pfn = memory
-            .addr(PAGE_SIZE + TARGET_OFFSETS_SHAKE_256S[target_layer].page_offset)
-            .pfn()?;
+        let target_pfn = memory.addr(PAGE_SIZE + target.page_offset).pfn()?;
         let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
@@ -509,9 +507,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
             flush_lines,
             target_pfn,
-            TARGET_OFFSETS_SHAKE_256S[target_layer]
-                .flip_direction
-                .clone(),
+            target.flip_direction.clone(),
         )?;
         let mut results = vec![];
         loop {
