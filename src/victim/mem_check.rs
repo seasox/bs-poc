@@ -1,5 +1,7 @@
 use std::arch::x86_64::_mm_clflush;
 
+use serde::Serialize;
+
 use crate::memory::{BitFlip, DataPattern, VictimMemory};
 use crate::victim::HammerVictim;
 
@@ -39,7 +41,9 @@ impl HammerVictim for HammerVictimMemCheck<'_> {
     fn stop(&mut self) {}
 }
 
+#[derive(Serialize)]
 pub struct HammerVictimTargetCheck<'a> {
+    #[serde(skip_serializing)]
     memory: &'a dyn VictimMemory,
     pattern: DataPattern,
     targets: Vec<BitFlip>,

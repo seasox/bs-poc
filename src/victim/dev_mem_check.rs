@@ -5,11 +5,14 @@ use super::{HammerVictim, HammerVictimError, VictimResult};
 use libc::{
     mmap, munmap, MAP_ANONYMOUS, MAP_FAILED, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE,
 };
+use serde::Serialize;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ptr;
 
+#[derive(Serialize)]
 pub struct HammerVictimDevMemCheck {
+    #[serde(skip_serializing)]
     targets: Vec<(BitFlip, PhysAddr)>,
 }
 

@@ -443,7 +443,12 @@ unsafe fn _main() -> anyhow::Result<()> {
             .next()
             .expect("no flips in profiling round");
 
-        let mut victim = match make_victim(args.target.clone().unwrap_or(Target::None), flip) {
+        let mut victim = match make_victim(
+            args.target.clone().unwrap_or(Target::None),
+            &memory,
+            dpattern.clone(),
+            flip,
+        ) {
             Ok(victim) => victim,
             Err(e) => {
                 memory.dealloc();
@@ -534,7 +539,12 @@ unsafe fn _main() -> anyhow::Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-fn make_victim(target: Target, flip: BitFlip) -> Result<Victim, ExperimentError> {
+fn make_victim(
+    target: Target,
+    memory: &dyn VictimMemory,
+    dpattern: DataPattern,
+    flip: BitFlip,
+) -> Result<Victim<'_>, ExperimentError> {
     match target {
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
             victim::SphincsPlus::new(binary, flip).map_err(|e| {
@@ -542,37 +552,58 @@ fn make_victim(target: Target, flip: BitFlip) -> Result<Victim, ExperimentError>
                 format!("Failed to create victim: {}", e)
             })?,
         )),
+        Target::DevMemCheck => Ok(Victim::DevMemCheck(
+            victim::DevMemCheck::new(vec![flip]).map_err(|e| {
+                warn!("Failed to create victim: {}", e);
+                format!("Failed to create victim: {}", e)
+            })?,
+        )),
+        Target::TargetCheck => Ok(Victim::TargetCheck(victim::TargetCheck::new(
+            memory,
+            dpattern,
+            vec![flip],
+        ))),
         Target::None => Err("No target specified".to_string()),
     }
 }
 
 #[derive(Serialize)]
-enum Victim {
+enum Victim<'a> {
     SphincsPlus(victim::SphincsPlus),
+    DevMemCheck(victim::DevMemCheck),
+    TargetCheck(victim::TargetCheck<'a>),
 }
 
-impl HammerVictim for Victim {
+impl HammerVictim for Victim<'_> {
     fn start(&mut self) -> Result<(), HammerVictimError> {
         match self {
             Victim::SphincsPlus(v) => v.start(),
+            Victim::DevMemCheck(v) => v.start(),
+            Victim::TargetCheck(v) => v.start(),
         }
     }
 
     fn init(&mut self) {
         match self {
             Victim::SphincsPlus(v) => v.init(),
+            Victim::DevMemCheck(v) => v.init(),
+            Victim::TargetCheck(v) => v.init(),
         }
     }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         match self {
             Victim::SphincsPlus(v) => v.check(),
+            Victim::DevMemCheck(v) => v.check(),
+            Victim::TargetCheck(v) => v.check(),
         }
     }
 
     fn stop(&mut self) {
         match self {
             Victim::SphincsPlus(v) => v.stop(),
+            Victim::DevMemCheck(v) => v.stop(),
+            Victim::TargetCheck(v) => v.stop(),
         }
     }
 }
