@@ -82,6 +82,10 @@ void* read_buffer(void *pargs) {
 	return NULL;
 }
 
+void sigusr1_handler(int signum) {
+	fprintf(stderr, "Received SIGUSR1, continuing...\n");
+}
+
 int main(int argc, char **argv) {
 	__attribute__ ((aligned(4096))) unsigned char buf[BUFSIZE] = {};
 
@@ -90,6 +94,9 @@ int main(int argc, char **argv) {
 
 	uint64_t phy = get_pfn_from_vaddr((uint64_t)buf);
 	fprintf(stderr, "%lx\n", phy);
+
+	// Wait for SIGINT before continuing
+	signal(SIGUSR1, sigusr1_handler);
 
 	// launch thread reading and flushing buf
 	//pthread_t thread_id;
@@ -114,10 +121,10 @@ int main(int argc, char **argv) {
 	for (unsigned int i = 0;; i = (i+1)&1) {
 		memset(buf, pattern[i], BUFSIZE);
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
-		fprintf(stderr, "Going to SIGSTOP\n");
+		fprintf(stderr, "Waiting for SIGUSR1\n");
 		//alternative to SIGSTOP/SIGCONT: shared memory page
-		raise(SIGSTOP);
-		// waiting for SIGCONT
+		pause();
+		// waiting for SIGUSR1
 		fprintf(stderr, "Continuing\n");
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		for (int j = 0; j < BUFSIZE; ++j) {

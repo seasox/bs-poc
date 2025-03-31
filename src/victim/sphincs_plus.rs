@@ -358,36 +358,16 @@ impl HammerVictim for SphincsPlus {
             _ => Err(HammerVictimError::NotRunning),
         }
     }
-    fn init(&mut self) {
-        match self.state {
-            State::Running { ref mut child, .. } => {
-                // wait for the victim to enter "SIGSTOP" state
-                info!("Waiting for victim to stop");
-                loop {
-                    debug!("Checking victim state");
-                    let stat = lpfs::pid::stat::stat_of(child.id()).expect("stat_of");
-                    let state = stat.state();
-                    if state.eq_ignore_ascii_case(&'T') {
-                        info!("Victim stopped, ready for hammering");
-                        break;
-                    } else {
-                        trace!("Victim not stopped yet: state {:?}", state);
-                    }
-                    thread::sleep(Duration::from_secs(1));
-                }
-            }
-            _ => panic!("Victim not running"),
-        }
-    }
+    fn init(&mut self) {}
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.check_flippy_page_exists()?;
         match &mut self.state {
             State::Running { child, .. } => {
                 // resume the victim
-                info!("Sending SIGCONT to victim");
+                info!("Sending SIGUSR1 to victim");
                 unsafe {
-                    libc::kill(child.id() as i32, libc::SIGCONT);
+                    libc::kill(child.id() as i32, libc::SIGUSR1);
                 }
 
                 let signature = {
