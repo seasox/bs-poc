@@ -41,10 +41,10 @@ impl Clone for Rng {
     }
 }
 
-mod test {
-    use rand::RngCore;
-
+#[cfg(test)]
+mod tests {
     use crate::util::Rng;
+    use rand::RngCore;
 
     #[test]
     fn test_rng_clone() {
