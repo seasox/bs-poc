@@ -48,13 +48,13 @@ pub use self::pfn_resolver::PfnResolver;
 pub use self::timer::{construct_memory_tuple_timer, MemoryTupleTimer};
 pub use self::virt_to_phys::PhysAddr;
 pub use self::virt_to_phys::{LinuxPageMap, VirtToPhysResolver};
-use rand::{rngs::StdRng, Rng};
+use rand::Rng as _;
 use serde::Serialize;
 use std::arch::x86_64::_mm_clflush;
 use std::fmt::Debug;
 use std::io::BufWriter;
 
-use crate::util::{CL_SIZE, PAGE_SIZE, ROW_MASK, ROW_SIZE};
+use crate::util::{Rng, CL_SIZE, PAGE_SIZE, ROW_MASK, ROW_SIZE};
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
@@ -105,7 +105,7 @@ pub trait BytePointer {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub enum DataPattern {
-    Random(#[serde(skip_serializing)] Box<StdRng>),
+    Random(Box<Rng>),
     StripeZero(
         /* zeroes: */ #[serde(skip_serializing)] Vec<AggressorPtr>,
     ),
@@ -328,9 +328,7 @@ where
 
 #[test]
 fn test_pattern_random_clone() -> anyhow::Result<()> {
-    let pattern = DataPattern::Random(Box::new(<StdRng as rand::SeedableRng>::from_seed(
-        rand::random(),
-    )));
+    let pattern = DataPattern::Random(Box::new(Rng::from_seed(rand::random())));
     let a = pattern.clone().get(std::ptr::null());
     let b = pattern.clone().get(std::ptr::null());
     assert_eq!(a, b);
