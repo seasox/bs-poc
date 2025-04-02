@@ -1,17 +1,11 @@
 use crate::allocator::ConsecAllocator;
 use crate::memory::{ConsecBlocks, HugepageSize, MemBlock};
-use crate::util::{BASE_MSB, MB};
+use crate::util::MB;
 use anyhow::bail;
 use lazy_static::lazy_static;
-use libc::{
-    close, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_HUGE_1GB, MAP_SHARED, O_CREAT, O_RDWR,
-    PROT_READ, PROT_WRITE,
-};
-use std::alloc::{GlobalAlloc, Layout};
-use std::ffi::{c_void, CString};
+use std::ffi::c_void;
 use std::fs::File;
 use std::io::Read;
-use std::ptr::null_mut;
 // https://www.kernel.org/doc/Documentation/vm/hugetlbpage.txt
 //
 // The output of "cat /proc/meminfo" will include lines like:
@@ -61,10 +55,6 @@ fn parse_hugepage_size(s: &str) -> isize {
     -1
 }
 
-fn align_to(size: usize, align: usize) -> usize {
-    (size + align - 1) & !(align - 1)
-}
-
 // hugepage allocator.
 #[cfg(target_arch = "x86_64")]
 #[derive(Debug, Default, Copy, Clone)]
@@ -93,7 +83,7 @@ impl ConsecAllocator for HugepageAllocator {
 pub mod tests {
     use super::*;
     use crate::{allocator::hugepage::HugepageAllocator, memory::BytePointer};
-    use std::{mem, ptr};
+    use std::{alloc::Layout, mem, ptr};
 
     #[test]
     fn test_parse_hugepage_size() {
@@ -104,12 +94,6 @@ pub mod tests {
         // wrong.
         assert_eq!(parse_hugepage_size("Hugepagesize:1kB"), -1);
         assert_eq!(parse_hugepage_size("Hugepagesize: 2kB"), -1);
-    }
-
-    #[test]
-    fn test_align_to() {
-        assert_eq!(align_to(8, 4), 8);
-        assert_eq!(align_to(8, 16), 16);
     }
 
     #[test]
