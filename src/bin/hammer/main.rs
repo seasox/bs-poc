@@ -354,7 +354,6 @@ unsafe fn _main() -> anyhow::Result<()> {
         info!("Starting bait allocation");
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         let target_pfn = memory.addr(PAGE_SIZE + target.page_offset).pfn()?;
-        let alloc_duration = std::time::Instant::now() - start;
         info!("Allocated {} bytes of memory", memory.len());
 
         info!("Profiling memory for vulnerable addresses");
