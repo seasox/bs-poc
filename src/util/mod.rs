@@ -3,11 +3,13 @@ mod anyhow;
 mod constants;
 mod ipc;
 mod named_progress;
+mod rng;
 
 pub use self::anyhow::Anyhow;
 pub use self::constants::*;
 pub use self::ipc::*;
 pub use self::named_progress::NamedProgress;
+pub use self::rng::Rng;
 
 use std::collections::HashMap;
 
