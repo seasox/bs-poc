@@ -33,7 +33,6 @@ int main(int argc, char **argv) {
 	uint64_t phy = get_physical_address(buf);
 	fprintf(stderr, "%lx\n", phy);
 
-	// Wait for SIGINT before continuing
 	signal(SIGUSR1, sigusr1_handler);
 
 	unsigned char pattern[2] = {0b10101010, 0b01010101};
@@ -50,10 +49,8 @@ int main(int argc, char **argv) {
 		memset(buf, pattern[i], BUFSIZE);
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		fprintf(stderr, "Waiting for SIGUSR1\n");
-		//alternative to SIGSTOP/SIGCONT: shared memory page
 		pause();
 		// waiting for SIGUSR1
-		fprintf(stderr, "Continuing\n");
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		for (int j = 0; j < BUFSIZE; ++j) {
 			printf("%02x", buf[j]);
