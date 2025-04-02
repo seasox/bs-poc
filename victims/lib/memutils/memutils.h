@@ -13,7 +13,7 @@
 
 
 #define MEMUTILS_PRINT_OFFSET(ptr, size) \
-    fprintf(stderr, #ptr "=%p,offset=%ld,phys=0x%lx,time=%llu,size=%d\n", (void*)(ptr), get_stack_offset((ptr)), get_physical_address((ptr)), measure_access((ptr)), (size))
+    fprintf(stderr, #ptr "=%p,offset=%ld,phys=0x%lx,time=%llu,size=%ld\n", (void*)(ptr), get_stack_offset((ptr)), get_physical_address((ptr)), measure_access((ptr), 1), (long)(size))
 
 extern uint32_t fault_id;
 
@@ -24,7 +24,7 @@ uint64_t get_physical_address(void *virtual_address);
 ssize_t get_stack_offset(void *virtual_address);
 
 __attribute__((noinline))
-unsigned long long measure_access(void *ptr);
+unsigned long long measure_access(void *ptr, unsigned int num_accesses);
 
 int mtrr_open(void);
 int mtrr_page_uncachable(int fd, uint64_t phys);

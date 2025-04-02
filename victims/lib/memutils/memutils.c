@@ -15,8 +15,6 @@
 #define PAGE_SIZE 4096
 #define PAGE_SHIFT 12
 
-#define MEASURE_ROUNDS 1000
-
 uint32_t fault_id = UINT32_MAX;
 
 // Read the physical address from pagemap
@@ -88,7 +86,7 @@ ssize_t get_stack_offset(void *virtual_address) {
     }
 
     if ((uintptr_t)virtual_address < stack_start || (uintptr_t)virtual_address >= stack_end) {
-        fprintf(stderr, "Address is not within the stack region\n");
+        //fprintf(stderr, "Address is not within the stack region\n");
         return -1;
     }
 
@@ -126,7 +124,7 @@ void mtrr_close(int fd) {
 }
 
 __attribute__((noinline))
-unsigned long long measure_access(void *ptr) {
+unsigned long long measure_access(void *ptr, unsigned int measure_rounds) {
     unsigned long long start, end;
     unsigned int aux;
     volatile uint8_t y;
@@ -135,12 +133,12 @@ unsigned long long measure_access(void *ptr) {
     __asm__ volatile ("cpuid" ::: "rax", "rbx", "rcx", "rdx", "memory"); // Serialize
     __asm__ volatile ("rdtscp" : "=a" (start), "=d" (aux) :: "rcx", "memory"); // Read timestamp
     __asm__ volatile ("lfence"); // Ensure load doesn't execute before timestamp
-    for (int i = 0; i < MEASURE_ROUNDS; ++i) {
-        __asm__ volatile ("movb (%1), %0" : "=r" (y) : "r" (ptr) : "memory");
+    for (unsigned int i = 0; i < measure_rounds; ++i) {
+        __asm__ volatile ("mov (%1), %0" : "=r" (y) : "r" (ptr) : "memory");
     }
     __asm__ volatile ("lfence" ::: "memory");
     __asm__ volatile ("rdtscp" : "=a" (end), "=d" (aux) :: "rcx", "memory");
     __asm__ volatile ("mfence" ::: "memory");
     
-    return (end - start) / MEASURE_ROUNDS;
+    return (end - start) / measure_rounds;
 }
