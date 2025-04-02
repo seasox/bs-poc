@@ -4,10 +4,11 @@ use crate::util::{BASE_MSB, MB};
 use anyhow::bail;
 use lazy_static::lazy_static;
 use libc::{
-    MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_HUGE_1GB, MAP_SHARED, PROT_READ, PROT_WRITE,
+    close, MAP_ANONYMOUS, MAP_FAILED, MAP_HUGETLB, MAP_HUGE_1GB, MAP_SHARED, O_CREAT, O_RDWR,
+    PROT_READ, PROT_WRITE,
 };
 use std::alloc::{GlobalAlloc, Layout};
-use std::ffi::c_void;
+use std::ffi::{c_void, CString};
 use std::fs::File;
 use std::io::Read;
 use std::ptr::null_mut;
@@ -69,29 +70,6 @@ fn align_to(size: usize, align: usize) -> usize {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct HugepageAllocator {}
 
-#[cfg(target_arch = "x86_64")]
-unsafe impl GlobalAlloc for HugepageAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
-        let mut p = BASE_MSB;
-        let mut mmap_flags = MAP_SHARED | MAP_ANONYMOUS;
-        mmap_flags |= MAP_HUGETLB | MAP_HUGE_1GB;
-        p = libc::mmap(p, len, PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
-
-        if p == MAP_FAILED {
-            return null_mut();
-        }
-
-        debug!("mmaped to 0x{:02X}", p as u64);
-        p as *mut u8
-    }
-
-    unsafe fn dealloc(&self, p: *mut u8, layout: Layout) {
-        let len = align_to(layout.size(), *HUGEPAGE_SIZE as usize);
-        libc::munmap(p as *mut c_void, len);
-    }
-}
-
 impl ConsecAllocator for HugepageAllocator {
     fn block_size(&self) -> usize {
         *HUGEPAGE_SIZE as usize
@@ -114,7 +92,7 @@ impl ConsecAllocator for HugepageAllocator {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::allocator::hugepage::HugepageAllocator;
+    use crate::{allocator::hugepage::HugepageAllocator, memory::BytePointer};
     use std::{mem, ptr};
 
     #[test]
@@ -136,22 +114,28 @@ pub mod tests {
 
     #[test]
     fn test_allocator() {
-        let hugepage_alloc = HugepageAllocator {};
+        let mut hugepage_alloc = HugepageAllocator {};
 
         // u16.
         unsafe {
             let layout = Layout::new::<u16>();
-            let p = hugepage_alloc.alloc(layout);
+            let mem = hugepage_alloc
+                .alloc_consec_blocks(layout.size())
+                .expect("allocation failed");
+            let p = mem.ptr();
             assert!(!p.is_null(), "allocation failed");
             *p = 20;
             assert_eq!(*p, 20);
-            hugepage_alloc.dealloc(p, layout);
+            mem.dealloc();
         }
 
         // array.
         unsafe {
             let layout = Layout::array::<char>(2048).unwrap();
-            let dst = hugepage_alloc.alloc(layout);
+            let mem = hugepage_alloc
+                .alloc_consec_blocks(layout.size())
+                .expect("allocation failed");
+            let dst = mem.ptr();
             assert!(!dst.is_null(), "allocation failed");
 
             let src = String::from("hello rust");
@@ -161,7 +145,7 @@ pub mod tests {
             assert_eq!(s, src);
             mem::forget(s);
 
-            hugepage_alloc.dealloc(dst, layout);
+            mem.dealloc();
         }
     }
 }

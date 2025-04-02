@@ -1,8 +1,8 @@
 use anyhow::Result;
 use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
 use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::memory::{construct_memory_tuple_timer, BytePointer};
-use bs_poc::memory::{DRAMAddr, Hugepage};
+use bs_poc::memory::{construct_memory_tuple_timer, BytePointer, MemBlock};
+use bs_poc::memory::{DRAMAddr, HugepageSize};
 use clap::Parser;
 
 /// Search for a pattern in a file and display the lines that contain it.
@@ -14,15 +14,13 @@ struct CliArgs {
 }
 
 fn main() -> Result<()> {
-    const MEM_SIZE: usize = 1 << 30; // 1 GB
-
     let args = CliArgs::parse();
 
     let config = BlacksmithConfig::from_jsonfile(&args.config)?;
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    let memory = Hugepage::new(MEM_SIZE)?;
+    let memory: MemBlock = MemBlock::hugepage(HugepageSize::OneGb)?;
     let base_msb = memory.ptr();
     println!("base_msb: {:?}", base_msb);
 
