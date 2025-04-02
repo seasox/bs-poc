@@ -1,5 +1,11 @@
+use anyhow::bail;
+use libc::{
+    close, shm_open, MAP_POPULATE, MAP_SHARED, O_CREAT, O_RDWR, PROT_READ, PROT_WRITE, S_IRUSR,
+    S_IWUSR,
+};
 use std::{
     cmp::min,
+    ffi::CString,
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -8,8 +14,6 @@ use std::{
     thread::{sleep, spawn, JoinHandle},
     time::Duration,
 };
-
-use anyhow::bail;
 
 use crate::{
     memory::{BytePointer, MemBlock},
@@ -35,6 +39,43 @@ pub(crate) fn compact_mem() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub(crate) fn mmap_shm<P>(addr: *mut libc::c_void, len: usize, name: String) -> *mut P {
+    unsafe {
+        let name = CString::new(name).expect("CString");
+        let shm = shm_open(name.as_ptr(), O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+        if shm == -1 {
+            panic!("shm_open: {}", std::io::Error::last_os_error());
+        }
+        if libc::ftruncate(shm, len as libc::off_t) == -1 {
+            panic!("ftruncate: {}", std::io::Error::last_os_error());
+        }
+
+        let v = libc::mmap(
+            addr,
+            len,
+            PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_POPULATE,
+            shm,
+            0,
+        );
+        assert_ne!(
+            v,
+            libc::MAP_FAILED,
+            "mmap: {}",
+            std::io::Error::last_os_error()
+        );
+        close(shm);
+        if !addr.is_null() && addr != v {
+            panic!(
+                "mmap returned unexpected address: {:x} != {:x}",
+                addr as usize, v as usize
+            );
+        }
+        libc::memset(v, 0xAA, len);
+        v as *mut P
+    }
+}
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn mmap<P>(addr: *mut libc::c_void, len: usize) -> *mut P {
     use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_PRIVATE, PROT_READ, PROT_WRITE};
