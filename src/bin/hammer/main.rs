@@ -97,10 +97,6 @@ struct CliArgs {
     /// The default value of 100 is a good starting point for the blacksmith hammerer.
     #[arg(long, default_value = "100")]
     attempts: u32,
-    /// Do a stats run. This will run the hammerer and store the results in the provided file. The default is `None`, causing no stats to be stored.
-    /// When `stats` is set, the hammering process will not exit after the first successful attack, but continue hammering until `repeat` is reached.
-    #[arg(long)]
-    statistics: Option<String>,
     /// The target binary to hammer. This is the binary that will be executed and communicated with via IPC. See `victim` module for more details.
     #[command(subcommand)]
     target: Option<Target>,
@@ -355,14 +351,6 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
 
-    #[derive(Serialize)]
-    struct HammerStatistic {
-        alloc_duration_millis: u128,
-        memory_regions: Vec<Range<PhysAddr>>,
-        bit_flips: Vec<Vec<BitFlip>>,
-    }
-    let mut stats = vec![];
-
     let target = TARGET_OFFSET_DUMMY;
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for rep in 0..repetitions {
@@ -409,25 +397,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             Some(progress.clone()),
         );
         debug!("Profiling results: {:?}", profiling);
-        // write stats
-        if let Some(stats_file) = &args.statistics {
-            stats.push(HammerStatistic {
-                alloc_duration_millis: alloc_duration.as_millis(),
-                memory_regions: memory.consec_pfns().unwrap_or_default(),
-                bit_flips: profiling
-                    .iter()
-                    .map(|r| r.bit_flips.clone())
-                    .collect::<Vec<_>>()
-                    .clone(),
-            });
-            info!(
-                "Writing statistics to file {}",
-                args.statistics.as_ref().unwrap()
-            );
-            let mut json_file = BufWriter::new(File::create(stats_file)?);
-            serde_json::to_writer_pretty(&mut json_file, &stats)?;
-            json_file.flush()?;
-        }
         if profiling.is_empty() {
             warn!("No vulnerable addresses found");
             memory.dealloc();
