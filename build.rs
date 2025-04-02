@@ -1,6 +1,5 @@
 use std::env;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn bind_spoiler(bindings: bindgen::Builder) -> bindgen::Builder {
     println!("cargo:rustc-link-lib=spoiler");
@@ -62,12 +61,6 @@ fn write_bindings(bindings: bindgen::Bindings) {
 }
 
 fn main() {
-    // build `all` in victims/
-    Command::new("make")
-        .current_dir("victims")
-        .arg("all")
-        .status()
-        .expect("Failed to build victims");
     let mut bindings = bindgen::Builder::default();
 
     bindings = bind_spoiler(bindings);
