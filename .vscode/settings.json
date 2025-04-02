@@ -8,6 +8,7 @@
     },
     "rust-analyzer.showUnlinkedFileNotification": false,
     "files.associations": {
-        "memutils.h": "c"
+        "*.h": "c",
+        "*.c": "c"
     },
 }
