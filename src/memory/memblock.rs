@@ -170,7 +170,7 @@ impl FormatPfns for ConsecPfns {
         let mut pfns = String::from("");
         for range in self {
             pfns += &format!(
-                "{:09x}..[{:04} KB]..{:09x}\n",
+                "{:p}..[{:04} KB]..{:p}\n",
                 range.start,
                 (range.end - range.start).as_usize() / 1024,
                 range.end
@@ -307,7 +307,7 @@ mod tests {
         let timer = construct_memory_tuple_timer()?;
         let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
         println!("VA: 0x{:02x}", block.ptr as usize);
-        println!("PFN: 0x{:02x}", block.pfn()?);
+        println!("PFN: 0x{:p}", block.pfn()?);
         assert_eq!(pfn_offset, Some(0));
         block.dealloc();
         Ok(())

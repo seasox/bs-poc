@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     let dram2 = DRAMAddr::from_virt((addr2 as u64 & (0x3FFFFF)) as *mut u8, &mem_config);
     println!("row1,row2,vaddr1,vaddr2,paddr1,paddr2,dram1,dram2");
     println!(
-        "{},{},0x{:x},0x{:x},{:x},{:x},{:?},{:?}",
+        "{},{},0x{:x},0x{:x},{:p},{:p},{:?},{:?}",
         args.row1,
         args.row2,
         addr1 as usize,

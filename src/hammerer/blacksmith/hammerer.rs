@@ -155,7 +155,7 @@ impl PatternAddressMapper {
                 Ok(p) => {
                     let phys = DRAMAddr::from_virt(p.into(), &mem_config);
                     debug!(
-                        "Relocate {:?} to {:?} (0x{:x}), phys {:?} (0x{:x}), base: 0x{:x}, base_idx {}",
+                        "Relocate {:?} to {:?} (0x{:x}), phys {:?} ({:p}), base: 0x{:x}, base_idx {}",
                         addr,
                         DRAMAddr::from_virt(relocated, &mem_config),
                         relocated as u64,

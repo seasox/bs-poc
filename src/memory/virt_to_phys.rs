@@ -112,15 +112,9 @@ impl From<PhysAddr> for *const u8 {
     }
 }
 
-impl std::fmt::LowerHex for PhysAddr {
+impl std::fmt::Pointer for PhysAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#x}", self.0)
-    }
-}
-
-impl std::fmt::UpperHex for PhysAddr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:#X}", self.0)
+        write!(f, "{:p}", self.0 as *const u8)
     }
 }
 

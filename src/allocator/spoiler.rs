@@ -187,11 +187,11 @@ impl Spoiler {
         let search_buffer_size = 2048 * MB;
         let cont_size = 5 * MB;
         let aligned = Self::allocate_2m_aligned()?;
-        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or_default());
+        debug!("Base PFN: {:p}", aligned.pfn().unwrap_or_default());
         let search_buffer = mmap(null_mut(), search_buffer_size);
         let spoiler_candidates =
             spoiler_candidates(search_buffer, search_buffer_size, aligned.ptr(), cont_size);
-        debug!("Base PFN: {:x}", aligned.pfn().unwrap_or_default());
+        debug!("Base PFN: {:p}", aligned.pfn().unwrap_or_default());
         aligned.dealloc();
         if spoiler_candidates.is_empty() {
             unsafe { munmap(search_buffer, search_buffer_size) };

@@ -41,7 +41,7 @@ impl Hammering for DevMemHammerer {
             FlipDirection::None => unimplemented!("FlipDirection::None"),
         };
         debug!(
-            "Flip address {:02x} from {} to {}",
+            "Flip address {:p} from {} to {}",
             self.phys_addr, value[0], new_value[0],
         );
         dev_mem.seek(SeekFrom::Start(self.phys_addr.as_usize() as u64))?;
