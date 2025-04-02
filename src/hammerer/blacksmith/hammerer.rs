@@ -315,7 +315,7 @@ impl<'a> Hammerer<'a> {
                 Ok(paddr) => {
                     let dram = DRAMAddr::from_virt(paddr.into(), &mem_config);
                     trace!(
-                        "{:>06} {:02},{:04},0x{:02x},{}",
+                        "{:>06} {:02},{:04},{:p},{}",
                         action,
                         dram.bank,
                         dram.row,
