@@ -7,7 +7,9 @@ use crate::victim::HammerVictim;
 
 use super::{HammerVictimError, VictimResult};
 
+#[derive(Serialize)]
 pub struct HammerVictimMemCheck<'a> {
+    #[serde(skip_serializing)]
     memory: &'a dyn VictimMemory,
     pub pattern: DataPattern,
 }

@@ -28,14 +28,16 @@ pub enum HammerVictimError {
     NoFlips,
     #[error("IO Error: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("PageMapError: {0}")]
-    PageMapError(#[from] pagemap::PageMapError),
     #[error("Victim is not running")]
     NotRunning,
     #[error("Flippy page not found")]
     FlippyPageNotFound,
     #[error("Flippy page offset mismatch: expected {expected}, actual {actual:?}")]
     FlippyPageOffsetMismatch { expected: usize, actual: FlippyPage },
+    #[error("PageMapError: {0}")]
+    PageMapError(#[from] pagemap::PageMapError),
+    #[error("Protocol Error: {0}")]
+    ProtocolError(String),
 }
 
 #[derive(Debug, Serialize)]

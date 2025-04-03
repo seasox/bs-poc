@@ -366,26 +366,24 @@ impl HammerVictim for SphincsPlus {
         self.check_flippy_page_exists()?;
         match &mut self.state {
             State::Running { child, .. } => {
+                // wait for "SIGUSR1" via victim stdout
+                debug!("Waiting for SIGUSR1 msg from victim");
+                let msg = child.read_line()?;
+                if msg != "SIGUSR1" {
+                    return Err(HammerVictimError::ProtocolError(format!(
+                        "Expected SIGUSR1, got {msg}"
+                    )));
+                }
+                thread::sleep(Duration::from_millis(1));
                 // resume the victim
-                info!("Sending SIGUSR1 to victim");
+                debug!("Sending SIGUSR1 to victim");
                 unsafe {
                     libc::kill(child.id() as i32, libc::SIGUSR1);
                 }
 
-                let signature = {
-                    let mut stdout = child.stdout.take().expect("stdout");
-                    let mut signature = Vec::new();
-                    let mut buf = [0; 1];
-                    while stdout.read(&mut buf)? == 1 {
-                        if buf[0] == b'\n' {
-                            break;
-                        }
-                        signature.push(buf[0]);
-                    }
-                    let signature = String::from_utf8(signature).expect("utf8");
-                    child.stdout = Some(stdout);
-                    signature
-                };
+                debug!("Waiting for victim to send signature");
+                thread::sleep(Duration::from_millis(10));
+                let signature = child.read_line()?;
                 let expected_sha256 = [
                     "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
                     "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87", // dummy 4096 bytes of 0xaa (python3 -c "print('aa' * 4096, end='')" | shasum -a 256)
