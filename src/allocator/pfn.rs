@@ -38,6 +38,7 @@ impl ConsecAllocator for Pfn {
             if x.is_null() {
                 bail!("Failed to allocate memory");
             }
+            debug!("phys(x) = {:p}", x.pfn()?);
             let pfns = (x, BUFSIZE).consec_pfns()?;
             (x, BUFSIZE).log_pfns(log::Level::Trace);
             let consecs = pfns
