@@ -289,6 +289,11 @@ impl HammerVictim for SphincsPlus {
                 let target_pfn = (injection_config.target_addr as *const libc::c_void)
                     .pfn()
                     .expect("PFN resolve failed");
+                debug!("Victim command: {:?}", cmd);
+                debug!(
+                    "Injecting {:p} (phys {:p}) into victim process",
+                    injection_config.target_addr as *const libc::c_void, target_pfn
+                );
                 let mut child = page_injector.inject(cmd).expect("Failed to inject page");
                 info!("Victim launched");
 
