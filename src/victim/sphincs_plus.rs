@@ -40,17 +40,6 @@ pub struct SphincsPlus {
     state: State,
 }
 
-impl SphincsPlus {
-    pub fn target_addr(&self) -> *const libc::c_void {
-        match &self.state {
-            State::Init {
-                injection_config, ..
-            } => injection_config.target_addr as *const libc::c_void,
-            _ => panic!("Invalid state"),
-        }
-    }
-}
-
 fn set_process_affinity(pid: libc::pid_t, core_id: usize) {
     use libc::{cpu_set_t, sched_setaffinity, CPU_SET, CPU_ZERO};
 
