@@ -458,6 +458,28 @@ impl SphincsPlus {
     }
 }
 
+trait ReadLine {
+    fn read_line(&mut self) -> std::io::Result<String>;
+}
+
+impl ReadLine for std::process::Child {
+    fn read_line(&mut self) -> std::io::Result<String> {
+        let mut stdout = self.stdout.take().expect("stdout");
+        let mut out = Vec::new();
+        let mut buf = [0; 1];
+        loop {
+            stdout.read_exact(&mut buf)?;
+            if buf[0] == b'\n' {
+                break;
+            }
+            out.push(buf[0]);
+        }
+        let signature = String::from_utf8(out).expect("utf8");
+        self.stdout = Some(stdout);
+        Ok(signature)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ptr::null_mut;
