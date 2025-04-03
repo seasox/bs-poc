@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::{ensure, Context};
 use libc::sched_getcpu;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -202,12 +202,9 @@ impl SphincsPlus {
             } else {
                 TARGET_OFFSETS_SHAKE_256S[7].clone()
             };
-            if target.page_offset < flip.addr & PAGE_MASK {
-                bail!("Target offset {:x} is less than flip address page offset {:x}, not implemented yet.", target.page_offset, flip.addr & PAGE_MASK);
-            }
+            assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
             let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
-            assert!(!page_overflow, "Page overflow not implemented yet");
-            assert_eq!(flip.flip_direction(), target.flip_direction);
+            ensure!(!page_overflow, "Page overflow not implemented yet");
             (target, env)
         };
         let stack_offset = target.stack_offset;
