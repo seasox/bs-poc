@@ -206,13 +206,13 @@ unsafe fn _main() -> anyhow::Result<()> {
             let bit_flips = match result {
                 Ok(result) => {
                     info!(
-                        "Profiling hammering round successful at attempt {}: {:?}",
+                        "Hammering round successful at attempt {}: {:?}",
                         result.attempt, result.victim_result
                     );
                     Some(result.victim_result.bit_flips().clone())
                 }
                 Err(e) => {
-                    warn!("Profiling hammering round not successful: {:?}", e);
+                    warn!("Hammering round not successful: {:?}", e);
                     None
                 }
             };
