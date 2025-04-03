@@ -1,27 +1,33 @@
-use std::ptr::null_mut;
-
 use anyhow::bail;
 
 use crate::{
+    allocator::util::{mmap, mmap_shm, munmap},
     memory::{
         mem_configuration::MemConfiguration, ConsecBlocks, DRAMAddr, GetConsecPfns, MemBlock,
+        PfnResolver,
     },
     util::MB,
 };
 
-use super::{util::mmap, ConsecAllocator};
+use super::ConsecAllocator;
 
 pub struct Pfn {
     mem_config: MemConfiguration,
+    shared_mem: Option<String>,
 }
 
-/// Pfn allocator. This finds consecutive PFNs by allocating memory and checking the page map.
+/// Pfn allocator. This finds consecutive PFNs by allocating memory (optionally using shared memory mapping with shm_open, if `shared_mem` is provided) and checking the page map.
 /// Useful for testing purposes.
 impl Pfn {
-    pub fn new(mem_config: MemConfiguration) -> Self {
-        Self { mem_config }
+    pub fn new(mem_config: MemConfiguration, shared_mem: Option<String>) -> Self {
+        Self {
+            mem_config,
+            shared_mem,
+        }
     }
 }
+
+const BASE_ADDR: *mut libc::c_void = 0x2000000000 as *mut libc::c_void;
 
 impl ConsecAllocator for Pfn {
     fn block_size(&self) -> usize {
@@ -33,8 +39,11 @@ impl ConsecAllocator for Pfn {
         let block_count = size / self.block_size();
         const BUFSIZE: usize = 4096 * MB;
         let mut blocks = vec![];
-        while blocks.len() < block_count {
-            let x: *mut u8 = mmap(null_mut(), BUFSIZE);
+        'outer: while blocks.len() < block_count {
+            let x: *mut u8 = match &self.shared_mem {
+                Some(shared_mem) => mmap_shm(BASE_ADDR, BUFSIZE, shared_mem.into()),
+                None => mmap(BASE_ADDR, BUFSIZE),
+            };
             if x.is_null() {
                 bail!("Failed to allocate memory");
             }
@@ -68,6 +77,11 @@ impl ConsecAllocator for Pfn {
                 blocks.push(MemBlock::new(start_ptr, self.block_size()));
                 unmap_ranges.push((prev_end, start_ptr));
                 prev_end = unsafe { start_ptr.byte_add(self.block_size()) };
+            }
+            if blocks.len() < block_count {
+                debug!("Not enough consecutive PFNs found, unmapping...");
+                unsafe { munmap(x, BUFSIZE) };
+                continue 'outer;
             }
             for unmap_range in unmap_ranges {
                 unsafe {
