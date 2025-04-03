@@ -235,7 +235,7 @@ impl SphincsPlus {
 
         let injection_config = InjectionConfig {
             id: target.id,
-            target_addr: flip.addr & !(PAGE_MASK),
+            target_addr: flip.addr,
             flippy_page_size: PAGE_SIZE,
             bait_count_after,
             bait_count_before: 0,
