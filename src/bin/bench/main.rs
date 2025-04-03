@@ -125,20 +125,6 @@ pub fn init_logging_with_progress() -> anyhow::Result<MultiProgress> {
     Ok(progress)
 }
 
-#[derive(Debug)]
-#[allow(dead_code)]
-struct RoundProfile {
-    bit_flips: Vec<BitFlip>,
-    pattern: DataPattern,
-    duration: Duration,
-    attempt: u32,
-}
-#[derive(Debug)]
-#[allow(dead_code)]
-struct Profiling {
-    rounds: Vec<RoundProfile>,
-}
-
 unsafe fn _main() -> anyhow::Result<()> {
     let progress = init_logging_with_progress()?;
 
@@ -216,15 +202,7 @@ unsafe fn _main() -> anyhow::Result<()> {
                     None
                 }
             };
-            println!(
-                "{:?}",
-                RoundProfile {
-                    bit_flips: bit_flips.unwrap_or_default(),
-                    pattern: dpattern.clone(),
-                    duration,
-                    attempt
-                }
-            );
+            println!("{bit_flips:?}, {duration:?}, {attempt}");
         }
     }
     Ok(())
