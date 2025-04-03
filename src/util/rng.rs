@@ -3,7 +3,7 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct Rng {
-    seed: u64,
+    pub seed: u64,
     #[serde(skip_serializing)]
     rng: StdRng,
 }

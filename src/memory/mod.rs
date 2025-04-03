@@ -231,10 +231,10 @@ where
     fn initialize(&self, mut pattern: DataPattern) {
         info!(
             "initialize buffer with pattern {}",
-            match pattern {
-                DataPattern::Random(_) => "random",
-                DataPattern::StripeZero(_) => "stripe zero",
-                DataPattern::StripeOne(_) => "stripe one",
+            match &pattern {
+                DataPattern::Random(rng) => format!("random (seed {})", rng.seed),
+                DataPattern::StripeZero(_) => "stripe zero".into(),
+                DataPattern::StripeOne(_) => "stripe one".into(),
             }
         );
         self.initialize_cb(&mut |offset: usize| pattern.get(self.addr(offset)));
