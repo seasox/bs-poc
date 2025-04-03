@@ -1,11 +1,11 @@
-use std::{cell::RefCell, ops::Range, ptr::null_mut};
+use std::{cell::RefCell, ffi::CString, ops::Range, ptr::null_mut};
 
 use crate::{
     memory::{LinuxPageMap, VirtToPhysResolver},
     util::{MB, PAGE_SIZE, ROW_SIZE},
 };
-use anyhow::bail;
-use libc::{MAP_ANONYMOUS, MAP_HUGETLB, MAP_HUGE_1GB, MAP_POPULATE, MAP_SHARED};
+use anyhow::{bail, ensure};
+use libc::{MAP_ANONYMOUS, MAP_POPULATE, MAP_SHARED, O_CREAT, O_RDWR};
 use pagemap::MemoryRegion;
 
 use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset, PhysAddr};
@@ -57,22 +57,32 @@ impl MemBlock {
         let hp_size = match size {
             HugepageSize::OneGb => 1024 * MB,
         };
-        let hp_size_flag = match size {
-            HugepageSize::OneGb => MAP_HUGE_1GB,
+        let fd = unsafe {
+            libc::open(
+                CString::new("/dev/hugepages/hammer_huge")
+                    .expect("CString")
+                    .as_ptr(),
+                O_RDWR | O_CREAT,
+                666,
+            )
         };
+        ensure!(fd != -1, "open failed");
         let p = unsafe {
             libc::mmap(
                 ADDR as *mut libc::c_void,
                 hp_size,
                 libc::PROT_READ | libc::PROT_WRITE,
-                MAP_SHARED | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB | hp_size_flag,
-                -1,
+                MAP_SHARED | MAP_POPULATE,
+                fd,
                 0,
             )
         };
-        if p == libc::MAP_FAILED {
-            bail!("mmap failed: {}", std::io::Error::last_os_error());
-        }
+        unsafe { libc::close(fd) };
+        ensure!(
+            p != libc::MAP_FAILED,
+            "mmap failed: {}",
+            std::io::Error::last_os_error()
+        );
         Ok(MemBlock {
             ptr: p as *mut u8,
             len: hp_size,
