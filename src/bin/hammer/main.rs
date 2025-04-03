@@ -78,7 +78,7 @@ struct CliArgs {
     /// 4. If the attack was successful: log the report and exit. Otherwise, repeat the suite if the repetition limit is not reached.
     #[arg(long)]
     repeat: Option<usize>,
-    /// The timeout in seconds for the hammering process. The default is 10, meaning that the hammering process will exit after 10 minutes.
+    /// The timeout in minutes for the hammering process.
     #[arg(long)]
     timeout: u64,
     /// The number of rounds to profile for vulnerable addresses.
