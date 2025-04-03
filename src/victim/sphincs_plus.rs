@@ -310,15 +310,17 @@ impl HammerVictim for SphincsPlus {
                 let stderr_logger = if let Some(stderr) = child.stderr.take() {
                     let reader = BufReader::new(stderr);
 
+                    let binary = binary.clone();
+
                     // Spawn a thread to handle logging from stderr
                     let handle = thread::spawn(move || {
                         for line in reader.lines() {
                             match line {
                                 Ok(log_line) => {
-                                    info!("{}", log_line);
+                                    info!(target: &binary, "{}", log_line);
                                 }
                                 Err(err) => {
-                                    error!("Error reading line from child process: {}", err)
+                                    error!(target: &binary, "Error reading line from child process: {}", err)
                                 }
                             }
                         }
