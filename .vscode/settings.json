@@ -11,4 +11,11 @@
         "*.h": "c",
         "*.c": "c"
     },
+    "C_Cpp.files.exclude": {
+        "/": true,
+        "**/.vscode": true,
+        "**/.vs": true,
+        "**/.git": true
+    },
+    "C_Cpp.exclusionPolicy": "checkFilesAndFolders",
 }
