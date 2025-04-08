@@ -243,7 +243,7 @@ fn hammer_profile(
         .as_ref()
         .map(|p| p.add(ProgressBar::new(num_rounds)));
 
-    const SHM_SEED: u64 = 9804201662804659191;
+    const _SHM_SEED: u64 = 9804201662804659191;
     let pattern = DataPattern::Random(Box::new(Rng::from_seed(rand::random())));
     let mut candidates = HashMap::new();
     let min_repro_count = (reproducibility_threshold * num_rounds as f64) as u64;
