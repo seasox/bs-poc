@@ -206,9 +206,9 @@ unsafe fn _main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn profile_hammer<'a>(
-    hammerer: &Blacksmith<'a>,
-    memory: &'a ConsecBlocks,
+fn profile_hammer(
+    hammerer: &Blacksmith,
+    memory: &ConsecBlocks,
 ) -> Result<Vec<BitFlip>, anyhow::Error> {
     loop {
         let dpattern = DataPattern::Random(Box::new(Rng::from_seed(0)));

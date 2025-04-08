@@ -46,28 +46,28 @@ pub enum HammerStrategy {
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum Hammerer<'a> {
-    Blacksmith(Blacksmith<'a>),
+pub enum Hammerer {
+    Blacksmith(Blacksmith),
     Dummy(Dummy),
     DevMem(DevMemHammerer),
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn make_hammer<'a>(
+pub fn make_hammer(
     hammerer: &HammerStrategy,
     pattern: &HammeringPattern,
     mapping: &PatternAddressMapper,
     mem_config: MemConfiguration,
     block_size: usize,
-    memory: &'a ConsecBlocks,
+    memory: &ConsecBlocks,
     attempts: u32,
     check_each_attempt: bool,
     flush_lines: Vec<usize>,
     target_pfn: PhysAddr, // target page (physical address) for DevMem hammerer
     flip_direction: FlipDirection, // direction of bit flip for DevMem hammerer
-) -> anyhow::Result<Hammerer<'a>> {
+) -> anyhow::Result<Hammerer> {
     let block_shift = block_size.ilog2();
-    let hammerer: Hammerer<'a> = match hammerer {
+    let hammerer: Hammerer = match hammerer {
         HammerStrategy::Blacksmith => Hammerer::Blacksmith(Blacksmith::new(
             mem_config,
             pattern,
@@ -96,7 +96,7 @@ pub fn make_hammer<'a>(
     Ok(hammerer)
 }
 
-impl Hammering for Hammerer<'_> {
+impl Hammering for Hammerer {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError> {
         match self {
             Hammerer::Blacksmith(blacksmith) => blacksmith.hammer(victim),

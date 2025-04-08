@@ -1,9 +1,7 @@
 use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{
-    BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, PfnResolver, VirtToPhysResolver,
-};
+use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
 use crate::util::GroupBy;
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
@@ -186,37 +184,6 @@ impl PatternAddressMapper {
     }
 }
 
-fn get_random_nonaccessed_rows<const S: usize>(
-    memory: &dyn BytePointer,
-    accessed_rows: &[AggressorPtr],
-    mem_config: &MemConfiguration,
-    target_bank: usize,
-) -> [AggressorPtr; S] {
-    let mut addresses: [AggressorPtr; S] = [std::ptr::null_mut(); S];
-    let mut rng = rand::thread_rng();
-    let mut i = 0;
-    // do rejection sampling for nonaccessed rows
-    while i < S {
-        let candidate = memory.addr(rng.gen_range(0..memory.len()));
-        // We cannot determine bank from virt addr w/ PFN allocations.
-        // As a workaround, we use the physical address to determine the bank.
-        // FIXME: Use another method (e.g. bank timing) to find rows on the same bank.
-        let dram = DRAMAddr::from_virt(
-            (candidate as *const u8).pfn().expect("Resolve PFN").into(),
-            mem_config,
-        );
-        if dram.bank != target_bank {
-            continue;
-        }
-        if accessed_rows.contains(&(candidate as *const u8)) {
-            continue;
-        }
-        addresses[i] = candidate;
-        i += 1;
-    }
-    addresses
-}
-
 #[derive(Deserialize, Debug)]
 pub struct FuzzSummary {
     pub hammering_patterns: Vec<HammeringPattern>,
@@ -282,24 +249,21 @@ impl HammeringPattern {
     }
 }
 
-pub struct Hammerer<'a> {
-    memory: &'a ConsecBlocks,
-    hammering_addrs: Vec<AggressorPtr>,
-    mem_config: MemConfiguration,
+pub struct Hammerer {
     program: Program,
     attempts: u32,
     check_each_attempt: bool,
     flush_lines: Vec<usize>,
 }
 
-impl<'a> Hammerer<'a> {
+impl Hammerer {
     #![allow(clippy::too_many_arguments)]
     pub fn new(
         mem_config: MemConfiguration,
         pattern: &HammeringPattern,
         mapping: &PatternAddressMapper,
         block_shift: usize,
-        memory: &'a ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
+        memory: &ConsecBlocks, // TODO change to dyn BytePointer after updating hammer_log_cb
         attempts: u32,
         check_each_attempt: bool,
         flush_lines: Vec<usize>,
@@ -362,10 +326,7 @@ impl<'a> Hammerer<'a> {
         }
 
         Ok(Hammerer {
-            memory,
-            hammering_addrs: hammering_addrs.to_vec(),
             program,
-            mem_config,
             attempts,
             check_each_attempt,
             flush_lines,
@@ -383,7 +344,7 @@ impl<'a> Hammerer<'a> {
     }
 }
 
-impl Hammering for Hammerer<'_> {
+impl Hammering for Hammerer {
     fn hammer(&self, victim: &mut dyn HammerVictim) -> Result<HammerResult, HammerVictimError> {
         info!("Hammering with {} attempts", self.attempts);
         let mut rng = rand::thread_rng();
