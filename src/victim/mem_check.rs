@@ -12,11 +12,21 @@ pub struct HammerVictimMemCheck<'a> {
     #[serde(skip_serializing)]
     memory: &'a dyn VictimMemory,
     pub pattern: DataPattern,
+    #[serde(skip_serializing)]
+    excluding: Vec<*const u8>,
 }
 
 impl<'a> HammerVictimMemCheck<'a> {
-    pub fn new(memory: &'a dyn VictimMemory, pattern: DataPattern) -> Self {
-        HammerVictimMemCheck { memory, pattern }
+    pub fn new(
+        memory: &'a dyn VictimMemory,
+        pattern: DataPattern,
+        excluding: Vec<BitFlip>,
+    ) -> Self {
+        HammerVictimMemCheck {
+            memory,
+            pattern,
+            excluding: excluding.iter().map(|b| b.addr as *const u8).collect(),
+        }
     }
 }
 
@@ -27,12 +37,15 @@ impl HammerVictim for HammerVictimMemCheck<'_> {
 
     fn init(&mut self) {
         debug!("initialize victim");
-        self.memory.initialize(self.pattern.clone());
+        self.memory
+            .initialize_excluding(self.pattern.clone(), &self.excluding);
     }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         debug!("check victim");
-        let flips = self.memory.check(self.pattern.clone());
+        let flips = self
+            .memory
+            .check_excluding(self.pattern.clone(), &self.excluding);
         if !flips.is_empty() {
             Ok(VictimResult::BitFlips(flips.clone()))
         } else {

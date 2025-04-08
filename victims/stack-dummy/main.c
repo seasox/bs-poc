@@ -49,11 +49,14 @@ int main(int argc, char **argv) {
 		memset(buf, pattern[i], BUFSIZE);
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		fprintf(stderr, "Waiting for SIGUSR1\n");
+		printf("SIGUSR1\n");
 		pause();
 		// waiting for SIGUSR1
 		MEMUTILS_PRINT_OFFSET(buf, BUFSIZE);
 		for (int j = 0; j < BUFSIZE; ++j) {
-			printf("%02x", buf[j]);
+			if (buf[j] != pattern[i]) {
+				printf("buf[%d] = %02x;", j, buf[j]);
+			}
 		}
 		printf("\n");
 		// todo inspect asm

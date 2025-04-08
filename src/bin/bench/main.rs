@@ -1,12 +1,12 @@
 use std::{
     fs::File,
     io::{stdin, BufReader},
-    time::Duration,
+    ptr::null_mut,
 };
 
 use anyhow::bail;
 use bs_poc::{
-    allocator::{self, ConsecAlloc, ConsecAllocator},
+    allocator::{self, ConsecAlloc, ConsecAllocator, Pfn},
     hammerer::{
         blacksmith::{
             blacksmith_config::BlacksmithConfig,
@@ -14,15 +14,15 @@ use bs_poc::{
         },
         Blacksmith, Hammering,
     },
-    memory::{mem_configuration::MemConfiguration, BitFlip, DataPattern},
+    memory::{mem_configuration::MemConfiguration, BitFlip, ConsecBlocks, DataPattern},
     retry,
+    util::{Rng, CL_SIZE, MB},
     victim::{self, HammerVictim},
 };
 use clap::Parser;
 use indicatif::{MultiProgress, ProgressBar};
 use indicatif_log_bridge::LogWrapper;
 use log::{info, warn};
-use rand::{rngs::StdRng, SeedableRng};
 
 /// CLI arguments for the `bench` binary.
 ///
@@ -136,76 +136,100 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     info!("Args: {:?}", args);
 
-    let mut alloc_strategy =
-        ConsecAlloc::Hugepage(allocator::hugepage::HugepageAllocator::default());
-    let block_size = alloc_strategy.block_size();
+    let with_profiling = true;
 
+    let mut alloc_strategy = ConsecAlloc::Pfn(Pfn::new(mem_config, Some("HAMMER_SHM".into())));
+    //let mut alloc_strategy = ConsecAlloc::Hugepage(HugepageAllocator {});
     let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
 
-    let dpattern = DataPattern::Random(Box::new(StdRng::from_seed([0; 32])));
-    let flips = vec![
-        BitFlip {
-            addr: 0x2013a14f75,
-            bitmask: 0x1,
-            data: 0xd6,
-        },
-        BitFlip {
-            addr: 0x2013a15f6a,
-            bitmask: 0x20,
-            data: 0x1,
-        },
-    ];
+    let buf: *mut u8 = allocator::util::mmap(null_mut(), 1024 * MB);
+    let flush_lines = (0..1024 * MB)
+        .step_by(CL_SIZE)
+        .map(|offset| unsafe { buf.byte_add(offset) as usize })
+        .collect::<Vec<_>>();
 
+    let dpattern = DataPattern::Random(Box::new(Rng::from_seed(0)));
     let hammerer = Blacksmith::new(
         mem_config,
         &pattern.pattern.clone(),
         &pattern.mapping.clone(),
-        block_size.ilog2() as usize,
+        alloc_strategy.block_size().ilog2() as usize,
         &memory,
-        20,
-        true,
-        true,
+        50,
+        false,
+        flush_lines,
     )?;
+    let flips = if with_profiling {
+        profile_hammer(&hammerer, &memory)?
+    } else {
+        vec![
+            BitFlip {
+                addr: 0x2013a14f75,
+                bitmask: 0x1,
+                data: 0xd6,
+            },
+            BitFlip {
+                addr: 0x2013a15f6a,
+                bitmask: 0x20,
+                data: 0x1,
+            },
+        ]
+    };
 
-    let targetcheck = Box::new(victim::TargetCheck::new(
-        &memory,
-        dpattern.clone(),
-        flips.clone(),
-    )) as Box<dyn HammerVictim>;
+    let mut targetcheck = victim::TargetCheck::new(&memory, dpattern.clone(), flips.clone());
 
-    //devmemcheck.start()?;
-    let mut victims = [targetcheck];
-    let p = progress.add(ProgressBar::new(args.repeat as u64 * victims.len() as u64));
+    let p = progress.add(ProgressBar::new(args.repeat as u64));
 
-    for (idx, victim) in victims.iter_mut().enumerate() {
-        if idx == 0 {
-            println!("targetcheck");
-        } else {
-            panic!("Unknown victim");
-        }
-        for _ in 0..args.repeat {
-            p.inc(1);
-            let start = std::time::Instant::now();
-            let result = hammerer.hammer(victim.as_mut());
-            let duration = std::time::Instant::now() - start;
-            let attempt = result.as_ref().map(|r| r.attempt).unwrap_or(0);
-            let bit_flips = match result {
-                Ok(result) => {
-                    info!(
-                        "Hammering round successful at attempt {}: {:?}",
-                        result.attempt, result.victim_result
-                    );
-                    Some(result.victim_result.bit_flips().clone())
-                }
-                Err(e) => {
-                    warn!("Hammering round not successful: {:?}", e);
-                    None
-                }
-            };
-            println!("{bit_flips:?}, {duration:?}, {attempt}");
-        }
+    targetcheck.start()?;
+    println!("targetcheck");
+    for _ in 0..args.repeat {
+        p.inc(1);
+        let start = std::time::Instant::now();
+        let result = hammerer.hammer(&mut targetcheck);
+        let duration = std::time::Instant::now() - start;
+        let attempt = result.as_ref().map(|r| r.attempt).unwrap_or(0);
+        let bit_flips = match result {
+            Ok(result) => {
+                info!(
+                    "Hammering round successful at attempt {}: {:?}",
+                    result.attempt, result.victim_result
+                );
+                Some(result.victim_result.bit_flips().clone())
+            }
+            Err(e) => {
+                warn!("Hammering round not successful: {:?}", e);
+                None
+            }
+        };
+        println!("{bit_flips:?}, {duration:?}, {attempt}");
     }
     Ok(())
+}
+
+fn profile_hammer<'a>(
+    hammerer: &Blacksmith<'a>,
+    memory: &'a ConsecBlocks,
+) -> Result<Vec<BitFlip>, anyhow::Error> {
+    loop {
+        let dpattern = DataPattern::Random(Box::new(Rng::from_seed(0)));
+        let mut victim = victim::mem_check::HammerVictimMemCheck::new(memory, dpattern, vec![]);
+        let flips = match hammerer.hammer(&mut victim) {
+            Ok(result) => {
+                info!(
+                    "Profiling hammering round successful at attempt {}: {:?}",
+                    result.attempt, result.victim_result
+                );
+                Some(result.victim_result.bit_flips().clone())
+            }
+            Err(e) => {
+                warn!("Profiling hammering round not successful: {:?}", e);
+                None
+            }
+        };
+        if let Some(flips) = flips {
+            return Ok(flips);
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {

@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
                         spoiler.alloc_consec_blocks(4 * MB)?
                     }
                     AllocStrategy::Pfn => {
-                        let mut pfn = Pfn::new(mem_config);
+                        let mut pfn = Pfn::new(mem_config, None);
                         pfn.alloc_consec_blocks(4 * MB)?
                     }
                     AllocStrategy::Mmap => {

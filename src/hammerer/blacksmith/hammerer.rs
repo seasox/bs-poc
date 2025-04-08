@@ -1,7 +1,9 @@
 use crate::hammerer::blacksmith::jitter::{AggressorPtr, CodeJitter, Jitter, Program};
 use crate::hammerer::{HammerResult, Hammering};
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, VirtToPhysResolver};
+use crate::memory::{
+    BytePointer, ConsecBlocks, DRAMAddr, LinuxPageMap, PfnResolver, VirtToPhysResolver,
+};
 use crate::util::GroupBy;
 use crate::victim::{HammerVictim, HammerVictimError};
 use anyhow::{Context, Result};
@@ -196,7 +198,13 @@ fn get_random_nonaccessed_rows<const S: usize>(
     // do rejection sampling for nonaccessed rows
     while i < S {
         let candidate = memory.addr(rng.gen_range(0..memory.len()));
-        let dram = DRAMAddr::from_virt(candidate as *const u8, mem_config);
+        // We cannot determine bank from virt addr w/ PFN allocations.
+        // As a workaround, we use the physical address to determine the bank.
+        // FIXME: Use another method (e.g. bank timing) to find rows on the same bank.
+        let dram = DRAMAddr::from_virt(
+            (candidate as *const u8).pfn().expect("Resolve PFN").into(),
+            mem_config,
+        );
         if dram.bank != target_bank {
             continue;
         }
@@ -399,13 +407,7 @@ impl Hammering for Hammerer<'_> {
             let wait_until_start_hammering_refs = rng.gen_range(10..128); // range 10..128 is hard-coded in FuzzingParameterSet
             let wait_until_start_hammering_us =
                 wait_until_start_hammering_refs as f32 * REF_INTERVAL_LEN_US;
-            let target_bank = DRAMAddr::from_virt(self.hammering_addrs[0], &self.mem_config).bank;
-            let random_rows = get_random_nonaccessed_rows::<1024>(
-                self.memory,
-                &self.hammering_addrs,
-                &self.mem_config,
-                target_bank,
-            );
+            let random_rows = vec![];
             trace!(
                 "do random memory accesses for {} us before running jitted code",
                 wait_until_start_hammering_us as u128
@@ -414,6 +416,7 @@ impl Hammering for Hammerer<'_> {
             debug!("Flush {} lines", self.flush_lines.len());
             for &line in self.flush_lines.iter() {
                 unsafe {
+                    // TODO why does clflush increase flippability? Replace with nops
                     asm!("clflushopt [{}]", in(reg) line as *const u8);
                 }
             }

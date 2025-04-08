@@ -75,7 +75,7 @@ impl HammerVictim for HammerVictimDevMemCheck {
     fn init(&mut self) {
         for (target, phys_addr) in &self.targets {
             write_dev_mem(*phys_addr, target.data).expect("Write failed");
-            let byte = read_dev_mem(*phys_addr).unwrap();
+            let byte = read_dev_mem(*phys_addr).expect("Read failed");
             assert_eq!(byte, target.data, "Target byte is not as expected");
         }
     }

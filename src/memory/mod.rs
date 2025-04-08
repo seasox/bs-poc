@@ -52,7 +52,7 @@ use std::arch::x86_64::_mm_clflush;
 use std::fmt::Debug;
 use std::io::BufWriter;
 
-use crate::util::{Rng, CL_SIZE, PAGE_SIZE, ROW_MASK, ROW_SIZE};
+use crate::util::{Rng, CL_SIZE, PAGE_MASK, PAGE_SIZE, ROW_MASK, ROW_SIZE};
 
 use crate::hammerer::blacksmith::jitter::AggressorPtr;
 use libc::{c_void, memcmp};
@@ -147,7 +147,8 @@ impl DataPattern {
 /// Trait for initializing memory with random values
 pub trait Initializable {
     fn initialize(&self, pattern: DataPattern);
-    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]);
+    fn initialize_excluding(&self, pattern: DataPattern, pages: &[*const u8]);
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> Option<[u8; PAGE_SIZE]>);
 }
 
 #[derive(Clone, Copy, Serialize, PartialEq, Eq, Hash)]
@@ -220,7 +221,8 @@ impl BitFlip {
 /// Trait for checking memory for bitflips
 pub trait Checkable {
     fn check(&self, pattern: DataPattern) -> Vec<BitFlip>;
-    fn check_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) -> Vec<BitFlip>;
+    fn check_excluding(&self, pattern: DataPattern, pages: &[*const u8]) -> Vec<BitFlip>;
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> Option<[u8; PAGE_SIZE]>) -> Vec<BitFlip>;
 }
 
 /// Blanket implementations for Initializable trait for VictimMemory
@@ -228,7 +230,11 @@ impl<T> Initializable for T
 where
     T: VictimMemory,
 {
-    fn initialize(&self, mut pattern: DataPattern) {
+    fn initialize(&self, pattern: DataPattern) {
+        self.initialize_excluding(pattern, &[]);
+    }
+
+    fn initialize_excluding(&self, mut pattern: DataPattern, pages: &[*const u8]) {
         info!(
             "initialize buffer with pattern {}",
             match &pattern {
@@ -237,10 +243,20 @@ where
                 DataPattern::StripeOne(_) => "stripe one".into(),
             }
         );
-        self.initialize_cb(&mut |offset: usize| pattern.get(self.addr(offset)));
+        self.initialize_cb(&mut |offset: usize| {
+            let addr = self.addr(offset);
+            let val = pattern.get(addr); // we must call "get" on addr, even if we don't use it, because pattern RNG is stateful
+            if pages
+                .iter()
+                .any(|&page| page as usize & !PAGE_MASK == addr as usize & !PAGE_MASK)
+            {
+                return None;
+            }
+            Some(val)
+        });
     }
 
-    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) {
+    fn initialize_cb(&self, f: &mut dyn FnMut(usize) -> Option<[u8; PAGE_SIZE]>) {
         let len = self.len();
         if len % 8 != 0 {
             panic!("memory len must be divisible by 8");
@@ -255,9 +271,10 @@ where
         debug!("initialize {} bytes", len);
 
         for offset in (0..len).step_by(PAGE_SIZE) {
-            let value = f(offset);
-            unsafe {
-                std::ptr::write_volatile(self.addr(offset) as *mut [u8; PAGE_SIZE], value);
+            if let Some(value) = f(offset) {
+                unsafe {
+                    std::ptr::write_volatile(self.addr(offset) as *mut [u8; PAGE_SIZE], value);
+                }
             }
         }
         debug!("memory init done");
@@ -277,11 +294,25 @@ impl<T> Checkable for T
 where
     T: VictimMemory,
 {
-    fn check(&self, mut pattern: DataPattern) -> Vec<BitFlip> {
-        self.check_cb(&mut |offset: usize| pattern.get(self.addr(offset)))
+    fn check(&self, pattern: DataPattern) -> Vec<BitFlip> {
+        self.check_excluding(pattern, &[])
     }
 
-    fn check_cb(&self, f: &mut dyn FnMut(usize) -> [u8; PAGE_SIZE]) -> Vec<BitFlip> {
+    fn check_excluding(&self, mut pattern: DataPattern, pages: &[*const u8]) -> Vec<BitFlip> {
+        self.check_cb(&mut |offset: usize| {
+            let addr = self.addr(offset);
+            let val = pattern.get(addr); // we must call "get" on addr, even if we don't use it, because pattern RNG is stateful
+            if pages
+                .iter()
+                .any(|&page| page as usize & !PAGE_MASK == addr as usize & !PAGE_MASK)
+            {
+                return None;
+            }
+            Some(val)
+        })
+    }
+
+    fn check_cb(&self, f: &mut dyn FnMut(usize) -> Option<[u8; PAGE_SIZE]>) -> Vec<BitFlip> {
         let len = self.len();
         if len % PAGE_SIZE != 0 {
             panic!(
@@ -292,32 +323,35 @@ where
 
         let mut ret = vec![];
         for offset in (0..len).step_by(PAGE_SIZE) {
-            let expected: [u8; PAGE_SIZE] = f(offset);
-            unsafe {
-                for byte_offset in (0..PAGE_SIZE).step_by(CL_SIZE) {
-                    _mm_clflush(self.addr(offset + byte_offset));
-                }
-                _mm_mfence();
-                let cmp = memcmp(
-                    self.addr(offset) as *const c_void,
-                    expected.as_ptr() as *const c_void,
-                    PAGE_SIZE,
-                );
-                if cmp == 0 {
-                    continue;
-                }
-                debug!(
-                    "Found bitflip in page {}. Determining exact flip position",
-                    offset
-                );
-                for (i, &expected) in expected.iter().enumerate() {
-                    let addr = self.addr(offset + i);
-                    _mm_clflush(addr);
+            if let Some(expected) = f(offset) {
+                unsafe {
+                    for byte_offset in (0..PAGE_SIZE).step_by(CL_SIZE) {
+                        _mm_clflush(self.addr(offset + byte_offset));
+                    }
                     _mm_mfence();
-                    if *addr != expected {
-                        ret.push(BitFlip::new(addr, *addr ^ expected, expected));
+                    let cmp = memcmp(
+                        self.addr(offset) as *const c_void,
+                        expected.as_ptr() as *const c_void,
+                        PAGE_SIZE,
+                    );
+                    if cmp == 0 {
+                        continue;
+                    }
+                    debug!(
+                        "Found bitflip in page {}. Determining exact flip position",
+                        offset
+                    );
+                    for (i, &expected) in expected.iter().enumerate() {
+                        let addr = self.addr(offset + i);
+                        _mm_clflush(addr);
+                        _mm_mfence();
+                        if *addr != expected {
+                            ret.push(BitFlip::new(addr, *addr ^ expected, expected));
+                        }
                     }
                 }
+            } else {
+                debug!("skipping page {} due to exclusion", offset);
             }
         }
         ret

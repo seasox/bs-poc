@@ -26,13 +26,19 @@ void sigusr1_handler(int signum) {
 }
 
 #define ONE_GB ((off_t)(1<<30))
-#define BUFSIZE ((off_t)4*ONE_GB)
 
 #define BASE_ADDR ((void*)0x2000000000)
 
 #define USE_SHM
 
+#ifdef USE_HUGEPAGE
+# define BUFSIZE ((off_t)ONE_GB)
+#else
+# define BUFSIZE ((off_t)4*ONE_GB)
+#endif
+
 int main(int argc, char **argv) {
+	signal(SIGUSR1, sigusr1_handler);
 	setbuf(stdout, NULL);
 	setbuf(stderr, NULL);
 
@@ -88,7 +94,6 @@ int main(int argc, char **argv) {
 	phys = get_physical_address((void*)target_addr);
 	fprintf(stderr, "phys(target_addr)=0x%lx\n", phys);
 
-	signal(SIGUSR1, sigusr1_handler);
 
 	fd = mtrr_open();
 	if (fd < 0) {

