@@ -1,5 +1,6 @@
 //! Utility functions and types used throughout the project.
 mod anyhow;
+pub mod cancelable_thread;
 mod constants;
 mod ipc;
 mod named_progress;
