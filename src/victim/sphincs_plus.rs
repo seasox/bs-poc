@@ -102,7 +102,8 @@ pub const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
 
 const SPX_N: usize = 32;
 
-const STACK_BASE: usize = 0x570;
+// CAUTION: STACK_BASE is 0x300 during FORS sign, 0x610 during XMSS sign
+const STACK_BASE: usize = 0x610;
 const STACK_OFFSET: usize = 32;
 
 // Target offsets for shake-256s WITH memutils printing enabled
@@ -175,7 +176,7 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     TargetOffset {
         id: 8,
         description: "merkle leaf_addr",
-        page_offset: 0x7c8,
+        page_offset: 0x868,
         stack_offset: 32,
         target_size: 22,
         flip_direction: FlipDirection::ZeroToOne,
@@ -183,7 +184,7 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     TargetOffset {
         id: 9,
         description: "merkle pk_addr",
-        page_offset: 0x7e8,
+        page_offset: 0x888,
         stack_offset: 32,
         target_size: 22,
         flip_direction: FlipDirection::ZeroToOne,
