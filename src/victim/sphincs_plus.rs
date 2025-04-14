@@ -10,7 +10,6 @@ use anyhow::Context;
 use libc::sched_getcpu;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
@@ -25,6 +24,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use std::{fs, sync::Mutex};
 
 #[derive(Serialize)]
 enum State {
@@ -35,6 +35,8 @@ enum State {
     },
     Running {
         target: String,
+        #[serde(skip_serializing)]
+        signatures: Arc<Mutex<Vec<String>>>,
         #[serde(skip_serializing)]
         child: std::process::Child,
         #[serde(skip_serializing)]
@@ -348,11 +350,15 @@ impl HammerVictim for SphincsPlus {
                 set_process_affinity(cid as libc::pid_t, target_core);
 
                 let stdout = child.stdout.take().expect("stdout");
-                let checker = spawn_cancelable(move |r| process_victim_signatures(stdout, r));
+                let signatures = Arc::new(Mutex::new(vec![]));
+                let sigs = Arc::clone(&signatures);
+
+                let checker = spawn_cancelable(move |r| process_victim_signatures(stdout, sigs, r));
 
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
+                    signatures,
                     stderr_logger,
                     checker,
                     target_pfn,
@@ -398,7 +404,9 @@ impl HammerVictim for SphincsPlus {
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.check_flippy_page_exists()?;
         match &self.state {
-            State::Running { child, .. } => {
+            State::Running {
+                child, signatures, ..
+            } => {
                 #[cfg(feature = "sphincs_instrumentation")]
                 {
                     thread::sleep(Duration::from_millis(1));
@@ -412,10 +420,17 @@ impl HammerVictim for SphincsPlus {
                 if pstate != ProcState::Running {
                     return Err(HammerVictimError::NotRunning);
                 }
+                if signatures.lock().unwrap().is_empty() {
+                    Err(HammerVictimError::NoFlips)
+                } else {
+                    let mut signatures = signatures.lock().unwrap();
+                    let sigs = signatures.clone();
+                    signatures.clear();
+                    Ok(VictimResult::Strings(sigs))
+                }
             }
-            _ => return Err(HammerVictimError::NotRunning),
+            _ => Err(HammerVictimError::NotRunning),
         }
-        Err(HammerVictimError::NoFlips)
     }
 
     fn stop(&mut self) {
@@ -437,7 +452,11 @@ impl HammerVictim for SphincsPlus {
     }
 }
 
-fn process_victim_signatures(mut stdout: ChildStdout, running: Arc<AtomicBool>) {
+fn process_victim_signatures(
+    mut stdout: ChildStdout,
+    signatures: Arc<Mutex<Vec<String>>>,
+    running: Arc<AtomicBool>,
+) {
     std::fs::remove_file("sigs.txt").unwrap_or_else(|err| {
         error!("Failed to delete sigs.txt: {}", err);
     });
@@ -469,6 +488,7 @@ fn process_victim_signatures(mut stdout: ChildStdout, running: Arc<AtomicBool>) 
                     info!("Writting flippy signature {} to file...", sig_sha256);
                     // Write the signature to "sigs.txt"
                     writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
+                    signatures.lock().unwrap().push(signature);
                 }
             }
             Err(e) => match e.kind() {
