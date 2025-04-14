@@ -2,7 +2,7 @@
 
 def is_exploitable(sig_correct, sig_faulted, secrets_path):
     if len(sig_correct) != len(sig_faulted):
-        print("The two signatures do not have the same length")
+        print("The two signatures do not have the same length ({} != {})".format(len(sig_correct), len(sig_faulted)))
         return False
     with open(secrets_path, "r") as file:
         lines = file.readlines()
