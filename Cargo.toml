@@ -7,6 +7,7 @@ license = "MIT"
 [features]
 jitter_dump = []
 spoiler_dump = []
+sphincs_instrumentation = []
 
 [profile.release-with-debug]
 inherits = "release"

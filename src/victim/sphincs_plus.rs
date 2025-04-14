@@ -1,20 +1,30 @@
-use anyhow::{ensure, Context};
+use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
+use crate::{
+    memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr},
+    util::{
+        cancelable_thread::{spawn_cancelable, CancelableJoinHandle},
+        PAGE_MASK, PAGE_SIZE,
+    },
+};
+use anyhow::Context;
 use libc::sched_getcpu;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::fs;
+use std::fs::OpenOptions;
+use std::io;
+use std::io::Write;
+use std::mem::replace;
+use std::process::Child;
+use std::process::ChildStdout;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Read},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
-
-use crate::{
-    memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr},
-    util::{PAGE_MASK, PAGE_SIZE},
-};
-
-use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
 
 #[derive(Serialize)]
 enum State {
@@ -29,6 +39,8 @@ enum State {
         child: std::process::Child,
         #[serde(skip_serializing)]
         stderr_logger: Option<thread::JoinHandle<()>>,
+        #[serde(skip_serializing)]
+        checker: CancelableJoinHandle<()>,
         target_pfn: PhysAddr,
         injection_config: InjectionConfig,
     },
@@ -335,11 +347,14 @@ impl HammerVictim for SphincsPlus {
                 info!("Pinning procees {} to core {}", cid, target_core);
                 set_process_affinity(cid as libc::pid_t, target_core);
 
-                // Create a pipe for IPC
+                let stdout = child.stdout.take().expect("stdout");
+                let checker = spawn_cancelable(move |r| process_victim_signatures(stdout, r));
+
                 self.state = State::Running {
                     target: binary.clone(),
                     child,
                     stderr_logger,
+                    checker,
                     target_pfn,
                     injection_config: *injection_config,
                 };
@@ -355,6 +370,7 @@ impl HammerVictim for SphincsPlus {
             _ => Err(HammerVictimError::NotRunning),
         }
     }
+    #[cfg(feature = "sphincs_instrumentation")]
     fn init(&mut self) {
         match &mut self.state {
             State::Running { child, .. } => {
@@ -369,20 +385,75 @@ impl HammerVictim for SphincsPlus {
         }
     }
 
+    #[cfg(not(feature = "sphincs_instrumentation"))]
+    fn init(&mut self) {
+        match &mut self.state {
+            State::Running { .. } => {
+                // No-op for non-instrumented builds
+            }
+            _ => panic!("Victim not running"),
+        }
+    }
+
     fn check(&mut self) -> Result<VictimResult, HammerVictimError> {
         self.check_flippy_page_exists()?;
-        match &mut self.state {
+        match &self.state {
             State::Running { child, .. } => {
-                thread::sleep(Duration::from_millis(1));
-                // resume the victim
-                debug!("Sending SIGUSR1 to victim");
-                unsafe {
-                    libc::kill(child.id() as i32, libc::SIGUSR1);
+                #[cfg(feature = "sphincs_instrumentation")]
+                {
+                    thread::sleep(Duration::from_millis(1));
+                    // resume the victim
+                    debug!("Sending SIGUSR1 to victim");
+                    unsafe {
+                        libc::kill(child.id() as i32, libc::SIGUSR1);
+                    }
                 }
+                let pstate = child.pstate().expect("pstate");
+                if pstate != ProcState::Running {
+                    return Err(HammerVictimError::NotRunning);
+                }
+            }
+            _ => return Err(HammerVictimError::NotRunning),
+        }
+        Err(HammerVictimError::NoFlips)
+    }
 
-                debug!("Waiting for victim to send signature");
-                thread::sleep(Duration::from_millis(10));
-                let signature = child.read_line()?;
+    fn stop(&mut self) {
+        let state = replace(&mut self.state, State::Stopped);
+        if let State::Running {
+            mut child,
+            mut stderr_logger,
+            checker,
+            ..
+        } = state
+        {
+            child.kill().expect("kill");
+            child.wait().expect("wait");
+            if let Some(stderr_logger) = stderr_logger.take() {
+                stderr_logger.join().expect("join");
+            }
+            checker.join().expect("join");
+        }
+    }
+}
+
+fn process_victim_signatures(mut stdout: ChildStdout, running: Arc<AtomicBool>) {
+    std::fs::remove_file("sigs.txt").unwrap_or_else(|err| {
+        error!("Failed to delete sigs.txt: {}", err);
+    });
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("sigs.txt")
+        .expect("Failed to open sigs.txt");
+    loop {
+        if !running.load(Ordering::Relaxed) {
+            return;
+        }
+        debug!("Waiting for victim to send signature");
+        let signature = stdout.read_line();
+        match signature {
+            Ok(signature) => {
                 let expected_sha256 = [
                     "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
                     "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87", // dummy 4096 bytes of 0xaa (python3 -c "print('aa' * 4096, end='')" | shasum -a 256)
@@ -394,31 +465,25 @@ impl HammerVictim for SphincsPlus {
                 let result = hasher.finalize();
                 let sig_sha256 = hex::encode(result);
                 let flipped = !expected_sha256.contains(&sig_sha256.as_str());
-
                 if flipped {
-                    Ok(VictimResult::String(signature))
-                } else {
-                    info!("No flips detected");
-                    Err(HammerVictimError::NoFlips)
+                    info!("Writting flippy signature {} to file...", sig_sha256);
+                    // Write the signature to "sigs.txt"
+                    writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
                 }
             }
-            _ => Err(HammerVictimError::NotRunning),
-        }
-    }
-
-    fn stop(&mut self) {
-        if let State::Running {
-            child,
-            stderr_logger,
-            ..
-        } = &mut self.state
-        {
-            child.kill().expect("kill");
-            child.wait().expect("wait");
-            if let Some(stderr_logger) = stderr_logger.take() {
-                stderr_logger.join().expect("join");
-            }
-            self.state = State::Stopped;
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::UnexpectedEof => {
+                    return;
+                }
+                std::io::ErrorKind::WouldBlock => {
+                    error!("Would block");
+                    continue;
+                }
+                _ => {
+                    error!("Error reading line from child process: {}", e);
+                    continue;
+                }
+            },
         }
     }
 }
@@ -462,21 +527,86 @@ trait ReadLine {
     fn read_line(&mut self) -> std::io::Result<String>;
 }
 
-impl ReadLine for std::process::Child {
+impl ReadLine for std::process::ChildStdout {
     fn read_line(&mut self) -> std::io::Result<String> {
-        let mut stdout = self.stdout.take().expect("stdout");
         let mut out = Vec::new();
         let mut buf = [0; 1];
+        let mut last_recv = None;
+        const READ_TIMEOUT: Duration = Duration::from_millis(1);
         loop {
-            stdout.read_exact(&mut buf)?;
+            let nbytes = self.read(&mut buf)?;
+            if nbytes == 0 && last_recv.is_none() {
+                return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+            }
+            if nbytes == 0 && last_recv.is_some_and(|t: Instant| t.elapsed() > READ_TIMEOUT) {
+                return Err(std::io::Error::from(std::io::ErrorKind::WouldBlock));
+            }
+            if nbytes == 0 {
+                continue;
+            }
             if buf[0] == b'\n' {
                 break;
             }
+            last_recv = Some(std::time::Instant::now());
             out.push(buf[0]);
         }
-        let signature = String::from_utf8(out).expect("utf8");
-        self.stdout = Some(stdout);
-        Ok(signature)
+        let out = String::from_utf8(out).expect("utf8");
+        Ok(out)
+    }
+}
+
+/// Enum representing simplified process states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProcState {
+    Running,
+    Sleeping,
+    DiskSleep,
+    Zombie,
+    Stopped,
+    Traced,
+    Dead,
+    Unknown(char),
+}
+
+impl ProcState {
+    fn from_stat_code(c: char) -> Self {
+        match c {
+            'R' => ProcState::Running,
+            'S' => ProcState::Sleeping,
+            'D' => ProcState::DiskSleep,
+            'Z' => ProcState::Zombie,
+            'T' => ProcState::Stopped,
+            't' => ProcState::Traced,
+            'X' | 'x' => ProcState::Dead,
+            other => ProcState::Unknown(other),
+        }
+    }
+}
+
+/// Trait for querying the state of a process.
+trait ProcessState {
+    fn pstate(&self) -> io::Result<ProcState>;
+}
+
+impl ProcessState for Child {
+    fn pstate(&self) -> io::Result<ProcState> {
+        let pid = self.id();
+        let stat_path = format!("/proc/{}/stat", pid);
+        let contents = fs::read_to_string(stat_path)?;
+
+        // According to proc(5), the state is the third field (after pid and comm)
+        let start = contents
+            .find(')')
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Malformed stat file"))?;
+        let rest = &contents[start + 2..]; // skip ") "
+        let state_char = rest
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Empty stat fields"))?;
+
+        Ok(ProcState::from_stat_code(
+            state_char.chars().next().unwrap_or('?'),
+        ))
     }
 }
 
