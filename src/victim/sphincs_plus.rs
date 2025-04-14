@@ -198,14 +198,16 @@ impl SphincsPlus {
         let (target, env) = if binary.eq("victims/stack-dummy/stack") {
             (TARGET_OFFSET_DUMMY.clone(), "".into())
         } else {
-            let target = if flip.flip_direction() == FlipDirection::ZeroToOne {
+            let mut target = if flip.flip_direction() == FlipDirection::ZeroToOne {
                 TARGET_OFFSETS_SHAKE_256S[9].clone()
             } else {
                 TARGET_OFFSETS_SHAKE_256S[5].clone()
             };
             assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
             let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
-            ensure!(!page_overflow, "Page overflow not implemented yet");
+            if page_overflow {
+                target.stack_offset -= 1;
+            }
             (target, env)
         };
         let stack_offset = target.stack_offset;
