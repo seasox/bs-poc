@@ -1,5 +1,3 @@
-
-
 def is_exploitable(sig_correct, sig_faulted, secrets_path):
     if len(sig_correct) != len(sig_faulted):
         print("The two signatures do not have the same length ({} != {})".format(len(sig_correct), len(sig_faulted)))
@@ -26,7 +24,8 @@ def is_exploitable(sig_correct, sig_faulted, secrets_path):
 
     if nb_secrets_found_in_correct != d * p:
         print("The first signature does not appear to be correct "\
-              "given the secrets.txt file")
+              f"given the secrets.txt file. Found {nb_secrets_found_in_correct}"\
+              f" secrets in the correct signature, but expected {d * p}.")
         assert(False)
     
     return False
