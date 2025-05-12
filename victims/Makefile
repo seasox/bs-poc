@@ -2,7 +2,7 @@ all:
 	make -C lib/memutils all
 	make -C stack-dummy all
 	make -C shared-mem all
-	make -C sphincsplus/ref test/server
+	make -C sphincsplus/ref all
 
 clean:
 	make -C lib/memutils clean
