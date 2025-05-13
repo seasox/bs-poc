@@ -72,10 +72,11 @@ class Hash:
 		shake.update(right)
 		return shake.read(self.n)
 
-	def PRF(self, x, adrs):
+	def PRF(self, pk_seed, adrs, sk_seed):
 		shake = self.impl.new()
-		shake.update(x)
+		shake.update(pk_seed)
 		shake.update(adrs.bytes)
+		shake.update(sk_seed)
 		return shake.read(self.n)
 
 	def PRF_msg(self, x, opt, sk_prf):
@@ -195,6 +196,11 @@ class ADRS:
 		# [ layer address  ] [                     tree address                     ]
 		# [     type=4     ] [key pair address] [00000000000000000000000000000000000]
 		FORSPK = 4
+		# W-OTS+ key generation
+		# ===========================
+		# [ layer address  ] [                     tree address                     ]
+		# [     type=5     ] [key pair address] [ chain address  ] [  hash address  ]
+		WOTSKEYGEN = 5
 
 	def __init__(self, adrs=None):
 		if type(adrs) is ADRS:
@@ -205,7 +211,12 @@ class ADRS:
 			self.bytes = b'\x00'*self.SPX_ADDRESS_BYTES
 
 	def __str__(self):
-		return ' '.join([self.bytes[4*i:4*(i+1)].hex() for i in range(self.SPX_ADDRESS_BYTES//4)])
+		ret = ""
+		for i, b in enumerate(self.bytes):
+			if i % 4 == 0 and i != 0:
+				ret += " "
+			ret += f"{b:02x}"
+		return ret
 
 	def setWords(self, val, idx, length):
 		"""Sets val in byte address at specified index.
@@ -263,7 +274,7 @@ class FORS:
 			tree_adrs.setTreeHeight(0)
 			for j in range(self.t):
 				tree_adrs.setTreeIndex(i*self.t + j)
-				secrets += [self.hash.PRF(sk_seed, tree_adrs)]
+				secrets += [self.hash.PRF(pk_seed, tree_adrs, sk_seed)]
 				leaves += [self.hash.F(secrets[-1], tree_adrs, pk_seed)]
 			(r, _) = self.hash.treehash(leaves, 0, tree_adrs, pk_seed, tree_idx_offset=(i*self.t >> 1))
 			roots += [r]
@@ -295,7 +306,7 @@ class FORS:
 			for j in range(self.t):
 				# Computes secret leaves
 				tree_adrs.setTreeIndex(j + i*self.t)
-				sk = self.hash.PRF(sk_seed, tree_adrs)
+				sk = self.hash.PRF(pk_seed, tree_adrs, sk_seed)
 				if j == indices[i]:
 					secret = sk
 				leaves += [self.hash.F(sk, tree_adrs, pk_seed)]
@@ -338,7 +349,7 @@ class FORS:
 
 class WOTSplus:
 
-	def __init__(self, w, hash):
+	def __init__(self, w, hash: Hash):
 		self.w = w
 		self.W = 2**w
 		self.len1 = ceil(8*hash.n/w)
@@ -357,7 +368,9 @@ class WOTSplus:
 		for i in range(self.len):
 			chain_adrs.setChainAddress(i)
 			chain_adrs.setHashAddress(0)
-			s += [self.hash.PRF(sk_seed, chain_adrs)]
+			chain_adrs.setType(ADRS.Type.WOTSKEYGEN)
+			s += [self.hash.PRF(pk_seed, chain_adrs, sk_seed)] # <-- v3.1: shake.update(pk_seed); shake.update(chain_adrs); shake.update(sk_seed)
+			chain_adrs.setType(ADRS.Type.WOTSCHAIN)
 			p += [self.hash.C(s[i], 0, self.W - 1, chain_adrs, pk_seed)]
 
 		# Computes pk
@@ -372,7 +385,6 @@ class WOTSplus:
 
 	def sign(self, msg, sk_seed, adrs, pk_seed):
 		chain_adrs = ADRS(adrs)
-		chain_adrs.setType(ADRS.Type.WOTSCHAIN)
 
 		# Splits message + checksum into blocks
 		b = self.to_baseW(int.from_bytes(msg, byteorder="big"), self.len1)
@@ -384,7 +396,9 @@ class WOTSplus:
 		for i in range(self.len):
 			chain_adrs.setChainAddress(i)
 			chain_adrs.setHashAddress(0)
-			sk = self.hash.PRF(sk_seed, chain_adrs)
+			chain_adrs.setType(ADRS.Type.WOTSKEYGEN)
+			sk = self.hash.PRF(pk_seed, chain_adrs, sk_seed)
+			chain_adrs.setType(ADRS.Type.WOTSCHAIN)
 			sig += [self.hash.C(sk, 0, b[i], chain_adrs, pk_seed)]
 
 		return sig
@@ -422,7 +436,7 @@ class WOTSplus:
 
 class XMSS:
 
-	def __init__(self, h_prime, wots_plus, hash):
+	def __init__(self, h_prime, wots_plus: WOTSplus, hash):
 		self.h_prime = h_prime
 		self.wots_plus = wots_plus
 		self.hash = hash
