@@ -34,6 +34,24 @@ def prefix(s1, s2):
     for i in range(min(len(s1), len(s2))):
         if s1[i] != s2[i]:
             return i
+        
+def read_keys(keys_path):
+    with open(keys_path, "r") as file:
+        lines = file.readlines()
+    
+    keys = { "pk": bytes(), "sk": bytes() }
+    for line in lines:
+            if line.startswith("pk: "):
+                keys["pk"] = bytes.fromhex(line[4:].strip())
+            elif line.startswith("sk: "):
+                keys["sk"] = bytes.fromhex(line[4:].strip())
+            else:
+                raise "Invalid keys file format. Expected lines starting with 'pk: ' or 'sk: '."
+    if keys["pk"] is None:
+        raise "Public key not found in keys file."
+    if keys["sk"] is None:
+        raise "Secret key not found in keys file."
+    return keys
 
 def process_experiment(sig_correct_path, sigs_path, secrets_path, logfile, keys_path = "keys.txt", out_dir = "results"):
     from os import path, makedirs
