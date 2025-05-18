@@ -341,7 +341,7 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
 
-    let target = TARGET_OFFSETS_SHAKE_256S[5].clone();
+    let target = TARGET_OFFSETS_SHAKE_256S[7].clone();
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for rep in 0..repetitions {
         if rep > 0 && check_timeout(timeout, start) {
