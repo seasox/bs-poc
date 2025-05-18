@@ -7,10 +7,18 @@
 # from test_slhdsa import test_slhdsa
 
 #   hash functions
+from dataclasses import dataclass
 from Crypto.Hash import SHAKE128, SHAKE256
 from Crypto.Hash import SHA224, SHA256, SHA384, SHA512
 from Crypto.Hash import SHA3_224, SHA3_256, SHA3_384, SHA3_512
 
+def print_adrs(adrs, lbl=None):
+    hex = adrs.adrs().hex()
+    if lbl:
+        print(lbl, end=' ')
+    print(' '.join([hex[i:i+8] for i in range(0, len(hex), 8)]), end=' ')
+    print()
+    
 #   A class for handling Addresses (Section 4.2.)
 
 class ADRS:
@@ -100,6 +108,13 @@ SLH_DSA_PARAM = {       #   ( hashname, n,  h,  d,  hp, a,  k, lg_w, m )
     'SLH-DSA-SHAKE-256f':   ( 'SHAKE',  32, 68, 17, 4,  9,  35, 4,  49 )
 }
 
+@dataclass
+class WOTSKeyData:
+    msg: bytes
+    sig: bytes
+    chains: list[int]
+    pk: bytes
+    
 #   SLH-DSA Implementationw
 
 class SLH_DSA:
@@ -148,6 +163,9 @@ class SLH_DSA:
         self.sk_sz  = 4 * self.n
         self.sig_sz = (1 + self.k*(1 + self.a) + self.h +
                         self.d * self.len) * self.n
+        
+        # trace WOTS keys
+        self.wots_keys = {}
 
         #   rbg
         #self.rbg   = rbg
@@ -350,6 +368,10 @@ class SLH_DSA:
         wots_pk_adrs.set_type_and_clear(ADRS.WOTS_PK)
         wots_pk_adrs.set_key_pair_address(adrs.get_key_pair_address())
         pk_sig  =   self.h_t(pk_seed, wots_pk_adrs, tmp)
+        wots_key_data = WOTSKeyData(m, sig, msg, pk_sig)
+        if wots_pk_adrs not in self.wots_keys:
+            self.wots_keys[wots_pk_adrs] = []
+        self.wots_keys[wots_pk_adrs].append(wots_key_data)
         return  pk_sig
 
     def xmss_node(self, sk_seed, i, z, pk_seed, adrs):
@@ -491,6 +513,10 @@ class SLH_DSA:
                                             pk_seed, adrs)
         return sig_fors
 
+
+    def to_baseA(self, msg):
+        return [(msg >> (i*self.a)) & (2**self.a - 1) for i in range(self.k)] # little-endian order
+
     def fors_pk_from_sig(self, sig_fors, md, pk_seed, adrs):
         """ Algorithm 17: fors_pkFromSig(SIG_FORS, md, PK.seed, ADRS).
             Compute a FORS public key from a FORS signature."""
@@ -500,31 +526,70 @@ class SLH_DSA:
         def get_auth(sig_fors, i):
             return sig_fors[(i*(self.a+1)+1)*self.n:(i+1)*(self.a+1)*self.n]
 
-        indices = self.base_2b(md, self.a, self.k)
+        #indices = self.base_2b(md, self.a, self.k)
+        indices = self.to_baseA(int.from_bytes(md, 'little'))
+        
+        """
+        print("indices", end=' ')
+        for i in indices:
+            print(f'{i:08x}', end='')
+        print()
+        
+        print()
+        print()
+        print()
+        """
+        
 
         root = b''
         for i in range(self.k):
+            idx_offset = i * (1 << self.a)
+            leaf_idx = indices[i]
             sk      = get_sk(sig_fors, i)
             adrs.set_tree_height(0)
             adrs.set_tree_index((i << self.a) + indices[i])
             node_0  = self.h_f(pk_seed, adrs, sk)
+            
+            #print("leaf", node_0.hex())
 
             auth    = get_auth(sig_fors, i)
+            #print("auth", auth.hex())
+            buffer = bytearray(2*self.n)
+            if (leaf_idx & 1) == 1:
+                buffer[:self.n] = auth[:self.n]
+                buffer[self.n:] = node_0
+            else:
+                buffer[:self.n] = node_0
+                buffer[self.n:] = auth[:self.n]
             for j in range(self.a):
-                auth_j = auth[j*self.n:(j+1)*self.n]
+                idx_offset >>= 1
+                leaf_idx >>= 1
                 adrs.set_tree_height(j + 1)
-                if (indices[i] >> j) & 1 == 0:
-                    adrs.set_tree_index(adrs.get_tree_index() // 2)
-                    node_1 = self.h_h(pk_seed, adrs, node_0 + auth_j)
+                adrs.set_tree_index(leaf_idx + idx_offset)
+                #print_adrs(adrs, lbl="fors_tree_addr")
+                #print(f'leaf_idx {leaf_idx:08x}')
+                if leaf_idx & 1 == 1:
+                    #print("leaf_idx & 1 == 1")
+                    #print('buffer', buffer.hex())
+                    node_1 = self.h_h(pk_seed, adrs, bytes(buffer))
+                    #print("thash", node_1.hex())
+                    buffer[self.n:] = node_1
+                    buffer[:self.n] = auth[(j+1)*self.n:(j+2)*self.n]
                 else:
-                    adrs.set_tree_index((adrs.get_tree_index() - 1) // 2)
-                    node_1 = self.h_h(pk_seed, adrs, auth_j + node_0)
-                node_0 = node_1
-            root += node_0
+                    #print("leaf_idx & 1 == 0")
+                    #print('buffer', buffer.hex())
+                    node_1 = self.h_h(pk_seed, adrs, bytes(buffer))
+                    #print("thash", node_1.hex())
+                    buffer[:self.n] = node_1
+                    buffer[self.n:] = auth[(j+1)*self.n:(j+2)*self.n]
+                #print("thash", buffer.hex())
+            root += node_1
 
         fors_pk_adrs = adrs.copy()
         fors_pk_adrs.set_type_and_clear(ADRS.FORS_ROOTS)
         fors_pk_adrs.set_key_pair_address(adrs.get_key_pair_address())
+        #print_adrs(fors_pk_adrs, lbl="fors_pk_adrs")
+        #print("root", root.hex())
         pk  = self.h_t(pk_seed, fors_pk_adrs, root)
         return pk
 
