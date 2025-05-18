@@ -468,15 +468,6 @@ fn process_victim_signatures(
         .append(true)
         .open("sigs.txt")
         .expect("Failed to open sigs.txt");
-    let pk = std::fs::read_to_string("keys.txt").expect("Failed to read keys.txt");
-    let pk = pk
-        .lines()
-        .find(|line| line.starts_with("pk:"))
-        .expect("Public key not found in keys.txt")
-        .trim_start_matches("pk:")
-        .trim();
-    let pk = hex::decode(pk).expect("Failed to decode public key");
-    let mut found_correct = false;
     loop {
         if !running.load(Ordering::Relaxed) {
             return;
@@ -500,23 +491,34 @@ fn process_victim_signatures(
             },
         };
         let sig = hex::decode(signature.clone()).expect("Failed to decode signature");
-        let msg = sphincsp_open(sig, pk.clone());
-        let faulty = msg.is_err();
-        if faulty {
-            info!("Writing faulty signature to file...");
-            // Write the signature to "sigs.txt"
-            writeln!(file, "[FAULTY] {}", signature).expect("Failed to write to sigs.txt");
-            signatures.lock().unwrap().push(signature);
-        } else if !found_correct {
-            found_correct = true;
-            info!("Found first correct signature, writing to file...");
-            writeln!(file, "[CORRECT] {}", signature).expect("Failed to write to sigs.txt");
+        let msg = sphincsp_open(sig, "keys.txt");
+        match msg {
+            Ok(_) => {
+                info!("Found correct signature, writing to file...");
+                writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
+            }
+            Err(e) => {
+                // asume non-verifiable signature be a "faulty" signature
+                info!("Failed to verify signature: {}", e);
+                info!("Writing non-verifiable signature to file...");
+                // Write the signature to "sigs.txt"
+                writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
+                signatures.lock().unwrap().push(signature);
+            }
         }
     }
 }
 
-fn sphincsp_open(sig: Vec<u8>, pk: Vec<u8>) -> anyhow::Result<String> {
+fn sphincsp_open(sig: Vec<u8>, keys_file: &str) -> anyhow::Result<String> {
     unsafe {
+        let pk = std::fs::read_to_string(keys_file).expect("Failed to read keys.txt");
+        let pk = pk
+            .lines()
+            .find(|line| line.starts_with("pk:"))
+            .expect("Public key not found in keys.txt")
+            .trim_start_matches("pk:")
+            .trim();
+        let pk = hex::decode(pk).expect("Failed to decode public key");
         let smlen = sig.len() as u64;
         let mut m = sig.clone();
         let mut mlen = smlen;
