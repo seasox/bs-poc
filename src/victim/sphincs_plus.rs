@@ -105,7 +105,7 @@ pub struct TargetOffset {
     pub flip_direction: FlipDirection,
 }
 
-pub const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
+const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
     id: 0,
     description: "any",
     page_offset: 0,
@@ -121,7 +121,7 @@ const STACK_BASE: usize = 0x610;
 const STACK_OFFSET: usize = 32;
 
 // Target offsets for shake-256s WITH memutils printing enabled
-pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
+const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     // stack for h in 0..8
     TargetOffset {
         id: 0,
@@ -205,6 +205,8 @@ pub const TARGET_OFFSETS_SHAKE_256S: [TargetOffset; 10] = [
     },
 ];
 
+pub const TARGET_SHAKE256S: &TargetOffset = &TARGET_OFFSETS_SHAKE_256S[7];
+
 impl SphincsPlus {
     /// Create a new `SphincsPlus` victim.
     pub fn new(binary: String, flip: BitFlip) -> anyhow::Result<Self> {
@@ -212,15 +214,7 @@ impl SphincsPlus {
         let (target, env) = if binary.eq("victims/stack-dummy/stack") {
             (TARGET_OFFSET_DUMMY.clone(), "".into())
         } else {
-            /*
-            let mut target = if flip.flip_direction() == FlipDirection::ZeroToOne {
-                TARGET_OFFSETS_SHAKE_256S[9].clone()
-            } else {
-                TARGET_OFFSETS_SHAKE_256S[7].clone()
-            };
-            */
-            let mut target = TARGET_OFFSETS_SHAKE_256S[7].clone();
-            //assert_eq!(flip.flip_direction(), target.flip_direction); // sanity check for our target selection, I'm becoming quite paranoid of
+            let mut target = TARGET_SHAKE256S.clone();
             let (env, page_overflow) = make_env_for(flip.addr, target.page_offset);
             if page_overflow {
                 target.stack_offset -= 1;
@@ -445,12 +439,12 @@ impl HammerVictim for SphincsPlus {
             ..
         } = state
         {
+            checker.join().expect("join");
             child.kill().expect("kill");
             child.wait().expect("wait");
             if let Some(stderr_logger) = stderr_logger.take() {
                 stderr_logger.join().expect("join");
             }
-            checker.join().expect("join");
         }
     }
 }
@@ -460,20 +454,17 @@ fn process_victim_signatures(
     signatures: Arc<Mutex<Vec<String>>>,
     running: Arc<AtomicBool>,
 ) {
-    std::fs::remove_file("sigs.txt").unwrap_or_else(|err| {
-        error!("Failed to delete sigs.txt: {}", err);
-    });
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open("sigs.txt")
         .expect("Failed to open sigs.txt");
     loop {
+        debug!("Waiting for victim to send signature");
+        let signature = stdout.read_line();
         if !running.load(Ordering::Relaxed) {
             return;
         }
-        debug!("Waiting for victim to send signature");
-        let signature = stdout.read_line();
         let signature = match signature {
             Ok(signature) => signature,
             Err(e) => match e.kind() {
@@ -481,8 +472,7 @@ fn process_victim_signatures(
                     return;
                 }
                 std::io::ErrorKind::WouldBlock => {
-                    error!("Would block");
-                    continue;
+                    panic!("Would block");
                 }
                 _ => {
                     error!("Error reading line from child process: {}", e);

@@ -11,12 +11,12 @@ use bs_poc::{
     hammerer::{make_hammer, HammerResult, HammerStrategy},
     memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     util::{CL_SIZE, MB, PAGE_MASK},
-    victim::{HammerVictimError, VictimResult},
+    victim::{sphincs_plus::TARGET_SHAKE256S, HammerVictimError, VictimResult},
 };
 use bs_poc::{
     allocator::{self, BuddyInfo, ConsecAlloc, ConsecAllocator, Mmap, Pfn},
     memory::ConsecCheck,
-    victim::{self, sphincs_plus::TARGET_OFFSETS_SHAKE_256S},
+    victim,
 };
 use bs_poc::{
     allocator::{CoCo, HugepageRandomized, Spoiler},
@@ -341,7 +341,7 @@ unsafe fn _main() -> anyhow::Result<()> {
 
     let start = std::time::Instant::now();
 
-    let target = TARGET_OFFSETS_SHAKE_256S[7].clone();
+    let target = TARGET_SHAKE256S.clone();
     let mut experiments: Vec<ExperimentData<HammerResult, ExperimentError>> = vec![];
     'repeat: for rep in 0..repetitions {
         if rep > 0 && check_timeout(timeout, start) {
