@@ -90,6 +90,16 @@ class ADRS:
     def adrsc(self):
         """ Compressed address ADRDc used with SHA-2."""
         return self.a[3:4] + self.a[8 : 16] + self.a[19:20] + self.a[20:32]
+    
+    def __eq__(self, other):
+        """ Compare two addresses."""
+        if not isinstance(other, ADRS):
+            return NotImplemented
+        return self.a == other.a
+    
+    def __hash__(self):
+        """ Hash function for addresses."""
+        return hash(self.a.hex())
 
 #   Section 11: Table 2. SLH-DSA parameter sets
 
@@ -114,6 +124,15 @@ class WOTSKeyData:
     sig: bytes
     chains: list[int]
     pk: bytes
+    valid: bool = False
+    
+    def __eq__(self, other):
+        if not isinstance(other, WOTSKeyData):
+            return NotImplemented
+        return self.sig == other.sig
+    
+    def __hash__(self):
+        return hash(self.sig)
     
 #   SLH-DSA Implementationw
 
@@ -165,7 +184,7 @@ class SLH_DSA:
                         self.d * self.len) * self.n
         
         # trace WOTS keys
-        self.wots_keys = {}
+        self.wots_keys: dict[ADRS, set[WOTSKeyData]] = {}
 
         #   rbg
         #self.rbg   = rbg
@@ -348,7 +367,7 @@ class SLH_DSA:
 
         return sig
 
-    def wots_pk_from_sig(self, sig, m, pk_seed, adrs):
+    def wots_pk_from_sig(self, sig, m, pk_seed, adrs: ADRS):
         """ Algorithm 8: wots_PKFromSig(sig, M, PK.seed, ADRS).
             Compute a WOTS+ public key from a message and its signature."""
         csum    =   0
@@ -370,8 +389,8 @@ class SLH_DSA:
         pk_sig  =   self.h_t(pk_seed, wots_pk_adrs, tmp)
         wots_key_data = WOTSKeyData(m, sig, msg, pk_sig)
         if wots_pk_adrs not in self.wots_keys:
-            self.wots_keys[wots_pk_adrs] = []
-        self.wots_keys[wots_pk_adrs].append(wots_key_data)
+            self.wots_keys[wots_pk_adrs] = set()
+        self.wots_keys[wots_pk_adrs].add(wots_key_data)
         return  pk_sig
 
     def xmss_node(self, sk_seed, i, z, pk_seed, adrs):
