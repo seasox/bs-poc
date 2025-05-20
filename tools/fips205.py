@@ -38,6 +38,10 @@ class ADRS:
     def copy(self):
         """ Make a copy of self."""
         return ADRS(self.a)
+    
+    def get_layer_address(self):
+        """ Get layer address."""
+        return int.from_bytes(self.a[0:4], byteorder='big')
 
     def set_layer_address(self, x):
         """ Set layer address."""
@@ -118,13 +122,13 @@ SLH_DSA_PARAM = {       #   ( hashname, n,  h,  d,  hp, a,  k, lg_w, m )
     'SLH-DSA-SHAKE-256f':   ( 'SHAKE',  32, 68, 17, 4,  9,  35, 4,  49 )
 }
 
-@dataclass
+@dataclass(eq=False)
 class WOTSKeyData:
     msg: bytes
     sig: bytes
     chains: list[int]
     pk: bytes
-    valid: bool = False
+    valid: bool = None
     
     def __eq__(self, other):
         if not isinstance(other, WOTSKeyData):
@@ -185,6 +189,9 @@ class SLH_DSA:
         
         # trace WOTS keys
         self.wots_keys: dict[ADRS, set[WOTSKeyData]] = {}
+        
+        # simulate faults
+        self.fault_at = None
 
         #   rbg
         #self.rbg   = rbg
@@ -521,7 +528,8 @@ class SLH_DSA:
         """ Algorithm 16: fors_sign(md, SK.seed, PK.seed, ADRS).
             Generate a FORS signature."""
         sig_fors = b''
-        indices = self.base_2b(md, self.a, self.k)
+        #indices = self.base_2b(md, self.a, self.k)
+        indices = self.to_baseA(int.from_bytes(md, 'little'))
         for i in range(self.k):
             sig_fors += self.fors_sk_gen(sk_seed, pk_seed, adrs,
                                             (i << self.a) + indices[i])
@@ -547,18 +555,6 @@ class SLH_DSA:
 
         #indices = self.base_2b(md, self.a, self.k)
         indices = self.to_baseA(int.from_bytes(md, 'little'))
-        
-        """
-        print("indices", end=' ')
-        for i in indices:
-            print(f'{i:08x}', end='')
-        print()
-        
-        print()
-        print()
-        print()
-        """
-        
 
         root = b''
         for i in range(self.k):
@@ -635,7 +631,7 @@ class SLH_DSA:
         i_leaf  = self.to_int( digest[ka2:ka3], (hd + 7) // 8) % (2**hd)
         return (md, i_tree, i_leaf)
 
-    def slh_sign_internal(self, m, sk, addrnd, param=None):
+    def slh_sign_internal(self, m, sk, addrnd, param=None, r=None):
         """ Algorithm 19: slh_sign_internal(M, SK). """
         if param != None:
             self.__init__(param)
@@ -648,7 +644,8 @@ class SLH_DSA:
         if addrnd == None:
             addrnd = pk_seed
 
-        r       = self.prf_msg(sk_prf, addrnd, m)
+        if r == None:
+            r       = self.prf_msg(sk_prf, addrnd, m)
         sig     = r
 
         digest  = self.h_msg(r, pk_seed, pk_root, m)
