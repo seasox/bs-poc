@@ -128,6 +128,7 @@ class WOTSKeyData:
     sig: bytes
     chains: list[int]
     pk: bytes
+    intermediates: list[list[bytes]] = []
     valid: bool = None
     
     def __eq__(self, other):
@@ -137,6 +138,18 @@ class WOTSKeyData:
     
     def __hash__(self):
         return hash(self.sig)
+    
+    def calculate_intermediates(self, param: str, adrs: ADRS, pk_seed: bytes):
+        slh = SLH_DSA(param)
+        adrs.set_type_and_clear(ADRS.WOTS_HASH)
+        adrs.set_key_pair_address(adrs.get_key_pair_address())
+        intermediates = []
+        for i in range(slh.len):
+            adrs.set_chain_address(i)
+            _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], 0, slh.w - 1, pk_seed, adrs, True)
+            intermediates.append(chain_intr)
+        self.intermediates = intermediates
+        
     
 #   SLH-DSA Implementationw
 
@@ -323,15 +336,20 @@ class SLH_DSA:
             v += [ (t >> c) & m ]
         return v
 
-    def chain(self, x, i, s, pk_seed, adrs):
+    def chain(self, x, i, s, pk_seed, adrs, with_intermediates=False):
         """ Algorithm 5: chain(X, i, s, PK.seed, ADRS).
             Chaining function used in WOTS+."""
         if i + s >= self.w:
             return None
         t = x
+        intermediates = []
         for j in range(i, i + s):
             adrs.set_hash_address(j)
             t = self.h_f(pk_seed, adrs, t)
+            if with_intermediates:
+                intermediates.append(t)
+        if with_intermediates:
+            return (t, intermediates)
         return t
 
     def wots_pkgen(self, sk_seed, pk_seed, adrs):
