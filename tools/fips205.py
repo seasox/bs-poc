@@ -7,7 +7,7 @@
 # from test_slhdsa import test_slhdsa
 
 #   hash functions
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from Crypto.Hash import SHAKE128, SHAKE256
 from Crypto.Hash import SHA224, SHA256, SHA384, SHA512
 from Crypto.Hash import SHA3_224, SHA3_256, SHA3_384, SHA3_512
@@ -124,12 +124,13 @@ SLH_DSA_PARAM = {       #   ( hashname, n,  h,  d,  hp, a,  k, lg_w, m )
 
 @dataclass(eq=False)
 class WOTSKeyData:
-    msg: bytes
     sig: bytes
     chains: list[int]
     pk: bytes
-    intermediates: list[list[bytes]] = []
+    intermediates: list[list[bytes]] = field(default_factory=list)
+    chains_calculated: list[int] = field(default_factory=list)
     valid: bool = None
+    sig_idx: int = None
     
     def __eq__(self, other):
         if not isinstance(other, WOTSKeyData):
@@ -139,15 +140,30 @@ class WOTSKeyData:
     def __hash__(self):
         return hash(self.sig)
     
-    def calculate_intermediates(self, param: str, adrs: ADRS, pk_seed: bytes):
+    def calculate_intermediates(self, param: str, adrs: ADRS, pk_seed: bytes, valid_sig: 'WOTSKeyData'):
         slh = SLH_DSA(param)
-        adrs.set_type_and_clear(ADRS.WOTS_HASH)
-        adrs.set_key_pair_address(adrs.get_key_pair_address())
+        h_adrs = adrs.copy()
+        h_adrs.set_type_and_clear(ADRS.WOTS_HASH)
+        h_adrs.set_key_pair_address(adrs.get_key_pair_address())
         intermediates = []
+        self.chains_calculated = [-1] * slh.len
         for i in range(slh.len):
-            adrs.set_chain_address(i)
-            _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], 0, slh.w - 1, pk_seed, adrs, True)
+            h_adrs.set_chain_address(i)
+            _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], 0, slh.w - 1, pk_seed, h_adrs, True)
+            for chain_count, hash in enumerate(chain_intr):
+                if hash == valid_sig.sig[i*slh.n:(i+1)*slh.n]:
+                    self.chains_calculated[i] = valid_sig.chains[i] - chain_count
+                    print(f"Signature {self.sig_idx}: Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
             intermediates.append(chain_intr)
+        # find unresolved chains
+        for i in range(slh.len):
+            h_adrs.set_chain_address(i)
+            _, chain_intr = slh.chain(valid_sig.sig[i*slh.n:(i+1)*slh.n], valid_sig.chains[i], slh.w - 1 - valid_sig.chains[i], pk_seed, h_adrs, True)
+            for chain_count, hash in enumerate(chain_intr):
+                if hash == self.sig[i*slh.n:(i+1)*slh.n]:
+                    assert chain_count == 0 or self.chains_calculated[i] == -1
+                    self.chains_calculated[i] = valid_sig.chains[i] + chain_count
+                    print(f"Signature {self.sig_idx}: Recovered chain {i} of {self.sig_idx}. Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
         self.intermediates = intermediates
         
     
@@ -342,7 +358,7 @@ class SLH_DSA:
         if i + s >= self.w:
             return None
         t = x
-        intermediates = []
+        intermediates = [t]
         for j in range(i, i + s):
             adrs.set_hash_address(j)
             t = self.h_f(pk_seed, adrs, t)
@@ -384,6 +400,7 @@ class SLH_DSA:
         sk_adrs.set_type_and_clear(ADRS.WOTS_PRF)
         sk_adrs.set_key_pair_address(adrs.get_key_pair_address())
         sig = b''
+        print("msg:", msg)
         for i in range(self.len):
             sk_adrs.set_chain_address(i)
             sk = self.prf(pk_seed, sk_seed, sk_adrs)
@@ -412,7 +429,7 @@ class SLH_DSA:
         wots_pk_adrs.set_type_and_clear(ADRS.WOTS_PK)
         wots_pk_adrs.set_key_pair_address(adrs.get_key_pair_address())
         pk_sig  =   self.h_t(pk_seed, wots_pk_adrs, tmp)
-        wots_key_data = WOTSKeyData(m, sig, msg, pk_sig)
+        wots_key_data = WOTSKeyData(sig=sig, chains=msg, pk=pk_sig)
         if wots_pk_adrs not in self.wots_keys:
             self.wots_keys[wots_pk_adrs] = set()
         self.wots_keys[wots_pk_adrs].add(wots_key_data)
