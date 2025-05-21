@@ -146,26 +146,93 @@ class WOTSKeyData:
         h_adrs.set_type_and_clear(ADRS.WOTS_HASH)
         h_adrs.set_key_pair_address(adrs.get_key_pair_address())
         intermediates = []
-        self.chains_calculated = [-1] * slh.len
+        self.chains_calculated = [2**slh.lg_w + 1] * slh.len  # set unresolved chains to "chain max length" + 1
         for i in range(slh.len):
             h_adrs.set_chain_address(i)
             _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], 0, slh.w - 1, pk_seed, h_adrs, True)
             for chain_count, hash in enumerate(chain_intr):
                 if hash == valid_sig.sig[i*slh.n:(i+1)*slh.n]:
                     self.chains_calculated[i] = valid_sig.chains[i] - chain_count
-                    print(f"Signature {self.sig_idx}: Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
+                    # print(f"Signature {self.sig_idx}: Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
             intermediates.append(chain_intr)
-        # find unresolved chains
+        # find unresolved chains using valid signature
         for i in range(slh.len):
             h_adrs.set_chain_address(i)
             _, chain_intr = slh.chain(valid_sig.sig[i*slh.n:(i+1)*slh.n], valid_sig.chains[i], slh.w - 1 - valid_sig.chains[i], pk_seed, h_adrs, True)
             for chain_count, hash in enumerate(chain_intr):
                 if hash == self.sig[i*slh.n:(i+1)*slh.n]:
-                    assert chain_count == 0 or self.chains_calculated[i] == -1
+                    assert chain_count == 0 or self.chains_calculated[i] == 2**slh.lg_w + 1
                     self.chains_calculated[i] = valid_sig.chains[i] + chain_count
-                    print(f"Signature {self.sig_idx}: Recovered chain {i} of {self.sig_idx}. Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
+                    # print(f"Signature {self.sig_idx}: Recovered chain {i} of {self.sig_idx}. Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
         self.intermediates = intermediates
         
+    def join(self, other: 'WOTSKeyData', params) -> 'WOTSKeyData':
+        import dataclasses
+        slh = SLH_DSA(params)
+        n = slh.n
+        retval = dataclasses.replace(self)
+        if not retval.chains_calculated:
+            raise ValueError("No chains calculated")
+        for idx, chain in enumerate(retval.chains_calculated):
+            if other.chains_calculated[idx] < chain:  # we encountered an improved chain
+                retval.chains_calculated[idx] = other.chains_calculated[idx]
+                retval.sig = retval.sig[:idx*n] + other.sig[idx*n:(idx+1)*n] + retval.sig[(idx+1)*n:]
+        assert len(retval.chains_calculated) == slh.len
+        assert len(retval.sig) == len(self.sig)
+        return retval
+            
+        
+    def try_sign(self, m: bytes, adrs: ADRS, pk_seed, params) -> bytes:
+        slh = SLH_DSA(params)
+        if 2**slh.lg_w+1 in self.chains_calculated:
+            raise ValueError("Cannot sign message with this signature")
+        """ Algorithm 7: wots_sign(M, SK.seed, PK.seed, ADRS).
+        Generate a WOTS+ signature on an n-byte message."""
+        chain_adrs = adrs.copy()
+        chain_adrs.set_type_and_clear(ADRS.WOTS_HASH)
+        chain_adrs.set_key_pair_address(adrs.get_key_pair_address())
+        csum    =   0
+        msg     =   slh.base_2b(m, slh.lg_w, slh.len1)
+        for i in range(slh.len1):
+            csum    +=  slh.w - 1 - msg[i]
+        csum    <<= ((8 - ((slh.len2 * slh.lg_w) % 8)) % 8)
+        msg     +=  slh.base_2b(slh.to_byte(csum,
+            (slh.len2 * slh.lg_w + 7) // 8), slh.lg_w, slh.len2)
+        sig = b''
+        for i in range(slh.len):
+            if msg[i] < self.chains_calculated[i]:
+                raise ValueError("Cannot sign message with this signature")
+            chain_adrs.set_chain_address(i)
+            sig += slh.chain(self.sig[i*slh.n:(i+1)*slh.n], self.chains_calculated[i], msg[i] - self.chains_calculated[i], pk_seed, chain_adrs)
+
+        return sig
+        
+        
+    def calculate_pk(self, params, adrs: ADRS, pk_seed):
+        slh = SLH_DSA(params)
+        if 2**slh.lg_w+1 in self.chains_calculated:
+            return 0x42.to_bytes(1, 'big')
+        sig = self.sig
+        msg = self.chains_calculated
+        assert(len(msg) == slh.len), f"msg length {len(msg)} != {slh.len}"
+        adrs = adrs.copy()
+        keypair = adrs.get_key_pair_address()
+        adrs.set_type_and_clear(ADRS.WOTS_HASH)
+        adrs.set_key_pair_address(keypair)
+        """ Algorithm 8: wots_PKFromSig(sig, M, PK.seed, ADRS).
+            Compute a WOTS+ public key from a message and its signature."""
+        csum    =   0
+        tmp     =   b''
+        for i in range(slh.len):
+            adrs.set_chain_address(i)
+            tmp +=  slh.chain(sig[i*slh.n:(i+1)*slh.n],
+                                msg[i], slh.w - 1 - msg[i],
+                                pk_seed, adrs)
+        wots_pk_adrs    = adrs.copy()
+        wots_pk_adrs.set_type_and_clear(ADRS.WOTS_PK)
+        wots_pk_adrs.set_key_pair_address(adrs.get_key_pair_address())
+        pk_sig  =   slh.h_t(pk_seed, wots_pk_adrs, tmp)
+        return  pk_sig
     
 #   SLH-DSA Implementationw
 
@@ -176,7 +243,7 @@ class SLH_DSA:
 
         #   set parameters
         if param not in SLH_DSA_PARAM:
-            raise ValueError
+            raise ValueError("Invalid parameter set " + param)
         (self.hashname, self.n, self.h, self.d, self.hp,
             self.a, self.k, self.lg_w, self.m) = SLH_DSA_PARAM[param]
 
