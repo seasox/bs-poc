@@ -1,4 +1,6 @@
 import fips205
+import random
+
 # extract WOTS keys from a signature
 def process_sig(args):
     params, pk, sig_idx, sig, sig_len = args
@@ -25,3 +27,14 @@ def process_wots_keys(args):
     for key in keys:
         key.calculate_intermediates(params, c_adrs, pk_seed)
     return key
+
+def sign_worker(args):
+    """Sign `num_msgs` messages for a single (adrs, key)."""
+    num_msgs, msg_len, adrs, key, pk_seed, params = args
+    success = 0
+    msgs = [random.randint(0, 15) for _ in range(num_msgs*msg_len)]
+    # msgs = random.randbytes(num_msgs * 32)
+    for i in range(num_msgs):
+        if key.try_sign(msgs[i*msg_len:(i+1)*msg_len], adrs, pk_seed, params):
+            success += 1
+    return success
