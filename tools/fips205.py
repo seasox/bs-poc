@@ -7,10 +7,12 @@
 # from test_slhdsa import test_slhdsa
 
 #   hash functions
+from copy import deepcopy
 from dataclasses import dataclass, field
-from Crypto.Hash import SHAKE128, SHAKE256
-from Crypto.Hash import SHA224, SHA256, SHA384, SHA512
-from Crypto.Hash import SHA3_224, SHA3_256, SHA3_384, SHA3_512
+#from Crypto.Hash import SHAKE128, SHAKE256
+#from Crypto.Hash import SHA224, SHA256, SHA384, SHA512
+#from Crypto.Hash import SHA3_224, SHA3_256, SHA3_384, SHA3_512
+from hashlib import shake_256
 
 def print_adrs(adrs, lbl=None):
     hex = adrs.adrs().hex()
@@ -122,6 +124,12 @@ SLH_DSA_PARAM = {       #   ( hashname, n,  h,  d,  hp, a,  k, lg_w, m )
     'SLH-DSA-SHAKE-256f':   ( 'SHAKE',  32, 68, 17, 4,  9,  35, 4,  49 )
 }
 
+SLH_CACHE = {}
+def get_slh(params):
+    if params not in SLH_CACHE:
+        SLH_CACHE[params] = SLH_DSA(params)
+    return SLH_CACHE[params]
+
 @dataclass(eq=False)
 class WOTSKeyData:
     sig: bytes
@@ -140,8 +148,8 @@ class WOTSKeyData:
     def __hash__(self):
         return hash(self.sig)
     
-    def calculate_intermediates(self, param: str, adrs: ADRS, pk_seed: bytes, valid_sig: 'WOTSKeyData'):
-        slh = SLH_DSA(param)
+    def calculate_intermediates(self, params: str, adrs: ADRS, pk_seed: bytes, valid_sig: 'WOTSKeyData'):
+        slh = get_slh(params)
         h_adrs = adrs.copy()
         h_adrs.set_type_and_clear(ADRS.WOTS_HASH)
         h_adrs.set_key_pair_address(adrs.get_key_pair_address())
@@ -167,10 +175,12 @@ class WOTSKeyData:
         self.intermediates = intermediates
         
     def join(self, other: 'WOTSKeyData', params) -> 'WOTSKeyData':
-        import dataclasses
-        slh = SLH_DSA(params)
+        slh = get_slh(params)
         n = slh.n
-        retval = dataclasses.replace(self)
+        retval = deepcopy(self)
+        retval.valid = None
+        retval.sig_idx = None
+        retval.pk = None
         if not retval.chains_calculated:
             raise ValueError("No chains calculated")
         for idx, chain in enumerate(retval.chains_calculated):
@@ -181,18 +191,18 @@ class WOTSKeyData:
         assert len(retval.sig) == len(self.sig)
         return retval
             
-        
-    def try_sign(self, m: bytes, adrs: ADRS, pk_seed, params) -> bytes:
-        slh = SLH_DSA(params)
-        if 2**slh.lg_w+1 in self.chains_calculated:
-            raise ValueError("Cannot sign message with this signature")
+    def try_sign(self, m: bytes | list[bytes], adrs: ADRS, pk_seed, params) -> bytes:
+        slh = get_slh(params)
         """ Algorithm 7: wots_sign(M, SK.seed, PK.seed, ADRS).
         Generate a WOTS+ signature on an n-byte message."""
         chain_adrs = adrs.copy()
         chain_adrs.set_type_and_clear(ADRS.WOTS_HASH)
         chain_adrs.set_key_pair_address(adrs.get_key_pair_address())
+        if isinstance(m, bytes):
+            msg     =   slh.base_2b(m, slh.lg_w, slh.len1)
+        else:
+            msg = m
         csum    =   0
-        msg     =   slh.base_2b(m, slh.lg_w, slh.len1)
         for i in range(slh.len1):
             csum    +=  slh.w - 1 - msg[i]
         csum    <<= ((8 - ((slh.len2 * slh.lg_w) % 8)) % 8)
@@ -201,7 +211,8 @@ class WOTSKeyData:
         sig = b''
         for i in range(slh.len):
             if msg[i] < self.chains_calculated[i]:
-                raise ValueError("Cannot sign message with this signature")
+                return False
+        for i in range(slh.len):
             chain_adrs.set_chain_address(i)
             sig += slh.chain(self.sig[i*slh.n:(i+1)*slh.n], self.chains_calculated[i], msg[i] - self.chains_calculated[i], pk_seed, chain_adrs)
 
@@ -209,9 +220,9 @@ class WOTSKeyData:
         
         
     def calculate_pk(self, params, adrs: ADRS, pk_seed):
-        slh = SLH_DSA(params)
+        slh = get_slh(params)
         if 2**slh.lg_w+1 in self.chains_calculated:
-            return 0x42.to_bytes(1, 'big')
+            return None
         sig = self.sig
         msg = self.chains_calculated
         assert(len(msg) == slh.len), f"msg length {len(msg)} != {slh.len}"
@@ -221,7 +232,6 @@ class WOTSKeyData:
         adrs.set_key_pair_address(keypair)
         """ Algorithm 8: wots_PKFromSig(sig, M, PK.seed, ADRS).
             Compute a WOTS+ public key from a message and its signature."""
-        csum    =   0
         tmp     =   b''
         for i in range(slh.len):
             adrs.set_chain_address(i)
@@ -295,7 +305,7 @@ class SLH_DSA:
     #   10.1.   SLH-DSA Using SHAKE
     def shake256(self, x, l):
         """SHAKE256(x, l): Internal hook."""
-        return SHAKE256.new(x).read(l)
+        return shake_256(x).digest(l)
 
     def shake_h_msg(self, r, pk_seed, pk_root, m):
         return self.shake256(r + pk_seed + pk_root + m, self.m)
@@ -467,7 +477,6 @@ class SLH_DSA:
         sk_adrs.set_type_and_clear(ADRS.WOTS_PRF)
         sk_adrs.set_key_pair_address(adrs.get_key_pair_address())
         sig = b''
-        print("msg:", msg)
         for i in range(self.len):
             sk_adrs.set_chain_address(i)
             sk = self.prf(pk_seed, sk_seed, sk_adrs)
