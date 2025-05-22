@@ -439,7 +439,7 @@ impl HammerVictim for SphincsPlus {
             ..
         } = state
         {
-            checker.join().expect("join");
+            let _ = checker.join();
             child.kill().expect("kill");
             child.wait().expect("wait");
             if let Some(stderr_logger) = stderr_logger.take() {
