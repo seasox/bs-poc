@@ -41,6 +41,10 @@ class ADRS:
         """ Make a copy of self."""
         return ADRS(self.a)
     
+    def __repr__(self):
+        """ Return a string representation of the address."""
+        return str(self.a.hex())
+    
     def get_layer_address(self):
         """ Get layer address."""
         return int.from_bytes(self.a[0:4], byteorder='big')
