@@ -224,6 +224,8 @@ class WOTSKeyData:
         
         
     def calculate_pk(self, params, adrs: ADRS, pk_seed):
+        if not self.chains_calculated:
+            return None
         slh = get_slh(params)
         if 2**slh.lg_w+1 in self.chains_calculated:
             return None
