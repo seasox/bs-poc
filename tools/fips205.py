@@ -139,8 +139,8 @@ class WOTSKeyData:
     sig: bytes
     chains: list[int]
     pk: bytes
-    intermediates: list[list[bytes]] = field(default_factory=list)
-    chains_calculated: list[int] = field(default_factory=list)
+    intermediates: list[list[bytes]] = None
+    chains_calculated: list[int] = None
     valid: bool = None
     sig_idx: int = None
     
