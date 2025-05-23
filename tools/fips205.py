@@ -143,6 +143,7 @@ class WOTSKeyData:
     chains_calculated: list[int] = None
     valid: bool = None
     sig_idx: int = None
+    simulated: bool = False
     
     def __eq__(self, other):
         if not isinstance(other, WOTSKeyData):
