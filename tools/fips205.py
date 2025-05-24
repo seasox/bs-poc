@@ -158,17 +158,37 @@ class WOTSKeyData:
         h_adrs = adrs.copy()
         h_adrs.set_type_and_clear(ADRS.WOTS_HASH)
         h_adrs.set_key_pair_address(adrs.get_key_pair_address())
-        intermediates = []
         self.chains_calculated = [2**slh.lg_w + 1] * slh.len  # set unresolved chains to "chain max length" + 1
-        for i in range(slh.len):
-            h_adrs.set_chain_address(i)
-            _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], 0, slh.w - 1, pk_seed, h_adrs, True)
-            for chain_count, hash in enumerate(chain_intr):
-                if hash == valid_sig.sig[i*slh.n:(i+1)*slh.n]:
-                    self.chains_calculated[i] = valid_sig.chains[i] - chain_count
-                    # print(f"Signature {self.sig_idx}: Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
-            intermediates.append(chain_intr)
-        # find unresolved chains using valid signature
+        if not self.valid:
+            intermediates: list[list[bytes]] = []
+            for i in range(slh.len):
+                h_adrs.set_chain_address(i)
+                # start at each step of the chain to find preimages
+                done = False
+                for j in range(slh.w):
+                    _, chain_intr = slh.chain(self.sig[i*slh.n:(i+1)*slh.n], j, slh.w - 1 - j, pk_seed, h_adrs, True)
+                    for chain_count, hash in enumerate(chain_intr):
+                        if hash == valid_sig.sig[i*slh.n:(i+1)*slh.n]:
+                            self.chains_calculated[i] = valid_sig.chains[i] - chain_count
+                            intermediates.append(chain_intr)
+                            done = True
+                            break
+                            # print(f"Signature {self.sig_idx}: Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
+                    if done:
+                        break
+                else:
+                    intermediates.append(None)
+            self.intermediates = intermediates
+        # precompute intermediates for valid signature
+        if not valid_sig.intermediates:
+            intermediates = []
+            for i in range(slh.len):
+                h_adrs.set_chain_address(i)
+                # we don't have to guess the start of the chain: the signature is valid
+                _, chain_intr = slh.chain(valid_sig.sig[i*slh.n:(i+1)*slh.n], valid_sig.chains[i], slh.w - 1 - valid_sig.chains[i], pk_seed, h_adrs, True)
+                intermediates.append(chain_intr)
+            valid_sig.intermediates = intermediates
+        # find unresolved chains using intermediates from valid signature
         for i in range(slh.len):
             h_adrs.set_chain_address(i)
             _, chain_intr = slh.chain(valid_sig.sig[i*slh.n:(i+1)*slh.n], valid_sig.chains[i], slh.w - 1 - valid_sig.chains[i], pk_seed, h_adrs, True)
@@ -176,8 +196,9 @@ class WOTSKeyData:
                 if hash == self.sig[i*slh.n:(i+1)*slh.n]:
                     assert chain_count == 0 or self.chains_calculated[i] == 2**slh.lg_w + 1
                     self.chains_calculated[i] = valid_sig.chains[i] + chain_count
+                    self.intermediates[i] = chain_intr[chain_count:]
                     # print(f"Signature {self.sig_idx}: Recovered chain {i} of {self.sig_idx}. Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
-        self.intermediates = intermediates
+        assert len(self.intermediates) == slh.len, f"intermediates length {len(self.intermediates)} != {slh.len}"
         
     def join(self, other: 'WOTSKeyData', params) -> 'WOTSKeyData':
         slh = get_slh(params)
@@ -583,8 +604,8 @@ class SLH_DSA:
         root    = self.xmss_pk_from_sig(i_leaf, sig_tmp, m, pk_seed, adrs)
         hp_m    = ((1 << self.hp) - 1)
         for j in range(1, self.d):
-            i_leaf  =   i_tree & hp_m
-            i_tree  =   i_tree >> self.hp
+            i_leaf  =   i_tree & hp_m  # i_leaf mod 2^h'
+            i_tree  =   i_tree >> self.hp  # i_tree >> h'
             adrs.set_layer_address(j)
             adrs.set_tree_address(i_tree)
             sig_tmp =   self.xmss_sign(root, sk_seed, i_leaf, pk_seed, adrs)
