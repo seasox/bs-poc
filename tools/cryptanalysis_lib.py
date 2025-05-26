@@ -41,7 +41,7 @@ def sign_worker_xmss(args):
     slh = fips205.SLH_DSA(params)
     hp_m    = ((1 << slh.hp) - 1)
     
-    # this is probably wrong, double-check this
+    # this is probably wrong, double-check this from valid sig verification
     i_tree = adrs.get_tree_index()
     i_tree = i_tree << slh.hp
     i_leaf = i_tree & hp_m
@@ -77,29 +77,27 @@ def sign_worker_xmss_c(args):
     x_adrs.set_layer_address(i_leaf)
     x_adrs.set_tree_address(i_tree)
 
-    # Create and populate the context
     ctx = clc.SPXCtx()
-    # Copy pk into ctx.pub_seed
-    for i in range(clc.SPX_N):
-        ctx.pub_seed[i] = pk_seed[i]
-
-    # --- 6. Allocate output buffer for root ---
+    sig_buf = (clc.ctypes.c_ubyte * clc.SPX_BYTES)()
     root_buf = (clc.ctypes.c_ubyte * clc.SPX_N)()
-
-    # --- 8. Retrieve the result as Python bytes ---
-    root = bytes(root_buf[:])
-    print("Computed Merkle root:", root.hex())
-
+    wots_adrs = (clc.ctypes.c_uint32 * 8)()
+    tree_adrs = (clc.ctypes.c_uint32 * 8)()
     
+    for i in range(8):
+        wots_adrs[i] = x_adrs.a[i]
+        tree_adrs[i] = x_adrs.a[i]
+
     success = 0
     for _ in range(num_msgs):
-        # generate a random SK seed
-        sk_seed = random.randbytes(slh.n)
-        # Copy sk into ctx.sk_seed
+        # Generate a random SK seed in ctx.sk_seed
         for i in range(clc.SPX_N):
             ctx.sk_seed[i] = random.randint(0, 255)
-        # --- 7. Call the C function ---
-        clc.lib.merkle_gen_root(root_buf, clc.ctypes.byref(ctx))
-
+            ctx.pub_seed[i] = random.randint(0, 255)
+        # --- 7. Generate tree ---
+        clc.lib.SPX_merkle_sign(sig_buf, root_buf, clc.ctypes.byref(ctx), wots_adrs, tree_adrs, ~0)
+        # Sign the root node of the tree
+        if key.try_sign(bytes(root_buf), x_adrs, pk_seed, params):
+            print(f"Signed XMSS tree from seed {ctx.sk_seed[:]} and x_adrs {x_adrs} with key {key}")
+            return (root_buf, x_adrs, ctx, key)
         
     return success
