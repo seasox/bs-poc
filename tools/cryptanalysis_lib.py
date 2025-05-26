@@ -31,7 +31,7 @@ def sign_worker(args):
         for j in range(batch_length):
             msg = batch_data[j * msg_len:(j + 1) * msg_len]
             if key.try_sign(msg, adrs, pk_seed, params):
-                print(f"Signed msg {msg.hex()} with key {key}")
+                # print(f"Signed msg {msg.hex()} with key {key}")
                 success += 1
     return success
 
@@ -50,16 +50,15 @@ def sign_worker_xmss(args):
     x_adrs.set_layer_address(i_leaf)
     x_adrs.set_tree_address(i_tree)
     
-    success = 0
     for _ in range(num_msgs):
         # generate a random SK seed
         sk_seed = random.randbytes(slh.n)
         xmss = slh.xmss_node(sk_seed, i_leaf, slh.hp, pk_seed, adrs)
         # sign the root node of the tree
         if key.try_sign(xmss, adrs, pk_seed, params):
-            print(f"Signed XMSS tree from seed {sk_seed.hex()} and x_adrs {x_adrs} with key {key}")
-            success += 1
-    return success
+            # print(f"Signed XMSS tree from seed {sk_seed.hex()} and x_adrs {x_adrs} with key {key}")
+            return (xmss, x_adrs, sk_seed, pk_seed, key)
+    return None
 
 def sign_worker_xmss_c(args):
     """Sign `num_msgs` messages for a single (adrs, key)."""
@@ -78,8 +77,8 @@ def sign_worker_xmss_c(args):
     x_adrs.set_tree_address(i_tree)
 
     ctx = clc.SPXCtx()
-    sig_buf = (clc.ctypes.c_ubyte * clc.SPX_BYTES)()
-    root_buf = (clc.ctypes.c_ubyte * clc.SPX_N)()
+    sig_buf = (clc.ctypes.c_ubyte * slh.sig_sz)()
+    root_buf = (clc.ctypes.c_ubyte * slh.n)()
     wots_adrs = (clc.ctypes.c_uint32 * 8)()
     tree_adrs = (clc.ctypes.c_uint32 * 8)()
     
@@ -87,7 +86,6 @@ def sign_worker_xmss_c(args):
         wots_adrs[i] = x_adrs.a[i]
         tree_adrs[i] = x_adrs.a[i]
 
-    success = 0
     for _ in range(num_msgs):
         # Generate a random SK seed in ctx.sk_seed
         for i in range(clc.SPX_N):
@@ -97,7 +95,7 @@ def sign_worker_xmss_c(args):
         clc.lib.SPX_merkle_sign(sig_buf, root_buf, clc.ctypes.byref(ctx), wots_adrs, tree_adrs, ~0)
         # Sign the root node of the tree
         if key.try_sign(bytes(root_buf), x_adrs, pk_seed, params):
-            print(f"Signed XMSS tree from seed {ctx.sk_seed[:]} and x_adrs {x_adrs} with key {key}")
-            return (root_buf, x_adrs, ctx, key)
+            # print(f"Signed XMSS tree from seed {ctx.sk_seed[:]} and x_adrs {x_adrs} with key {key}")
+            return (bytes(root_buf), x_adrs, bytes(ctx.sk_seed), bytes(ctx.pub_seed), key)
         
-    return success
+    return None
