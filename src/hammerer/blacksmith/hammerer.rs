@@ -90,7 +90,6 @@ impl PatternAddressMapper {
         block_shift: usize,
         memory: &ConsecBlocks,
     ) -> Vec<Vec<AggressorPtr>> {
-        // TODO this still doesn't quite work...
         let block_size = 1 << block_shift;
         let sets = self.aggressor_sets(mem_config, block_shift);
         let mut base_lookup: HashMap<usize, usize> = HashMap::new();
