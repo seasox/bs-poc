@@ -14,8 +14,16 @@ from dataclasses import dataclass, field
 #from Crypto.Hash import SHA3_224, SHA3_256, SHA3_384, SHA3_512
 from hashlib import shake_256
 
-def print_adrs(adrs, lbl=None):
+def print_adrs(adrs, lbl=None, verbose=False):
     hex = adrs.adrs().hex()
+    if verbose:
+        if lbl:
+            print(' ' * len(lbl), end=' ')
+        print('LAYER' + ' ' * 4 + 
+                'TREE ADDR' + ' ' * 18 +
+                'TYP' + ' ' * 6 +
+                'KADR' + ' ' * 5 +
+                'PADD = 0')
     if lbl:
         print(lbl, end=' ')
     print(' '.join([hex[i:i+8] for i in range(0, len(hex), 8)]), end=' ')
@@ -56,6 +64,10 @@ class ADRS:
     def set_tree_address(self, x):
         """ Set tree address."""
         self.a[ 4:16] = x.to_bytes(12, byteorder='big')
+        
+    def get_tree_address(self):
+        """ Get tree address."""
+        return int.from_bytes(self.a[4:16], byteorder='big')
 
     def set_key_pair_address(self, x):
         """ Set key pair Address."""
@@ -581,6 +593,7 @@ class SLH_DSA:
 
         adrs.set_type_and_clear(ADRS.TREE)
         adrs.set_tree_index(idx)
+        print_adrs(adrs, verbose=adrs.get_layer_address() == 0)
         for k in range(self.hp):
             adrs.set_tree_height(k + 1)
             auth_k = auth[k*self.n:(k+1)*self.n]
@@ -594,7 +607,7 @@ class SLH_DSA:
 
         return node_0
 
-    def ht_sign(self, m, sk_seed, pk_seed, i_tree, i_leaf):
+    def ht_sign(self, m, sk_seed, pk_seed, i_tree, i_leaf, stop_at = None):
         """ Algorithm 12: ht_sign(M, SK.seed, PK.seed, idx_tree, idx_leaf).
             Generate a hypertree signature."""
         adrs    = ADRS()
@@ -613,7 +626,9 @@ class SLH_DSA:
             if j < self.d - 1:
                 root = self.xmss_pk_from_sig(i_leaf, sig_tmp, root,
                                                 pk_seed, adrs)
-        return sig_ht
+            if j == stop_at:
+                return sig_ht, root
+        return sig_ht, None
 
     def ht_verify(self, m, sig_ht, pk_seed, i_tree, i_leaf, pk_root):
         """ Algorithm 13: ht_verify(M, SIG_HT, PK.seed, idx_tree, idx_leaf,
@@ -770,7 +785,7 @@ class SLH_DSA:
         i_leaf  = self.to_int( digest[ka2:ka3], (hd + 7) // 8) % (2**hd)
         return (md, i_tree, i_leaf)
 
-    def slh_sign_internal(self, m, sk, addrnd, param=None, r=None):
+    def slh_sign_internal(self, m, sk, addrnd, param=None, r=None, stop_at=None):
         """ Algorithm 19: slh_sign_internal(M, SK). """
         if param != None:
             self.__init__(param)
@@ -798,16 +813,18 @@ class SLH_DSA:
         sig     += sig_fors
 
         pk_fors = self.fors_pk_from_sig(sig_fors, md, pk_seed, adrs)
-        sig_ht  = self.ht_sign(pk_fors, sk_seed, pk_seed, i_tree, i_leaf)
+        sig_ht, root  = self.ht_sign(pk_fors, sk_seed, pk_seed, i_tree, i_leaf, stop_at)
         sig     += sig_ht
 
-        return  sig
+        return (sig, root) if stop_at else sig
 
     def slh_verify_internal(self, m, sig, pk, param=None):
         """ Algorithm 20: slh_verify_internal(M, SIG, PK)."""
         if param != None:
             self.__init__(param)
         if len(sig) != self.sig_sz or len(pk) != self.pk_sz:
+            print(f"sig length {len(sig)} != {self.sig_sz} or "
+                  f"pk length {len(pk)} != {self.pk_sz}")
             return False
 
         pk_seed = pk[:self.n]

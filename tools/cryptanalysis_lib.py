@@ -68,7 +68,7 @@ def sign_worker_xmss_c(args):
     hp_m    = ((1 << slh.hp) - 1)
     
     # this is probably wrong, double-check this
-    i_tree = adrs.get_tree_index()
+    i_tree = adrs.get_tree_address()
     i_tree = i_tree << slh.hp
     i_leaf = i_tree & hp_m
     
@@ -90,12 +90,12 @@ def sign_worker_xmss_c(args):
         # Generate a random SK seed in ctx.sk_seed
         for i in range(clc.SPX_N):
             ctx.sk_seed[i] = random.randint(0, 255)
-            ctx.pub_seed[i] = random.randint(0, 255)
+            ctx.pub_seed[i] = pk_seed[i]
         # --- 7. Generate tree ---
         clc.lib.SPX_merkle_sign(sig_buf, root_buf, clc.ctypes.byref(ctx), wots_adrs, tree_adrs, ~0)
         # Sign the root node of the tree
         if key.try_sign(bytes(root_buf), x_adrs, pk_seed, params):
             # print(f"Signed XMSS tree from seed {ctx.sk_seed[:]} and x_adrs {x_adrs} with key {key}")
-            return (bytes(root_buf), x_adrs, bytes(ctx.sk_seed), bytes(ctx.pub_seed), key)
+            return (bytes(root_buf), bytes(ctx.sk_seed), key)
         
     return None
