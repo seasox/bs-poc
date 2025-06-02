@@ -117,7 +117,7 @@ const TARGET_OFFSET_DUMMY: TargetOffset = TargetOffset {
 const SPX_N: usize = 32;
 
 // CAUTION: STACK_BASE is 0x300 during FORS sign, 0x610 during XMSS sign
-const STACK_BASE: usize = 0x610;
+const STACK_BASE: usize = 0x620;
 const STACK_OFFSET: usize = 32;
 
 // Target offsets for shake-256s WITH memutils printing enabled
