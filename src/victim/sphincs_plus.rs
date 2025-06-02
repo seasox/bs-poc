@@ -210,7 +210,7 @@ pub const TARGET_SHAKE256S: &TargetOffset = &TARGET_OFFSETS_SHAKE_256S[7];
 impl SphincsPlus {
     /// Create a new `SphincsPlus` victim.
     pub fn new(binary: String, flip: BitFlip) -> anyhow::Result<Self> {
-        let bait_count_after = HashMap::from([(32, 1), (31, 4), (30, 22), (29, 23)]); // TODO stabilize bait count after for stack inejction w/ env
+        let bait_count_after = HashMap::from([(32, 1), (31, 9)]); // TODO stabilize bait count after for stack inejction w/ env
         let (target, env) = if binary.eq("victims/stack-dummy/stack") {
             (TARGET_OFFSET_DUMMY.clone(), "".into())
         } else {
