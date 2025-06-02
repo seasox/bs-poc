@@ -211,6 +211,8 @@ class WOTSKeyData:
                     self.intermediates[i] = chain_intr[chain_count:]
                     # print(f"Signature {self.sig_idx}: Recovered chain {i} of {self.sig_idx}. Found preimage {self.sig[i*slh.n:(i+1)*slh.n].hex()} of {hash.hex()} at step {chain_count}")
         assert len(self.intermediates) == slh.len, f"intermediates length {len(self.intermediates)} != {slh.len}"
+        assert self.chains_calculated is not None, "Chains not calculated"
+        assert self.intermediates is not None, "Intermediates not calculated"
         
     def join(self, other: 'WOTSKeyData', params) -> 'WOTSKeyData':
         slh = get_slh(params)
@@ -593,7 +595,7 @@ class SLH_DSA:
 
         adrs.set_type_and_clear(ADRS.TREE)
         adrs.set_tree_index(idx)
-        print_adrs(adrs, verbose=adrs.get_layer_address() == 0)
+        # print_adrs(adrs, verbose=adrs.get_layer_address() == 0)
         for k in range(self.hp):
             adrs.set_tree_height(k + 1)
             auth_k = auth[k*self.n:(k+1)*self.n]

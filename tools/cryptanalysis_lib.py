@@ -1,5 +1,7 @@
 import fips205
+from os import cpu_count
 import random
+import os
 
 # extract WOTS keys from a signature
 def process_sig(args):
@@ -99,3 +101,70 @@ def sign_worker_xmss_c(args):
             return (bytes(root_buf), bytes(ctx.sk_seed), key)
         
     return None
+
+def extract_wots_keys(pk: bytes, sigs: list[bytes], params) -> dict[fips205.ADRS, set[fips205.WOTSKeyData]]:
+    import multiprocessing
+    slh = fips205.SLH_DSA(params)
+    wots_bytes = slh.len * slh.n
+    xmss_bytes = slh.hp * slh.n
+    fors_bytes = slh.k * (slh.n + slh.a * slh.n)
+    sig_len = slh.n + fors_bytes + slh.d * (wots_bytes + xmss_bytes)
+
+    with multiprocessing.Pool(processes=cpu_count()-1) as pool:
+        args = [(params, pk, sig_idx, sig, sig_len) for sig_idx, sig in enumerate(sigs)]
+        results = pool.map(process_sig, args)
+    
+    # Merge results
+    merged = {}
+    for item in results:
+        merged = merge_groups(merged, item)
+    return merged
+
+def merge_groups(left: dict[fips205.ADRS, set], right: dict[fips205.ADRS, set]) -> dict[fips205.ADRS, set]:
+    for key, items in right.items():
+        if key not in left:
+            left[key] = set()
+        left[key] = left[key] | items
+    return left
+
+use_pickle = True
+
+def pickle_load(filename: str, or_else):
+    if use_pickle:
+        import pickle
+        if os.path.exists(filename):
+            print(f"Loading pickle from {filename}.")
+            with open(filename, 'rb') as f:
+                return pickle.load(f)
+        else:
+            print(f"File {filename} not found, creating new one.")
+            return pickle_store(filename, or_else)
+    else:
+        print(f"Pickle loading is disabled, using fallback.")
+        return or_else()
+    
+def pickle_store(filename: str, fn):
+    if use_pickle:
+        import pickle
+        value = fn()
+        with open(filename, 'wb') as f:
+            pickle.dump(value, f)
+        return value
+    else:
+        print(f"Pickle storing is disabled, not saving {filename}.")
+        value = fn()
+        return value
+    
+def print_adrs(adrs: fips205.ADRS, end='\n', verbose=False):
+    hex = adrs.adrs().hex()
+    if verbose:
+        print('LAYER' + ' ' * 4 + 
+                'TREE ADDR' + ' ' * 18 +
+                'TYP' + ' ' * 6 +
+                'KADR' + ' ' * 5 +
+                'PADD = 0')
+    print(' '.join([hex[i:i+8] for i in range(0, len(hex), 8)]), end=' ')
+    print(end=end)
+    
+def find_collisions(wots_sigs: dict[fips205.ADRS, set[fips205.WOTSKeyData]]) -> dict[fips205.ADRS, set[fips205.WOTSKeyData]]:
+    return {adrs: keys for adrs, keys in wots_sigs.items() if len(keys) > 1 and any(v.valid for v in keys)}  # if any(v.valid for v in keys) and not all(v.valid for v in keys)}
