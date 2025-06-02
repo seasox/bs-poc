@@ -350,7 +350,22 @@ unsafe fn _main() -> anyhow::Result<()> {
         }
         info!("Starting bait allocation");
         //unsafe { shm_unlink(CString::new("HAMMER_SHM").unwrap().as_ptr()) };
-        let memory = allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping)?;
+        let memory =
+            match allocator::alloc_memory(&mut alloc_strategy, mem_config, &pattern.mapping) {
+                Ok(memory) => memory,
+                Err(e) => {
+                    warn!("Failed to allocate memory: {:?}", e);
+                    experiments.push(ExperimentData::new(
+                        vec![Err(format!("Failed to allocate memory: {:?}", e))],
+                        RoundProfile {
+                            bit_flips: vec![],
+                            pattern: DataPattern::Random(Box::new(Rng::from_seed(rand::random()))),
+                        },
+                        None,
+                    ));
+                    continue 'repeat;
+                }
+            };
         let target_pfn = memory.addr(PAGE_SIZE + target.page_offset).pfn()?;
         info!("Allocated {} bytes of memory", memory.len());
 
