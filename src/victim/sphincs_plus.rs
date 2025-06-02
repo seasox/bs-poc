@@ -402,7 +402,10 @@ impl HammerVictim for SphincsPlus {
         self.check_flippy_page_exists()?;
         match &self.state {
             State::Running {
-                child, signatures, ..
+                child,
+                signatures,
+                checker,
+                ..
             } => {
                 #[cfg(feature = "sphincs_instrumentation")]
                 {
@@ -412,6 +415,10 @@ impl HammerVictim for SphincsPlus {
                     unsafe {
                         libc::kill(child.id() as i32, libc::SIGUSR1);
                     }
+                }
+                let running = checker.is_running();
+                if !running {
+                    return Err(HammerVictimError::NotRunning);
                 }
                 let pstate = child.pstate().expect("pstate");
                 if pstate != ProcState::Running {
@@ -459,12 +466,14 @@ fn process_victim_signatures(
         .append(true)
         .open("sigs.txt")
         .expect("Failed to open sigs.txt");
+    const CONSEC_FAULTY_LIMIT: usize = 10;
+    let mut consec_faulty = 0;
     loop {
         debug!("Waiting for victim to send signature");
-        let signature = stdout.read_line();
         if !running.load(Ordering::Relaxed) {
             return;
         }
+        let signature = stdout.read_line();
         let signature = match signature {
             Ok(signature) => signature,
             Err(e) => match e.kind() {
@@ -486,6 +495,7 @@ fn process_victim_signatures(
             Ok(_) => {
                 info!("Found correct signature, writing to file...");
                 writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
+                consec_faulty = 0; // reset consecutive faulty counter
             }
             Err(e) => {
                 // asume non-verifiable signature be a "faulty" signature
@@ -494,6 +504,12 @@ fn process_victim_signatures(
                 // Write the signature to "sigs.txt"
                 writeln!(file, "{}", signature).expect("Failed to write to sigs.txt");
                 signatures.lock().unwrap().push(signature);
+                consec_faulty += 1;
+                if consec_faulty > CONSEC_FAULTY_LIMIT {
+                    warn!("Too many consecutive faulty signatures, stopping victim");
+                    running.store(false, Ordering::Relaxed);
+                    return;
+                }
             }
         }
     }

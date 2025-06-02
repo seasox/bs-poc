@@ -24,6 +24,9 @@ pub fn spawn_cancelable<T: Send + Sync + 'static>(
 }
 
 impl<T> CancelableJoinHandle<T> {
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::Relaxed)
+    }
     pub fn join(self) -> thread::Result<T> {
         self.running.store(false, Ordering::Relaxed);
         self.handle.join()
