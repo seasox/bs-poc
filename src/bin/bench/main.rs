@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::{
+use swage::{
     allocator::{self, ConsecAlloc, ConsecAllocator, Pfn},
     hammerer::{
         blacksmith::{

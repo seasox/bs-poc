@@ -6,26 +6,26 @@ use std::{
 };
 
 use anyhow::bail;
-use bs_poc::hammerer::Hammerer;
-use bs_poc::{
+use swage::hammerer::Hammerer;
+use swage::{
     allocator::AllocStrategy,
     hammerer::{make_hammer, HammerResult, HammerStrategy},
     memory::{BitFlip, DataPattern, Initializable, VictimMemory},
     util::{CL_SIZE, MB, PAGE_MASK},
     victim::{sphincs_plus::TARGET_SHAKE256S, HammerVictimError, VictimResult},
 };
-use bs_poc::{
+use swage::{
     allocator::{self, ConsecAllocator},
     victim,
 };
-use bs_poc::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
-use bs_poc::{
+use swage::{hammerer::blacksmith::blacksmith_config::BlacksmithConfig, victim::HammerVictim};
+use swage::{
     hammerer::blacksmith::hammerer::{FuzzSummary, HammeringPattern, PatternAddressMapper},
     memory::PfnResolver,
 };
-use bs_poc::{hammerer::Hammering, util::Rng};
-use bs_poc::{memory::mem_configuration::MemConfiguration, util::PAGE_SIZE};
-use bs_poc::{
+use swage::{hammerer::Hammering, util::Rng};
+use swage::{memory::mem_configuration::MemConfiguration, util::PAGE_SIZE};
+use swage::{
     memory::{BytePointer, ConsecBlocks},
     retry,
     util::init_logging_with_progress,

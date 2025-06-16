@@ -222,42 +222,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bs_poc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bindgen",
- "cc",
- "chrono",
- "clap",
- "csv",
- "ctrlc",
- "env_logger",
- "glob",
- "hex",
- "iced-x86",
- "indicatif",
- "indicatif-log-bridge",
- "itertools",
- "lazy_static",
- "libc 0.2.155",
- "log",
- "lpfs",
- "memmap2",
- "nalgebra",
- "pagemap",
- "perfcnt",
- "rand 0.8.5",
- "serde",
- "serde-enum-str",
- "serde_json",
- "serde_with",
- "sha2",
- "thiserror 2.0.10",
- "x86",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1394,6 +1358,42 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
+name = "swage"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bindgen",
+ "cc",
+ "chrono",
+ "clap",
+ "csv",
+ "ctrlc",
+ "env_logger",
+ "glob",
+ "hex",
+ "iced-x86",
+ "indicatif",
+ "indicatif-log-bridge",
+ "itertools",
+ "lazy_static",
+ "libc 0.2.155",
+ "log",
+ "lpfs",
+ "memmap2",
+ "nalgebra",
+ "pagemap",
+ "perfcnt",
+ "rand 0.8.5",
+ "serde",
+ "serde-enum-str",
+ "serde_json",
+ "serde_with",
+ "sha2",
+ "thiserror 2.0.10",
+ "x86",
+]
 
 [[package]]
 name = "syn"

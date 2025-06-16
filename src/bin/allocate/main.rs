@@ -1,4 +1,4 @@
-use bs_poc::{
+use swage::{
     allocator::{AllocStrategy, ConsecAllocator},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{mem_configuration::MemConfiguration, GetConsecPfns},

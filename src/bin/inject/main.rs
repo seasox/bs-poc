@@ -1,7 +1,7 @@
 use std::ptr::null_mut;
 
 use anyhow::bail;
-use bs_poc::{
+use swage::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
     memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock},

@@ -1,9 +1,9 @@
 use std::ptr::null_mut;
 
 use anyhow::{bail, Context};
-use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
-use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::{
+use swage::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+use swage::memory::mem_configuration::MemConfiguration;
+use swage::{
     memory::{
         construct_memory_tuple_timer, AllocChecker, BytePointer, ConsecCheckPfn, DRAMAddr,
         MemBlock, PfnResolver,

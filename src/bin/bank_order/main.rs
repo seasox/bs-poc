@@ -1,7 +1,7 @@
 use anyhow::Context;
-use bs_poc::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
-use bs_poc::memory::mem_configuration::MemConfiguration;
-use bs_poc::{memory::DRAMAddr, util::KB};
+use swage::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
+use swage::memory::mem_configuration::MemConfiguration;
+use swage::{memory::DRAMAddr, util::KB};
 use clap::Parser;
 use log::info;
 

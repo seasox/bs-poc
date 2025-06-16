@@ -1,6 +1,6 @@
 use std::env;
 
-use bs_poc::memory::PageMapInfo;
+use swage::memory::PageMapInfo;
 use pagemap::PageMapError;
 
 fn main() -> anyhow::Result<()> {
