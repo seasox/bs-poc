@@ -16,14 +16,63 @@ pub use buddyinfo::BuddyInfo;
 pub use coco::CoCo;
 use hugepage::HugepageAllocator;
 pub use hugepage_rnd::HugepageRandomized;
+use indicatif::MultiProgress;
 pub use mmap::Mmap;
 pub use pfn::Pfn;
+use serde::Serialize;
 pub use spoiler::Spoiler;
 use util::compact_mem;
 
 use crate::hammerer::blacksmith::hammerer::PatternAddressMapper;
 use crate::memory::mem_configuration::MemConfiguration;
-use crate::memory::{ConsecBlocks, GetConsecPfns};
+use crate::memory::{ConsecBlocks, ConsecCheck, ConsecCheckBankTiming, GetConsecPfns};
+
+/// The type of allocation strategy to use.
+#[derive(clap::ValueEnum, Clone, Debug, Serialize)]
+pub enum AllocStrategy {
+    /// Use `/proc/buddyinfo` to monitor availability of page orders, assume consecutive memory according to the delta in buddyinfo.
+    BuddyInfo,
+    // Allocate using the CoCo dec mem module: https://git.its.uni-luebeck.de/research-projects/tdx/kmod-coco-dec-mem
+    CoCo,
+    /// Allocate consecutive memory using huge pages.
+    Hugepage,
+    /// Allocate consecutive memory using huge pages with randomization. This will return random 4 MB chunks of a 1 GB hugepage.
+    HugepageRnd,
+    /// Allocate consecutive memory using `bank timing`. This will `mmap` a large buffer and find consecutive memory using bank timing check
+    BankTiming,
+    /// Allocate a large block of memory and use pagemap to find consecutive blocks
+    Pfn,
+    /// Allocate consecutive memory using the Spoiler attack. This strategy will measure read-after-write pipeline conflicts to determine consecutive memory.
+    Spoiler,
+}
+
+impl AllocStrategy {
+    pub fn create_allocator(
+        &self,
+        mem_config: MemConfiguration,
+        conflict_threshold: u64,
+        progress: Option<MultiProgress>,
+    ) -> ConsecAlloc {
+        match self {
+            AllocStrategy::BuddyInfo => ConsecAlloc::BuddyInfo(BuddyInfo::new(
+                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
+            )),
+            AllocStrategy::CoCo => ConsecAlloc::CoCo(CoCo {}),
+            AllocStrategy::BankTiming => ConsecAlloc::Mmap(Mmap::new(
+                ConsecCheck::BankTiming(ConsecCheckBankTiming::new(mem_config, conflict_threshold)),
+                progress,
+            )),
+            AllocStrategy::Hugepage => ConsecAlloc::Hugepage(HugepageAllocator::default()),
+            AllocStrategy::HugepageRnd => ConsecAlloc::HugepageRnd(HugepageRandomized::new(1)),
+            AllocStrategy::Pfn => ConsecAlloc::Pfn(Pfn::new(mem_config, None)),
+            AllocStrategy::Spoiler => ConsecAlloc::Spoiler(Box::new(Spoiler::new(
+                mem_config,
+                conflict_threshold,
+                progress,
+            ))),
+        }
+    }
+}
 
 /// Allocate memory using an allocation strategy.
 ///
