@@ -28,6 +28,10 @@ pub struct InjectionConfig {
     pub stack_offset: usize,
 }
 
+pub(crate) trait PageInjection {
+    fn inject(&self, cmd: Command) -> Result<Child, std::io::Error>;
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct PageInjector {
     injection_config: InjectionConfig,
@@ -39,8 +43,8 @@ impl PageInjector {
     }
 }
 
-impl PageInjector {
-    pub fn inject(&self, mut cmd: Command) -> Result<Child, std::io::Error> {
+impl PageInjection for PageInjector {
+    fn inject(&self, mut cmd: Command) -> Result<Child, std::io::Error> {
         let target_page = (self.injection_config.target_addr & !PAGE_MASK) as *mut libc::c_void;
         debug!(
             "Injecting target page {:p}, phys {:p}, into victim process",
