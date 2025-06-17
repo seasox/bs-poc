@@ -4,7 +4,7 @@ use anyhow::bail;
 use swage::{
     allocator::{util::mmap, ConsecAllocator, Pfn, Spoiler},
     hammerer::blacksmith::blacksmith_config::BlacksmithConfig,
-    memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, MemBlock},
+    memory::{mem_configuration::MemConfiguration, BytePointer, ConsecBlocks, Memory},
     util::{KB, MB, PAGE_SIZE},
     victim::{sphincs_plus::SphincsPlus, HammerVictim, HammerVictimError, InjectionConfig},
 };
@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
                         if x.is_null() {
                             bail!("Failed to allocate memory");
                         }
-                        ConsecBlocks::new(vec![MemBlock::new(x, 4 * MB)])
+                        ConsecBlocks::new(vec![Memory::new(x, 4 * MB)])
                     }
                 };
                 let flippy_page = unsafe { x.ptr().byte_add(64 * KB) as *mut libc::c_void };

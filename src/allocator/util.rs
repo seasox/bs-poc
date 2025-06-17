@@ -16,7 +16,7 @@ use std::{
 };
 
 use crate::{
-    memory::{BytePointer, MemBlock},
+    memory::{BytePointer, Memory},
     util::ROW_SIZE,
 };
 
@@ -120,7 +120,7 @@ pub unsafe fn munmap<P>(addr: *mut P, len: usize) {
 /// Spawn a thread that periodically writes 0s to the allocated memory blocks.
 /// This is used to lock the memory in RAM, preventing it from being swapped out.
 pub(super) fn spawn_page_locking_thread(
-    blocks: Arc<Mutex<Vec<MemBlock>>>,
+    blocks: Arc<Mutex<Vec<Memory>>>,
     mem_lock: Arc<Mutex<()>>,
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {

@@ -15,7 +15,7 @@ use crate::allocator::util::{mmap, munmap};
 use crate::retry;
 use crate::util::{NamedProgress, MB};
 use crate::{
-    memory::{ConsecBlocks, MemBlock},
+    memory::{ConsecBlocks, Memory},
     util::PAGE_SIZE,
 };
 
@@ -48,7 +48,7 @@ impl ConsecAllocator for Spoiler {
         //let hugeblock_len = 1 << 30;
         //let v = mmap_block(null_mut(), hugeblock_len);
 
-        let mut blocks: Vec<MemBlock> = vec![];
+        let mut blocks: Vec<Memory> = vec![];
         const BLOCK_SIZE: usize = 4 * MB;
         let required_blocks = size.div_ceil(BLOCK_SIZE);
         let timer = construct_memory_tuple_timer()?;
@@ -153,7 +153,7 @@ impl<T> Deref for CArray<T> {
 
 impl Spoiler {
     /// allocate a 2 MB physically aligned memory block.
-    fn allocate_2m_aligned() -> anyhow::Result<MemBlock> {
+    fn allocate_2m_aligned() -> anyhow::Result<Memory> {
         const ALIGNMENT: usize = 2 * MB;
         let aligned = unsafe {
             libc::mmap(
@@ -179,11 +179,11 @@ impl Spoiler {
             aligned.pfn().unwrap_or_default().as_usize() & (ALIGNMENT - 1),
             0
         );
-        Ok(MemBlock::new(aligned as *mut u8, 2 * MB))
+        Ok(Memory::new(aligned as *mut u8, 2 * MB))
     }
 
     /// Perform a spoiler round to find consecutive memory blocks.
-    fn spoiler_round(&self, max_candidates: usize) -> anyhow::Result<Vec<MemBlock>> {
+    fn spoiler_round(&self, max_candidates: usize) -> anyhow::Result<Vec<Memory>> {
         let search_buffer_size = 2048 * MB;
         let cont_size = 5 * MB;
         let aligned = Self::allocate_2m_aligned()?;
@@ -222,7 +222,7 @@ impl Spoiler {
             }
             let addr = unsafe { search_buffer.byte_add(candidate.start * PAGE_SIZE) };
             assert_eq!(candidate.end - candidate.start, cont_size / PAGE_SIZE);
-            let block = MemBlock::new(addr, self.block_size());
+            let block = Memory::new(addr, self.block_size());
             let consecs = block.consec_pfns()?;
             debug!("Found candidate: {}", consecs.format_pfns());
             if (consecs[0].end - consecs[0].start).as_usize() != 4 * MB {
@@ -401,7 +401,7 @@ mod tests {
             spoiler::spoiler_candidates,
             util::{mmap, munmap},
         },
-        memory::{FormatPfns, GetConsecPfns, MemBlock},
+        memory::{FormatPfns, GetConsecPfns, Memory},
         util::{MB, PAGE_SIZE},
     };
 
@@ -415,7 +415,7 @@ mod tests {
         let b: *mut u8 = mmap(null_mut(), 2048 * MB); // dummy buffer to collect small page blocks
         const BUF_SIZE: usize = 512 * MB; // buf size in MB
         let buf: *mut u8 = mmap(null_mut(), BUF_SIZE);
-        let block = MemBlock::new(buf, BUF_SIZE);
+        let block = Memory::new(buf, BUF_SIZE);
         let pfns = block.consec_pfns().unwrap().format_pfns();
         println!("PFN ranges: {}", pfns);
         assert_ne!(buf, null_mut());
@@ -439,7 +439,7 @@ mod tests {
                 assert_eq!(end - start, 8 * MB / PAGE_SIZE);
                 let start = unsafe { buf.byte_add(start * PAGE_SIZE) };
                 println!("Start: {:x}", start as usize);
-                let block = MemBlock::new(start, consec_size);
+                let block = Memory::new(start, consec_size);
                 let pfns = block.consec_pfns().unwrap().format_pfns();
                 println!("PFN ranges:\n{}", pfns);
                 /*

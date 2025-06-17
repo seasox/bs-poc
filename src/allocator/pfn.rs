@@ -3,7 +3,7 @@ use anyhow::bail;
 use crate::{
     allocator::util::{mmap, mmap_shm, munmap},
     memory::{
-        mem_configuration::MemConfiguration, ConsecBlocks, DRAMAddr, GetConsecPfns, MemBlock,
+        mem_configuration::MemConfiguration, ConsecBlocks, DRAMAddr, GetConsecPfns, Memory,
         PfnResolver,
     },
     util::MB,
@@ -74,7 +74,7 @@ impl ConsecAllocator for Pfn {
                     continue;
                 }
                 let start_ptr = unsafe { x.byte_add(offset as usize) };
-                blocks.push(MemBlock::new(start_ptr, self.block_size()));
+                blocks.push(Memory::new(start_ptr, self.block_size()));
                 unmap_ranges.push((prev_end, start_ptr));
                 prev_end = unsafe { start_ptr.byte_add(self.block_size()) };
             }

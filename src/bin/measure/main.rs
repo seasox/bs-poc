@@ -6,7 +6,7 @@ use swage::memory::mem_configuration::MemConfiguration;
 use swage::{
     memory::{
         construct_memory_tuple_timer, AllocChecker, BytePointer, ConsecCheckPfn, DRAMAddr,
-        MemBlock, PfnResolver,
+        Memory, PfnResolver,
     },
     util::{MB, ROW_SIZE},
 };
@@ -79,13 +79,13 @@ fn mmap(size: usize) -> anyhow::Result<*mut libc::c_void> {
     Ok(ptr)
 }
 
-fn alloc_4m_consec() -> anyhow::Result<MemBlock> {
+fn alloc_4m_consec() -> anyhow::Result<Memory> {
     info!("Allocating a consecutive 4 MiB block. This might take some time...");
     let pfn_checker = ConsecCheckPfn {};
     let mut allocations: [*mut libc::c_void; 10000] = [null_mut(); 10000];
     for allocation in allocations.iter_mut() {
         let ptr = mmap(4 * MB)?;
-        let mem = MemBlock::new(ptr as *mut u8, 4 * MB);
+        let mem = Memory::new(ptr as *mut u8, 4 * MB);
         let is_consec = pfn_checker.check(&mem)?;
         if is_consec {
             return Ok(mem);
@@ -96,7 +96,7 @@ fn alloc_4m_consec() -> anyhow::Result<MemBlock> {
     bail!("Failed to allocate 4M consecutive pages");
 }
 
-fn alloc_1g_hugepage() -> anyhow::Result<MemBlock> {
+fn alloc_1g_hugepage() -> anyhow::Result<Memory> {
     let addr = 0x2000000000 as *mut libc::c_void;
     let ptr = unsafe {
         libc::mmap(
@@ -118,5 +118,5 @@ fn alloc_1g_hugepage() -> anyhow::Result<MemBlock> {
     if ptr != addr {
         bail!("mmap failed to allocate at the requested address");
     }
-    Ok(MemBlock::new(ptr as *mut u8, 1024 * MB))
+    Ok(Memory::new(ptr as *mut u8, 1024 * MB))
 }

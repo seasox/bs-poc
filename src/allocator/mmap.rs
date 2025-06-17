@@ -15,7 +15,7 @@ use rand::prelude::SliceRandom;
 use super::ConsecAllocator;
 use crate::{
     allocator::util::spawn_page_locking_thread,
-    memory::{AllocChecker, ConsecBlocks, ConsecCheck, MemBlock},
+    memory::{AllocChecker, ConsecBlocks, ConsecCheck, Memory},
     util::{NamedProgress, MB},
 };
 
@@ -35,7 +35,7 @@ impl Mmap {
 
 /// Spawn a thread that allocates memory blocks and checks for consecutive blocks using the provided `checker`.
 fn spawn_allocator_thread(
-    blocks: Arc<Mutex<Vec<MemBlock>>>,
+    blocks: Arc<Mutex<Vec<Memory>>>,
     mem_lock: Arc<Mutex<()>>,
     num_blocks: usize,
     block_size: usize,
@@ -45,11 +45,11 @@ fn spawn_allocator_thread(
     spawn(move || {
         const CANDIDATE_COUNT: usize = 1000; // 1000 * 4 MB = 4 GB
         const DUMMY_ALLOC_SIZE: usize = 4 * 1024 * MB;
-        let buf = MemBlock::mmap(DUMMY_ALLOC_SIZE).unwrap();
+        let buf = Memory::mmap(DUMMY_ALLOC_SIZE).unwrap();
         let mut blocks_len = 0;
         while blocks_len < num_blocks {
             let mut candidates = (0..CANDIDATE_COUNT)
-                .map(|_| MemBlock::mmap(block_size).context("mmap").unwrap())
+                .map(|_| Memory::mmap(block_size).context("mmap").unwrap())
                 .collect_vec();
             candidates.shuffle(&mut rand::thread_rng());
             let mut found_consec = false;
@@ -96,7 +96,7 @@ impl ConsecAllocator for Mmap {
         let block_size = self.block_size();
         let num_blocks = size / block_size;
 
-        let blocks: Vec<MemBlock> = Vec::with_capacity(num_blocks);
+        let blocks: Vec<Memory> = Vec::with_capacity(num_blocks);
         let blocks = Arc::new(Mutex::new(blocks));
         let mem_lock = Arc::new(Mutex::new(()));
         let stop = Arc::new(AtomicBool::new(false));

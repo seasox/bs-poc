@@ -3,7 +3,7 @@ use std::ffi::CString;
 use anyhow::bail;
 
 use crate::{
-    memory::{ConsecBlocks, MemBlock},
+    memory::{ConsecBlocks, Memory},
     util::MB,
 };
 
@@ -39,7 +39,7 @@ impl ConsecAllocator for CoCo {
                     if v == libc::MAP_FAILED {
                         bail!("Failed to mmap");
                     }
-                    let block = MemBlock::new(v as *mut u8, 4 * MB);
+                    let block = Memory::new(v as *mut u8, 4 * MB);
                     libc::memset(block.ptr as *mut libc::c_void, 0, block.len);
                     //consec_checker.check(&block)?;
                     Ok(block)

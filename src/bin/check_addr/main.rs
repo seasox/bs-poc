@@ -1,9 +1,9 @@
 use anyhow::Result;
+use clap::Parser;
 use swage::hammerer::blacksmith::blacksmith_config::BlacksmithConfig;
 use swage::memory::mem_configuration::MemConfiguration;
-use swage::memory::{construct_memory_tuple_timer, BytePointer, MemBlock};
+use swage::memory::{construct_memory_tuple_timer, BytePointer, Memory};
 use swage::memory::{DRAMAddr, HugepageSize};
-use clap::Parser;
 
 /// Search for a pattern in a file and display the lines that contain it.
 #[derive(Parser)]
@@ -20,7 +20,7 @@ fn main() -> Result<()> {
     let mem_config =
         MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
 
-    let memory: MemBlock = MemBlock::hugepage(HugepageSize::OneGb)?;
+    let memory: Memory = Memory::hugepage(HugepageSize::OneGb)?;
     let base_msb = memory.ptr();
     println!("base_msb: {:?}", base_msb);
 

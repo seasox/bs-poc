@@ -1,7 +1,7 @@
 use super::ConsecAllocator;
 use crate::allocator::hugepage::HugepageAllocator;
 use crate::{
-    memory::{BytePointer, ConsecBlocks, MemBlock},
+    memory::{BytePointer, ConsecBlocks, Memory},
     util::{make_vec, MB},
 };
 use rand::prelude::SliceRandom;
@@ -45,7 +45,7 @@ impl ConsecAllocator for HugepageRandomized {
                 info!("Hugepage {}", index / num_chunks);
                 self.hugepages[index / num_chunks].addr((index % num_chunks) * chunk_size)
             })
-            .map(|ptr| MemBlock::new(ptr, chunk_size))
+            .map(|ptr| Memory::new(ptr, chunk_size))
             .collect::<Vec<_>>();
         let consecs = ConsecBlocks::new(blocks);
         Ok(consecs)

@@ -1,5 +1,5 @@
 use crate::allocator::ConsecAllocator;
-use crate::memory::{ConsecBlocks, HugepageSize, MemBlock};
+use crate::memory::{ConsecBlocks, HugepageSize, Memory};
 use crate::util::MB;
 use anyhow::bail;
 use lazy_static::lazy_static;
@@ -72,7 +72,7 @@ impl ConsecAllocator for HugepageAllocator {
             );
         }
         assert_eq!(self.block_size(), 1024 * MB);
-        let block = MemBlock::hugepage(HugepageSize::OneGb)?;
+        let block = Memory::hugepage(HugepageSize::OneGb)?;
         unsafe { libc::memset(block.ptr as *mut c_void, 0x00, self.block_size()) };
         Ok(ConsecBlocks::new(vec![block]))
     }

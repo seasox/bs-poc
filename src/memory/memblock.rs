@@ -11,7 +11,7 @@ use pagemap::MemoryRegion;
 use super::{pfn_offset::CachedPfnOffset, BytePointer, PfnOffset, PhysAddr};
 
 #[derive(Clone, Debug)]
-pub struct MemBlock {
+pub struct Memory {
     /// block pointer
     pub ptr: *mut u8,
     /// block length in bytes
@@ -19,16 +19,16 @@ pub struct MemBlock {
     pfn_offset: PfnOffset,
 }
 
-unsafe impl Send for MemBlock {}
+unsafe impl Send for Memory {}
 
 pub enum HugepageSize {
     //    TWO_MB,  // not supported yet. TODO: Check PFN offset for 2 MB hugepages in docs.
     OneGb,
 }
 
-impl MemBlock {
+impl Memory {
     pub fn new(ptr: *mut u8, len: usize) -> Self {
-        MemBlock {
+        Memory {
             ptr,
             len,
             pfn_offset: PfnOffset::Dynamic(Box::new(RefCell::new(None))),
@@ -49,7 +49,7 @@ impl MemBlock {
             bail!("mmap failed: {}", std::io::Error::last_os_error());
         }
         unsafe { libc::memset(p, 0x00, size) };
-        Ok(MemBlock::new(p as *mut u8, size))
+        Ok(Memory::new(p as *mut u8, size))
     }
 
     pub fn hugepage(size: HugepageSize) -> anyhow::Result<Self> {
@@ -83,7 +83,7 @@ impl MemBlock {
             "mmap failed: {}",
             std::io::Error::last_os_error()
         );
-        Ok(MemBlock {
+        Ok(Memory {
             ptr: p as *mut u8,
             len: hp_size,
             pfn_offset: PfnOffset::Fixed(0),
@@ -94,13 +94,11 @@ impl MemBlock {
     }
 }
 
-//impl VictimMemory for MemBlock {}
-
-impl BytePointer for MemBlock {
+impl BytePointer for Memory {
     fn addr(&self, offset: usize) -> *mut u8 {
         assert!(
             offset < self.len,
-            "MemBlock::byte_add failed. Offset {} >= {}",
+            "Memory::byte_add failed. Offset {} >= {}",
             offset,
             self.len
         );
@@ -114,7 +112,7 @@ impl BytePointer for MemBlock {
     }
 }
 
-impl CachedPfnOffset for MemBlock {
+impl CachedPfnOffset for Memory {
     fn cached_offset(&self) -> &PfnOffset {
         &self.pfn_offset
     }
@@ -136,7 +134,7 @@ pub trait GetConsecPfns {
     }
 }
 
-impl GetConsecPfns for MemBlock {
+impl GetConsecPfns for Memory {
     fn consec_pfns(&self) -> anyhow::Result<ConsecPfns> {
         (self.ptr, self.len).consec_pfns()
     }
@@ -191,8 +189,8 @@ impl FormatPfns for ConsecPfns {
 }
 
 // TODO: we can move this alongside consec_alloc/mmap.rs, but we'll need some more refactoring before (self.pfn_offset is private).
-impl MemBlock {
-    pub fn pfn_align(mut self) -> anyhow::Result<Vec<MemBlock>> {
+impl Memory {
+    pub fn pfn_align(mut self) -> anyhow::Result<Vec<Memory>> {
         let mut blocks = vec![];
         let offset = match self.pfn_offset {
             PfnOffset::Fixed(offset) => offset,
@@ -215,7 +213,7 @@ impl MemBlock {
         assert!(offset < 4 * MB, "Offset {} >= 4MB", offset);
         let ptr = self.addr(offset);
         let len = self.len - offset;
-        let block = MemBlock::new(ptr, len); // TODO: add new trait for offsetting into MemBlock (byte_add returns *mut u8 now, but we need MemBlock here)
+        let block = Memory::new(ptr, len); // TODO: add new trait for offsetting into MemBlock (byte_add returns *mut u8 now, but we need MemBlock here)
         blocks.push(block);
         self.len = offset;
         blocks.push(self);
@@ -233,7 +231,7 @@ mod tests {
     use crate::memory::mem_configuration::MemConfiguration;
     use crate::{
         memory::{
-            construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, MemBlock,
+            construct_memory_tuple_timer, memblock::PfnOffset, DRAMAddr, HugepageSize, Memory,
             MemoryTupleTimer, PfnOffsetResolver,
         },
         util::{MB, ROW_SHIFT, ROW_SIZE},
@@ -283,7 +281,7 @@ mod tests {
                 },
             };
 
-            let block = MemBlock::new(ADDR, 4 * MB);
+            let block = Memory::new(ADDR, 4 * MB);
             let offset = block.pfn_offset(&mem_config, config.threshold, &timer, None);
 
             assert!(offset.is_some());
@@ -298,7 +296,7 @@ mod tests {
         let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-        let block = MemBlock::mmap(4 * MB)?;
+        let block = Memory::mmap(4 * MB)?;
         let timer = construct_memory_tuple_timer()?;
         let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
         assert!(pfn_offset.is_none());
@@ -313,7 +311,7 @@ mod tests {
         let config = BlacksmithConfig::from_jsonfile(CONFIG_FILE)?;
         let mem_config =
             MemConfiguration::from_bitdefs(config.bank_bits, config.row_bits, config.col_bits);
-        let block = MemBlock::hugepage(HugepageSize::OneGb)?;
+        let block = Memory::hugepage(HugepageSize::OneGb)?;
         let timer = construct_memory_tuple_timer()?;
         let pfn_offset = block.pfn_offset(&mem_config, config.threshold, &*timer, None);
         println!("VA: 0x{:02x}", block.ptr as usize);
@@ -377,7 +375,7 @@ mod tests {
             let offset = pbase as isize - vbase as isize;
             let offset = offset.rem_euclid(4 * MB as isize);
             //let offset = offset.rem_euclid(2 * MB as isize);
-            let block = MemBlock {
+            let block = Memory {
                 ptr: v as *mut u8,
                 len: 4 * MB,
                 pfn_offset: PfnOffset::Fixed(offset as usize / ROW_SIZE),

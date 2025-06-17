@@ -7,7 +7,7 @@ use rand::Rng;
 use super::ConsecAllocator;
 use crate::allocator::util::{compact_mem, mmap};
 use crate::{
-    memory::{AllocChecker, ConsecBlocks, ConsecCheck, MemBlock},
+    memory::{AllocChecker, ConsecBlocks, ConsecCheck, Memory},
     retry,
     util::{MB, PAGE_SIZE},
 };
@@ -40,7 +40,7 @@ impl ConsecAllocator for BuddyInfo {
         info!("Allocating {} blocks of size {}", num_blocks, block_size);
         let mut blocks = vec![];
         for _ in 0..num_blocks {
-            let block = unsafe { MemBlock::buddyinfo_alloc(block_size, &self.consec_checker)? };
+            let block = unsafe { Memory::buddyinfo_alloc(block_size, &self.consec_checker)? };
             info!("TODO implement progress bar");
             blocks.push(block);
         }
@@ -162,11 +162,11 @@ unsafe fn determine_locked_blocks(order: usize) -> anyhow::Result<u64> {
     Ok(locked)
 }
 
-impl MemBlock {
+impl Memory {
     unsafe fn buddyinfo_alloc(
         size: usize,
         consec_checker: &dyn AllocChecker,
-    ) -> anyhow::Result<MemBlock> {
+    ) -> anyhow::Result<Memory> {
         if size > 4 * MB {
             return Err(anyhow::anyhow!(
                 "Buddyinfo only supports consecutive allocations of up to 4MB."
@@ -178,12 +178,12 @@ impl MemBlock {
          * (2) verifying that the block is actually consecutive (using the MemBlock::check() function)
          */
         let block = retry!(|| {
-            let block = MemBlock::find_block10_candidate()?;
+            let block = Memory::find_block10_candidate()?;
             // munmap slice of MemBlock
             unsafe {
                 libc::munmap(block.ptr.add(size) as *mut libc::c_void, block.len - size);
             }
-            let block = MemBlock::new(block.ptr, size);
+            let block = Memory::new(block.ptr, size);
             match consec_checker.check(&block) {
                 Ok(true) => Ok(block),
                 Ok(false) => {
@@ -228,7 +228,7 @@ impl MemBlock {
         low_order_sum < 2usize.pow(block_order as u32) * PAGE_SIZE
     }
 
-    unsafe fn find_block10_candidate() -> anyhow::Result<MemBlock> {
+    unsafe fn find_block10_candidate() -> anyhow::Result<Memory> {
         //const HUGEBLOCK_SIZE: usize = 2048 * MB;
         //const ALLOC_SIZE: usize = 4 * MB;
         const MAX_ALLOCS: usize = 65000;
@@ -249,10 +249,10 @@ impl MemBlock {
                 info!("Free blocks:   {}", fmt_arr(free_blocks));
                 let low_order_bytes = Self::low_order_bytes(&free_blocks, 9);
                 info!("Allocating {} bytes", low_order_bytes);
-                let block = MemBlock::mmap(low_order_bytes)?;
+                let block = Memory::mmap(low_order_bytes)?;
                 pages.push(block);
                 let blocks_before = get_normal_page_nums().expect("can't read buddyinfo");
-                let b = MemBlock::mmap(4 * MB)?;
+                let b = Memory::mmap(4 * MB)?;
                 log_pagetypeinfo();
                 let blocks_after = get_normal_page_nums()?;
                 let diff = diff_arrs(&blocks_before, &blocks_after);
@@ -261,7 +261,7 @@ impl MemBlock {
                 if diff[10] != 0 {
                     debug!("diff: {:?}", diff);
                 }
-                if MemBlock::is_block_candidate(&diff, 10) {
+                if Memory::is_block_candidate(&diff, 10) {
                     debug!("allocated block from order 10 block");
                     b1 = Some(b);
                     break;

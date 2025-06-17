@@ -1,7 +1,7 @@
 use anyhow::bail;
 use indicatif::MultiProgress;
 
-use super::{construct_memory_tuple_timer, MemBlock, PfnOffsetResolver};
+use super::{construct_memory_tuple_timer, Memory, PfnOffsetResolver};
 use crate::memory::mem_configuration::MemConfiguration;
 use crate::memory::GetConsecPfns;
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub trait AllocChecker {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool>;
+    fn check(&self, block: &Memory) -> anyhow::Result<bool>;
 }
 
 /**
@@ -24,7 +24,7 @@ pub enum ConsecCheck {
 }
 
 impl AllocChecker for ConsecCheck {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         match self {
             ConsecCheck::Pfn(c) => c.check(block),
             ConsecCheck::BankTiming(c) => c.check(block),
@@ -46,7 +46,7 @@ impl<A: AllocChecker, B: AllocChecker> AllocCheckAnd<A, B> {
 }
 
 impl<A: AllocChecker, B: AllocChecker> AllocChecker for AllocCheckAnd<A, B> {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         Ok(self.a.check(block)? && self.b.check(block)?)
     }
 }
@@ -55,7 +55,7 @@ impl<A: AllocChecker, B: AllocChecker> AllocChecker for AllocCheckAnd<A, B> {
 pub struct AllocCheckPageAligned {}
 
 impl AllocChecker for AllocCheckPageAligned {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         if (block.ptr as u64) & 0xFFF != 0 {
             bail!("Address is not page-aligned: 0x{:x}", block.ptr as u64);
         }
@@ -88,7 +88,7 @@ impl ConsecCheckBankTiming {
 }
 
 impl AllocChecker for ConsecCheckBankTiming {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         if block.len % ROW_SIZE != 0 {
             bail!("Block is not row-aligned")
         }
@@ -110,7 +110,7 @@ impl AllocChecker for ConsecCheckBankTiming {
 pub struct ConsecCheckPfn {}
 
 impl AllocChecker for ConsecCheckPfn {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         /*
          * Check whether the allocation is actually consecutive. The current implementation simply
          * checks for consecutive PFNs using the virt-to-phys pagemap. This needs root permissions.
@@ -152,7 +152,7 @@ impl ConsecCheckPfnBank {
 }
 
 impl AllocChecker for ConsecCheckPfnBank {
-    fn check(&self, block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, block: &Memory) -> anyhow::Result<bool> {
         let pfns = block.consec_pfns()?.format_pfns();
         info!("PFNs: {}", pfns);
         let first_pfn: *const u8 = block.pfn()?.into();
@@ -175,7 +175,7 @@ impl AllocChecker for ConsecCheckPfnBank {
 pub struct ConsecCheckNone {}
 
 impl AllocChecker for ConsecCheckNone {
-    fn check(&self, _block: &MemBlock) -> anyhow::Result<bool> {
+    fn check(&self, _block: &Memory) -> anyhow::Result<bool> {
         Ok(true)
     }
 }

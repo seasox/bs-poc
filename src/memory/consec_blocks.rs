@@ -2,15 +2,15 @@ use std::{collections::VecDeque, ops::Range};
 
 use crate::memory::BytePointer;
 
-use super::{GetConsecPfns, MemBlock, PhysAddr, VictimMemory};
+use super::{GetConsecPfns, Memory, PhysAddr, VictimMemory};
 
 #[derive(Debug)]
 pub struct ConsecBlocks {
-    pub blocks: Vec<MemBlock>,
+    pub blocks: Vec<Memory>,
 }
 
 impl ConsecBlocks {
-    pub fn new(blocks: Vec<MemBlock>) -> Self {
+    pub fn new(blocks: Vec<Memory>) -> Self {
         ConsecBlocks { blocks }
     }
     pub fn dealloc(self) {
