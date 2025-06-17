@@ -1,5 +1,3 @@
-# swage
-
 ## Swage
 
 Swage is a modular framework for end-to-end Rowhammer attacks. It includes
