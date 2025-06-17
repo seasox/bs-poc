@@ -65,7 +65,7 @@ pub trait HammerVictim {
     fn start(&mut self) -> Result<(), HammerVictimError>;
     /// Initialize the victim. This method is called before the hammering starts.
     fn init(&mut self);
-    /// Check if the hammering was successful. Returns Ok with an optional value of type T describing the result if the hammering was successful, Err with an error otherwise.
+    /// Check if the hammering was successful. Returns Ok with a VictimResult describing the result if the hammering was successful, Err with an error otherwise.
     fn check(&mut self) -> Result<VictimResult, HammerVictimError>;
     /// Stop the victim. This method is called after the hammering is done.
     fn stop(&mut self);
