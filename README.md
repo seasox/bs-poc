@@ -1,8 +1,8 @@
-# bs_poc
+# swage
 
-## Blacksmith Proof of Concept
+## Swage
 
-This crate is a proof of concept for an end-to-end blacksmith attack. It includes
+Swage is a modular framework for end-to-end Rowhammer attacks. It includes
 several modules that handle different aspects of the attack, such as memory
 allocation, hammering, and victim management.
 
@@ -25,10 +25,12 @@ cargo run --release --bin=hammer
 ```
 
 This compiles the crate and runs the hammering attack with default options.
-The default options assumes that you put the blacksmith configuration file in `config/bs-config.json` and the
+The default options assumes that you use blacksmith as hammerer, put a
+blacksmith configuration file in `config/bs-config.json` and the
 blacksmith fuzz summary in `config/fuzz-summary.json`.
-You can find the hammer binary at `target/release/hammer`.
-Use `target/release/hammer --help` to see available options.
+After a successful compilation, the hammer binary is located at
+`target/release/hammer`. Use `target/release/hammer --help` to see
+available options.
 
 ### Modules
 
@@ -41,12 +43,6 @@ Use `target/release/hammer --help` to see available options.
 ### External Crates
 
 - `log`: Used for logging throughout the crate.
-- `clap`: Used for command-line argument parsing.
-- `serde`: Used for serialization and deserialization of configuration files.
-- `serde_json`: Provides JSON support for `serde`.
-- `libc`: Provides FFI bindings to native C libraries.
-- `rand`: Used for random number generation.
-- `nix`: Provides idiomatic Rust bindings to Unix system APIs.
 
 ### Bindings
 
