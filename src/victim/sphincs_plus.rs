@@ -6,6 +6,7 @@ use crate::{
         cancelable_thread::{spawn_cancelable, CancelableJoinHandle},
         Anyhow, PAGE_MASK, PAGE_SIZE,
     },
+    victim::page_inject::BuddyPageInjector,
 };
 use anyhow::{ensure, Context};
 use libc::sched_getcpu;
@@ -300,16 +301,16 @@ impl HammerVictim for SphincsPlus {
                 cmd.stderr(std::process::Stdio::piped());
                 cmd.env_clear();
                 cmd.envs(env.iter().cloned());
-                let page_injector = PageInjector::new(*injection_config);
+                debug!("Victim command: {:?}", cmd);
+                let mut page_injector = BuddyPageInjector::new(cmd, *injection_config);
                 let target_pfn = (injection_config.target_addr as *const libc::c_void)
                     .pfn()
                     .expect("PFN resolve failed");
-                debug!("Victim command: {:?}", cmd);
                 debug!(
                     "Injecting {:p} (phys {:p}) into victim process",
                     injection_config.target_addr as *const libc::c_void, target_pfn
                 );
-                let mut child = page_injector.inject(cmd).expect("Failed to inject page");
+                let mut child = page_injector.inject().expect("Failed to inject page");
                 info!("Victim launched");
 
                 // Log victim stderr
